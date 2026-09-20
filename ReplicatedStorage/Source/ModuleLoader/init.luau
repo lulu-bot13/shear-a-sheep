@@ -3,7 +3,7 @@
 --[[
     ModuleLoader
     @author DistractedGames
-    @version 3.2.1
+    @version 3.1.0
 
     This module implements a two-pass loading system for ModuleScripts using Promises.
     It is designed to run on both the server and the client to create a unified module
@@ -52,7 +52,6 @@ local ModuleLoader = {}
 -- A global signal that can be used by the single Script, or LocalScript where
 -- ModuleLoader is required, if needed.
 ModuleLoader.GameReadySignal = Signal.new() :: Signal.Signal<>
-local _isReady = false
 
 --[[
     Logs a formatted message to the output.
@@ -104,7 +103,7 @@ local function getModuleDirectories(): { Instance }
 		table.insert(directories, ServerScriptService)
 
 		if config.ServerAuthority then
-			local sourceFolder = getOrCreateFolder(ReplicatedStorage, "Source")
+			local sourceFolder = getOrCreateFolder(ReplicatedStorage.Modules, "Source")
 			local simulationFolder = getOrCreateFolder(sourceFolder, "Simulation")
 			table.insert(directories, simulationFolder)
 		end
@@ -132,12 +131,7 @@ local function retryWithPromise(methodName: string, methodFunc: () -> (), attemp
 				return reject(`Max retry attempts reached for {methodName}.`)
 			end
 
-			local warningThread = task.delay(3, function()
-				log(`?? Lifecycle '{methodName}' has been yielding for >3s. Check for unbounded WaitForChild calls!`, "warn")
-			end)
-
 			local success, result = pcall(methodFunc)
-			task.cancel(warningThread)
 
 			if success then
 				-- The lifecycle method succeeded! Pass the result forward.
@@ -165,45 +159,6 @@ local function retryWithPromise(methodName: string, methodFunc: () -> (), attemp
 end
 
 --[[
-	Safely retrieves a lifecycle method from a module table.
-	Protected with pcall to prevent errors from proxy tables or metatables with strict __index metamethods.
-	@param module The module table to inspect.
-	@param methodName The lifecycle method name (e.g. "Setup", "Start").
-	@return The lifecycle function if present and callable, nil otherwise.
-]]
-local function getLifecycleMethod(module: any, methodName: string): (() -> ())?
-	local success, method = pcall(function()
-		return module[methodName]
-	end)
-	return if success and typeof(method) == "function" then method else nil
-end
-
---[[
-	Returns whether the ModuleLoader has finished executing all Setup and Start lifecycles.
-]]
-function ModuleLoader.IsReady(): boolean
-	return _isReady
-end
-
---[[
-	Returns a Promise that resolves when all modules have completed their Setup and Start lifecycles.
-	If the loader is already ready, the returned Promise resolves immediately.
-]]
-function ModuleLoader.WaitForReadyAsync(): Promise<nil>
-	if _isReady then
-		return Promise.resolve(nil) :: Promise<nil>
-	end
-
-	return Promise.new(function(resolve)
-		local connection: Signal.Connection
-		connection = ModuleLoader.GameReadySignal:Connect(function()
-			connection:Disconnect()
-			resolve()
-		end)
-	end) :: Promise<nil>
-end
-
---[[
 	The main entry point for the module loader.
 	Executes the Setup and Start lifecycle passes in concurrent, synchronized gates.
 	This function handles its own asynchronous execution and emits a signal upon completion.
@@ -224,17 +179,12 @@ function ModuleLoader.Init()
 				continue
 			end
 
-			local requireWarning = task.delay(3, function()
-				log(`?? Requiring '{moduleScript.Name}' has been yielding for >3s. Check for top-level yields or unbounded WaitForChild!`, "warn")
-			end)
-
 			local success, module = pcall(require, moduleScript)
-			task.cancel(requireWarning)
 
-			if not success then
-				log(`Failed to require '{moduleScript.Name}': {tostring(module)}`, "warn")
-				continue
-			end
+		if not success then
+			log(`Failed to require '{moduleScript.Name}': {tostring(module)}`, "warn")
+			continue
+		end
 
 			if typeof(module) == "table" then
 				discoveredModules[moduleScript.Name] = module
@@ -246,12 +196,11 @@ function ModuleLoader.Init()
 
 	-- Gate 1: Setup Phase
 	for name, module in discoveredModules do
-		local setupMethod = getLifecycleMethod(module, "Setup")
-		if not setupMethod then
+		if typeof(module.Setup) ~= "function" then
 			continue
 		end
 
-		local setupPromise = retryWithPromise(`{name}:Setup`, setupMethod, config.ATTEMPT_LIMIT)
+		local setupPromise = retryWithPromise(`{name}:Setup`, module.Setup, config.ATTEMPT_LIMIT)
 		table.insert(setupPromises, setupPromise)
 	end
 
@@ -264,20 +213,18 @@ function ModuleLoader.Init()
 
 			-- Gate 2: Start Phase
 			for name, module in discoveredModules do
-				local startMethod = getLifecycleMethod(module, "Start")
-				if not startMethod then
+				if typeof(module.Start) ~= "function" then
 					continue
 				end
 
 				-- Casting `module.Start` type to satisfy type solver.
-				local startPromise = retryWithPromise(`{name}:Start`, startMethod, config.ATTEMPT_LIMIT)
+				local startPromise = retryWithPromise(`{name}:Start`, module.Start :: () -> (), config.ATTEMPT_LIMIT)
 				table.insert(startPromises, startPromise)
 			end
 
 			-- Evaluate Start promises independently to ensure clean error catching.
 			Promise.all(startPromises)
 			:andThen(function()
-				_isReady = true
 				log("All modules have been loaded and started.")
 				ModuleLoader.GameReadySignal:Fire()
 			end)

@@ -6,13 +6,13 @@ local collectionService = game:GetService("CollectionService")
 local SheepData = require(game.ServerScriptService.Modules.Constants.SheepData)
 
 --// References
-local sheepModels = replicatedStorage.SheepModels
+local sheepModels = replicatedStorage.Assets.Models.Sheeps
 local sheepSpawnArea = workspace:WaitForChild("Base"):FindFirstChild("SheepSpawnArea")
-
-local sheeps  = collectionService:GetTagged("Sheep")
 
 --// Configurations
 local sheepSpawnCount = 10
+
+local activeSheep = {}
 
 local SheepHandler = {}
 
@@ -35,13 +35,26 @@ local function getRandomSheep()
     return nil
 end
 
-function SheepHandler:_InitSheeps()
+local function _setupProximityPrompt(humanoidRootPart: BasePart, data: {sheepName: string, id: number})
 
-    for i = 1, sheepSpawnCount do
+	local proximityPrompt = Instance.new("ProximityPrompt")
+	proximityPrompt.ActionText = "Shear"
+	proximityPrompt.ObjectText = data.sheepName
+	proximityPrompt.RequiresLineOfSight = false
+	proximityPrompt.MaxActivationDistance = 10
+	proximityPrompt.Parent = humanoidRootPart
+
+	proximityPrompt:SetAttribute("SheepName", data.sheepName)
+	proximityPrompt:SetAttribute("Id", data.id)
+end
+
+function SheepHandler.Start()
+
+    for _ = 1, sheepSpawnCount do
         local randomSheepName = getRandomSheep()
         local sheepModel = sheepModels:FindFirstChild(randomSheepName)
-        if sheepModel:IsA("Model") then 
-            warn(`Sheep model with name '{sheepModel}' is not a valid model.`)
+        if not sheepModel:IsA("Model") then 
+            warn(`Sheep with name '{sheepModel}' is not a valid model.`)
             continue
         end
         sheepModel = sheepModel:Clone()
@@ -59,6 +72,11 @@ function SheepHandler:_InitSheeps()
 			continue
 		end
 
+		local id = #activeSheep + 1
+		activeSheep[id] = sheepModel
+
+		_setupProximityPrompt(humanoidRootPart, {sheepName = sheepModel.Name, id = id})
+
 		local shearHealthUI = humanoidRootPart:FindFirstChild("Health")
 		local healthText = shearHealthUI and shearHealthUI:FindFirstChild("TextLabel")
 		if healthText then
@@ -66,7 +84,7 @@ function SheepHandler:_InitSheeps()
 		end
 
 		-- Set the data
-		sheepModel:SetAttribute("id", data.id)
+		sheepModel:SetAttribute("id", id)
 		sheepModel:SetAttribute("ShearHealth", data.ShearHealth)
 		sheepModel:SetAttribute("MaxShearHealth", data.ShearHealth)
 		sheepModel:SetAttribute("WoolAmount", data.WoolAmount)
