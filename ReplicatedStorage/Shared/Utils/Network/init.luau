@@ -1,4 +1,4 @@
---!strict
+--!nonstrict
 
 --[[
     Network
@@ -24,6 +24,8 @@ local getInstance = require("@self/Utility/getInstance")
 
 -- How long the client will wait for remotes to replicate before erroring.
 local REMOTE_REPLICATION_TIMEOUT_SECONDS = 2
+-- How long Network.waitUntilReadyAsync will wait for startServer/startClientAsync before erroring.
+local NETWORK_READY_TIMEOUT_SECONDS = 10
 local REMOTE_FOLDER_PARENT = ReplicatedStorage
 local REMOTE_FOLDER_NAME = "Remotes"
 
@@ -82,6 +84,29 @@ function Network.startClientAsync()
 	waitForAllRemotesAsync(remoteFolder, REMOTE_REPLICATION_TIMEOUT_SECONDS)
 
 	Network._remoteFolder = remoteFolder
+end
+
+--[[
+	Yields until Network.startServer/Network.startClientAsync has finished
+	setting up the remote folder. If the network stack is already started
+	this returns immediately, so it's safe to call regardless of whether
+	this script or the one that starts Network runs first -- unlike
+	waiting on a one-shot signal, there's no window where the ready event
+	could have already fired before this was called.
+
+	Intended for scripts that use Network but aren't run through the
+	ModuleLoader Setup/Start lifecycle (which otherwise guarantees Network
+	is already started before any module's lifecycle methods run).
+]]
+function Network.waitUntilReadyAsync(timeoutSeconds: number?)
+	local deadline = os.clock() + (timeoutSeconds or NETWORK_READY_TIMEOUT_SECONDS)
+
+	while not Network._remoteFolder do
+		if os.clock() >= deadline then
+			error("Network.waitUntilReadyAsync timed out waiting for Network.startServer/startClientAsync to be called")
+		end
+		task.wait()
+	end
 end
 
 function Network._getRemoteEvent(eventName: RemoteEventName.EnumType): RemoteEvent

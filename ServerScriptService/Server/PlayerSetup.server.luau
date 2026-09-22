@@ -17,7 +17,6 @@ local function onPlayerAdded(player: Player)
 
     local currentSheepId = Instance.new("IntValue")
     currentSheepId.Name = "CurrentSheepId"
-    currentSheepId.Value = nil
     currentSheepId.Parent = player
 
 end

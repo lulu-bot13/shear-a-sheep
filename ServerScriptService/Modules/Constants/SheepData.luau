@@ -3,8 +3,8 @@ local sheepData = {
     ["Basic"] = {
         id = "Basic_Sheep",
         name = "Basic Sheep",
-        shearHealth = 100,
-        woolAmount = 15,
+        ShearHealth = 100,
+        WoolAmount = 15,
         chance = 80
     }
 

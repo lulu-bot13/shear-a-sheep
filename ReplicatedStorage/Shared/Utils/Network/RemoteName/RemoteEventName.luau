@@ -9,22 +9,14 @@
 
 local StrictEnum = require("../Utility/StrictEnum")
 
-export type EnumType = "TeleportFailed"
-    | "Teleporting"
-    | "InitiateTeleport"
-    | "InitialDataLoaded"
-    | "PlayerDataUpdated"
-    | "SendNotification"
-    | "RequestPurchase"
+export type EnumType = "ActivateShearing"
+    | "DeactivateShearing"
+    | "Shear"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
-	TeleportFailed = "TeleportFailed",
-	Teleporting = "Teleporting",
-    InitiateTeleport = "InitiateTeleport",
-    InitialDataLoaded = "InitialDataLoaded",
-    PlayerDataUpdated = "PlayerDataUpdated",
-    SendNotification = "SendNotification",
-    RequestPurchase = "RequestPurchase",
+	ActivateShearing = "ActivateShearing",
+    DeactivateShearing = "DeactivateShearing",
+    Shear = "Shear"
 }
 
 return RemoteEventName

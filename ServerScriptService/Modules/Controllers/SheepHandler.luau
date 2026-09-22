@@ -12,9 +12,32 @@ local sheepSpawnArea = workspace:WaitForChild("Base"):FindFirstChild("SheepSpawn
 --// Configurations
 local sheepSpawnCount = 10
 
-local activeSheep = {}
+local sheepById: { [number]: Model } = {}
+local nextSheepId = 0
 
 local SheepHandler = {}
+
+--[[
+    Returns the sheep Model registered under the given id, or nil if no
+    such sheep is currently active.
+]]
+function SheepHandler.getSheep(id: number): Model?
+	return sheepById[id]
+end
+
+--[[
+    Removes the sheep registered under the given id from the registry and
+    destroys its Model.
+]]
+function SheepHandler.removeSheep(id: number)
+	local sheep = sheepById[id]
+	if not sheep then
+		return
+	end
+
+	sheepById[id] = nil
+	sheep:Destroy()
+end
 
 local function getRandomSheep()
     local totalChance = 0
@@ -49,7 +72,6 @@ local function _setupProximityPrompt(humanoidRootPart: BasePart, data: {sheepNam
 end
 
 function SheepHandler.Start()
-
     for _ = 1, sheepSpawnCount do
         local randomSheepName = getRandomSheep()
         local sheepModel = sheepModels:FindFirstChild(randomSheepName)
@@ -72,22 +94,23 @@ function SheepHandler.Start()
 			continue
 		end
 
-		local id = #activeSheep + 1
-		activeSheep[id] = sheepModel
+		nextSheepId += 1
+		local id = nextSheepId
+		sheepById[id] = sheepModel
 
 		_setupProximityPrompt(humanoidRootPart, {sheepName = sheepModel.Name, id = id})
 
 		local shearHealthUI = humanoidRootPart:FindFirstChild("Health")
 		local healthText = shearHealthUI and shearHealthUI:FindFirstChild("TextLabel")
 		if healthText then
-			healthText.Text = tostring(data.ShearHealth) .. " / " .. tostring(data.ShearHealth)
+			healthText.Text = tostring(data.shearHealth) .. " / " .. tostring(data.shearHealth)
 		end
 
 		-- Set the data
 		sheepModel:SetAttribute("id", id)
-		sheepModel:SetAttribute("ShearHealth", data.ShearHealth)
-		sheepModel:SetAttribute("MaxShearHealth", data.ShearHealth)
-		sheepModel:SetAttribute("WoolAmount", data.WoolAmount)
+		sheepModel:SetAttribute("ShearHealth", data.shearHealth)
+		sheepModel:SetAttribute("MaxShearHealth", data.shearHealth)
+		sheepModel:SetAttribute("WoolAmount", data.woolAmount)
         
 		-- Setting the position
 		local randomPosition = Vector3.new(
