@@ -5,10 +5,8 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local SheepHandler = require(script.Parent.SheepHandler)
+local InventoryHandler = require(script.Parent.InventoryHandler)
 local ShearData = require(game.ServerScriptService.Modules.Constants.ShearData)
-
---// Configurations
-local proximityPromptConnections = {}
 
 local shearHandler = {}
 
@@ -48,6 +46,10 @@ function shearHandler.Start()
         print(`Shearing sheep. Deducted {ShearData.Default.damage} health. Current Health: {shearHealth}`)
 
         if shearHealth <= 0 then
+            local woolAmount = sheep:GetAttribute("WoolAmount") :: number
+            local newTotal = InventoryHandler.addItem(player, "Wool", woolAmount)
+            print(`Added {woolAmount} wool to {player.Name}'s inventory. New total: {newTotal}`)
+
             SheepHandler.removeSheep(currentSheepId.Value)
             currentSheepId.Value = 0
 

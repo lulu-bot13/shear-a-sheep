@@ -7,7 +7,8 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 local player = game.Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
-local woolAmountValue = player:WaitForChild("WoolAmount")
+local inventory = player:WaitForChild("Inventory")
+local woolAmountValue = inventory:WaitForChild("Wool") :: IntValue
 local woolAmountLabel = playerGui:WaitForChild("Main").WoolAmount
 
 local function updateWoolAmountLabel()
@@ -16,11 +17,11 @@ end
 -- If the entry script needs to do something after loading (optional):
 moduleLoader.GameReadySignal:Once(function()
 
-	-- Update wool backpack UI    
+	-- Update wool backpack UI
 	updateWoolAmountLabel()
 end)
 
-player:GetAttributeChangedSignal("WoolAmount"):Connect(updateWoolAmountLabel)
+woolAmountValue.Changed:Connect(updateWoolAmountLabel)
 
 network.startClientAsync()
 moduleLoader.Init()

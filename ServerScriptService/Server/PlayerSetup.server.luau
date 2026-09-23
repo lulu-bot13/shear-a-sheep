@@ -1,19 +1,23 @@
 --// Services
 local players = game:GetService("Players")
 
+--// Modules
+local InventoryHandler = require(game.ServerScriptService.Modules.Controllers.InventoryHandler)
+
 local function onPlayerAdded(player: Player)
     print(`Player {player.Name} has joined the game!`)
-    
-    -- Setup temporary data
-    local woolAmount = Instance.new("IntValue")
-    woolAmount.Name = "WoolAmount"
-    woolAmount.Value = 0
-    woolAmount.Parent = player
 
-    local maxSpace = Instance.new("IntValue")
-    maxSpace.Name = "MaxSpace"
-    maxSpace.Value = 10
-    maxSpace.Parent = player
+    InventoryHandler.setupPlayer(player)
+    InventoryHandler.addItem(player, "Wool", 0)
+
+    local leaderstats = Instance.new("Folder")
+    leaderstats.Name = "leaderstats"
+    leaderstats.Parent = player
+
+    local money = Instance.new("IntValue")
+    money.Name = "Money"
+    money.Value = 0
+    money.Parent = leaderstats
 
     local currentSheepId = Instance.new("IntValue")
     currentSheepId.Name = "CurrentSheepId"
