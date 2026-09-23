@@ -23,7 +23,7 @@ local function waitForAllRemotesAsync(remoteFolder: Folder, timeoutSeconds: numb
 	-- Validate that the remotes defined under RemoteNames exist in remote folders.
 	local success = true
 	local function search(names: { string }, folder: Folder)
-		for _, remoteName in ipairs(names) do
+		for _, remoteName in names do
 			local remote = folder:WaitForChild(remoteName, timeoutSeconds)
 			if not remote then
 				success = false

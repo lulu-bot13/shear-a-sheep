@@ -103,14 +103,14 @@ function SheepHandler.Start()
 		local shearHealthUI = humanoidRootPart:FindFirstChild("Health")
 		local healthText = shearHealthUI and shearHealthUI:FindFirstChild("TextLabel")
 		if healthText then
-			healthText.Text = tostring(data.shearHealth) .. " / " .. tostring(data.shearHealth)
+			healthText.Text = tostring(data.ShearHealth) .. " / " .. tostring(data.ShearHealth)
 		end
 
 		-- Set the data
 		sheepModel:SetAttribute("id", id)
-		sheepModel:SetAttribute("ShearHealth", data.shearHealth)
-		sheepModel:SetAttribute("MaxShearHealth", data.shearHealth)
-		sheepModel:SetAttribute("WoolAmount", data.woolAmount)
+		sheepModel:SetAttribute("ShearHealth", data.ShearHealth)
+		sheepModel:SetAttribute("MaxShearHealth", data.ShearHealth)
+		sheepModel:SetAttribute("WoolAmount", data.WoolAmount)
         
 		-- Setting the position
 		local randomPosition = Vector3.new(

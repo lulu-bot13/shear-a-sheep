@@ -14,19 +14,67 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 
 --// Configurations
 -- TODO: Replace with a real shearing animation asset once one exists.
-local SHEAR_ANIMATION_ID = "rbxassetid://0"
+local SHEAR_ANIMATION_ID = ""
 local CAMERA_SIDE_OFFSET = 8
 local CAMERA_HEIGHT_OFFSET = 5
 
 --// Variables
 local currentSheep: Model? = nil
+local healthChangedConnection: RBXScriptConnection? = nil
 local defaultWalkSpeed = humanoid.WalkSpeed
 local defaultJumpPower = humanoid.JumpPower
 
-local animator = humanoid:WaitForChild("Animator") :: Animator
-local shearAnimation = Instance.new("Animation")
-shearAnimation.AnimationId = SHEAR_ANIMATION_ID
-local shearAnimationTrack = animator:LoadAnimation(shearAnimation)
+-- local animator = humanoid:WaitForChild("Animator") :: Animator
+-- local shearAnimation = Instance.new("Animation")
+-- shearAnimation.AnimationId = SHEAR_ANIMATION_ID ~= "" and SHEAR_ANIMATION_ID
+-- local shearAnimationTrack = animator:LoadAnimation(shearAnimation)
+
+--[[
+    Minimalistic health bar for the sheep currently being sheared. Built
+    entirely in script (no StarterGui counterpart exists in this repo) and
+    shown/hidden alongside the shearing lifecycle.
+]]
+local playerGui = player:WaitForChild("PlayerGui")
+
+local healthBarGui = Instance.new("ScreenGui")
+healthBarGui.Name = "ShearHealthUI"
+healthBarGui.ResetOnSpawn = false
+healthBarGui.IgnoreGuiInset = true
+
+local healthBarTrack = Instance.new("Frame")
+healthBarTrack.Name = "HealthBarTrack"
+healthBarTrack.AnchorPoint = Vector2.new(0.5, 0.5)
+healthBarTrack.Position = UDim2.fromScale(0.5, 0.85)
+healthBarTrack.Size = UDim2.fromOffset(300, 22)
+healthBarTrack.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+healthBarTrack.BorderSizePixel = 0
+healthBarTrack.Visible = false
+healthBarTrack.Parent = healthBarGui
+
+local healthBarTrackCorner = Instance.new("UICorner")
+healthBarTrackCorner.CornerRadius = UDim.new(1, 0)
+healthBarTrackCorner.Parent = healthBarTrack
+
+local healthBarFill = Instance.new("Frame")
+healthBarFill.Name = "Fill"
+healthBarFill.Size = UDim2.fromScale(1, 1)
+healthBarFill.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+healthBarFill.BorderSizePixel = 0
+healthBarFill.Parent = healthBarTrack
+
+local healthBarFillCorner = Instance.new("UICorner")
+healthBarFillCorner.CornerRadius = UDim.new(1, 0)
+healthBarFillCorner.Parent = healthBarFill
+
+healthBarGui.Parent = playerGui
+
+--[[
+    Updates the fill bar's width to reflect the given health ratio.
+]]
+local function updateHealthBar(current: number, max: number)
+	local ratio = max > 0 and math.clamp(current / max, 0, 1) or 0
+	healthBarFill.Size = UDim2.fromScale(ratio, 1)
+end
 
 --[[
     Points the camera at a fixed CFrame framing both the player and the
@@ -87,6 +135,13 @@ local function startShearing(sheepId: number)
 
 	faceCameraAtShearing(sheepModel)
 
+	updateHealthBar(sheepModel:GetAttribute("ShearHealth"), sheepModel:GetAttribute("MaxShearHealth"))
+	healthBarTrack.Visible = true
+
+	healthChangedConnection = sheepModel:GetAttributeChangedSignal("ShearHealth"):Connect(function()
+		updateHealthBar(sheepModel:GetAttribute("ShearHealth"), sheepModel:GetAttribute("MaxShearHealth"))
+	end)
+
 	contextActionService:BindAction("Shear", function(actionName, inputState)
 		if actionName ~= "Shear" then return end
 		if inputState ~= Enum.UserInputState.Begin then return end
@@ -110,6 +165,12 @@ local function stopShearing()
 	-- end
 
 	currentSheep = nil
+
+	if healthChangedConnection then
+		healthChangedConnection:Disconnect()
+		healthChangedConnection = nil
+	end
+	healthBarTrack.Visible = false
 
 	humanoid.WalkSpeed = defaultWalkSpeed
 	humanoid.JumpPower = defaultJumpPower

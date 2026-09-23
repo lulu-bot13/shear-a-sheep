@@ -7,6 +7,9 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 local SheepHandler = require(script.Parent.SheepHandler)
 local ShearData = require(game.ServerScriptService.Modules.Constants.ShearData)
 
+--// Configurations
+local proximityPromptConnections = {}
+
 local shearHandler = {}
 
 --[[
@@ -27,37 +30,6 @@ function shearHandler.Start()
     -- Guards against firing/connecting remotes before Network.startServer()
     -- has set up the remote folder (see Network.waitUntilReadyAsync).
     network.waitUntilReadyAsync()
-
-    --[[
-        Handles the player equipping the sheep when they catch up to them and
-        prevents them from selecting while already shearing another sheep.
-    ]]
-    proximityPromptService.PromptTriggered:Connect(function(prompt: ProximityPrompt, player: Player)
-        local actionText = prompt.ActionText
-
-        if actionText ~= "Shear" then return end
-
-        local sheepId = prompt:GetAttribute("Id")
-        local currentSheepId = player:FindFirstChild("CurrentSheepId") :: IntValue?
-        if not currentSheepId then return end
-
-        if currentSheepId.Value ~= 0 then
-            warn(`Player '{player.Name}' is already shearing a sheep.`)
-            return
-        end
-
-        local sheep = SheepHandler.getSheep(sheepId)
-        if not sheep then
-            warn(`No active sheep found for id {sheepId}.`)
-            return
-        end
-
-        currentSheepId.Value = sheepId
-
-        print(`Player has selected {sheep.Name} to shear.`)
-
-        network.fireClient(network.RemoteEvents.ActivateShearing, player, sheepId)
-    end)
 
     --[[
         Handles a single shear click from the client. The client sends no
@@ -83,5 +55,41 @@ function shearHandler.Start()
         end
     end)
 end
+
+--[[
+        Handles the player equipping the sheep when they catch up to them and
+        prevents them from selecting while already shearing another sheep.
+    ]]
+proximityPromptService.PromptTriggered:Connect(function(prompt: ProximityPrompt, player: Player)
+	local actionText = prompt.ActionText
+
+	if actionText ~= "Shear" then
+		return
+	end
+
+	local sheepId = prompt:GetAttribute("Id")
+	local currentSheepId = player:FindFirstChild("CurrentSheepId") :: IntValue?
+	if not currentSheepId then
+		return
+	end
+
+	if currentSheepId.Value ~= 0 then
+		warn(`Player '{player.Name}' is already shearing a sheep.`)
+		return
+	end
+
+	local sheepModel = SheepHandler.getSheep(sheepId)
+	if not sheepModel then
+		warn(`No active sheep found for id {sheepId}.`)
+		return
+	end
+
+	currentSheepId.Value = sheepId
+
+	print(`Player has selected {sheepModel.Name} to shear.`)
+
+	network.fireClient(network.RemoteEvents.ActivateShearing, player, sheepId)
+end)
+
 
 return shearHandler
