@@ -6,6 +6,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local network = require(replicatedStorage.Shared.Utils.Network)
 local SheepHandler = require(script.Parent.SheepHandler)
 local InventoryHandler = require(script.Parent.InventoryHandler)
+local PenHandler = require(script.Parent.PenHandler)
 local ShearData = require(game.ServerScriptService.Modules.Constants.ShearData)
 
 local shearHandler = {}
@@ -46,16 +47,40 @@ function shearHandler.Start()
         print(`Shearing sheep. Deducted {ShearData.Default.damage} health. Current Health: {shearHealth}`)
 
         if shearHealth <= 0 then
+            local sheepId = currentSheepId.Value
             local woolAmount = sheep:GetAttribute("WoolAmount") :: number
             local newTotal = InventoryHandler.addItem(player, "Wool", woolAmount)
             print(`Added {woolAmount} wool to {player.Name}'s inventory. New total: {newTotal}`)
 
-            SheepHandler.removeSheep(currentSheepId.Value)
+            SheepHandler.removeSheep(sheepId)
             currentSheepId.Value = 0
 
             network.fireClient(network.RemoteEvents.DeactivateShearing, player)
+
+            -- Free up the pen this sheep belonged to so the next one can
+            -- walk in.
+            PenHandler.onSheepRemoved(sheepId)
         end
     end)
+end
+
+--[[
+    Snaps the player's HumanoidRootPart to the pen's PlayerPos, facing the
+    sheep, so every pen frames the same way no matter where the player was
+    standing when they triggered the prompt. Position is set here, on the
+    server, rather than trusting the client to place itself. The look-at
+    target keeps the player's own Y so a raised SheepPos doesn't tilt the
+    player's body up toward it -- they just turn to face it horizontally.
+]]
+local function snapPlayerToPen(player: Player, pen: {playerPosition: Vector3, sheepPosition: Vector3})
+	local character = player.Character
+	local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not humanoidRootPart then
+		return
+	end
+
+	local lookTarget = Vector3.new(pen.sheepPosition.X, pen.playerPosition.Y, pen.sheepPosition.Z)
+	humanoidRootPart.CFrame = CFrame.lookAt(pen.playerPosition, lookTarget)
 end
 
 --[[
@@ -90,7 +115,18 @@ proximityPromptService.PromptTriggered:Connect(function(prompt: ProximityPrompt,
 
 	print(`Player has selected {sheepModel.Name} to shear.`)
 
-	network.fireClient(network.RemoteEvents.ActivateShearing, player, sheepId)
+	local pen = PenHandler.getPenForSheep(sheepId)
+	if pen then
+		snapPlayerToPen(player, pen)
+	end
+
+	network.fireClient(
+		network.RemoteEvents.ActivateShearing,
+		player,
+		sheepId,
+		pen and pen.sheepPosition,
+		pen and pen.playerPosition
+	)
 end)
 
 

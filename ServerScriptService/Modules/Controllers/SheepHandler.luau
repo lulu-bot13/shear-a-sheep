@@ -7,10 +7,6 @@ local SheepData = require(game.ServerScriptService.Modules.Constants.SheepData)
 
 --// References
 local sheepModels = replicatedStorage.Assets.Models.Sheeps
-local sheepSpawnArea = workspace:WaitForChild("Base"):FindFirstChild("SheepSpawnArea")
-
---// Configurations
-local sheepSpawnCount = 10
 
 local sheepById: { [number]: Model } = {}
 local nextSheepId = 0
@@ -58,74 +54,79 @@ local function getRandomSheep()
     return nil
 end
 
-local function _setupProximityPrompt(humanoidRootPart: BasePart, data: {sheepName: string, id: number})
+--[[
+    Adds a "Shear" ProximityPrompt to the sheep's HumanoidRootPart, making
+    it selectable by players. Called once the sheep has finished walking
+    into its pen -- sheep are not shearable while still travelling to it.
+]]
+function SheepHandler.makeShearable(sheepModel: Model, id: number)
+	local humanoidRootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not humanoidRootPart then
+		return
+	end
 
 	local proximityPrompt = Instance.new("ProximityPrompt")
 	proximityPrompt.ActionText = "Shear"
-	proximityPrompt.ObjectText = data.sheepName
+	proximityPrompt.ObjectText = sheepModel.Name
 	proximityPrompt.RequiresLineOfSight = false
 	proximityPrompt.MaxActivationDistance = 10
 	proximityPrompt.Parent = humanoidRootPart
 
-	proximityPrompt:SetAttribute("SheepName", data.sheepName)
-	proximityPrompt:SetAttribute("Id", data.id)
+	proximityPrompt:SetAttribute("SheepName", sheepModel.Name)
+	proximityPrompt:SetAttribute("Id", id)
 end
 
-function SheepHandler.Start()
-    for _ = 1, sheepSpawnCount do
-        local randomSheepName = getRandomSheep()
-        local sheepModel = sheepModels:FindFirstChild(randomSheepName)
-        if not sheepModel:IsA("Model") then 
-            warn(`Sheep with name '{sheepModel}' is not a valid model.`)
-            continue
-        end
-        sheepModel = sheepModel:Clone()
-        collectionService:AddTag(sheepModel, "Sheep")
-        sheepModel.Parent = workspace.Base.Sheeps
+--[[
+    Clones a random sheep species (weighted by SheepData chance), sets its
+    gameplay attributes, and places it at the given world position. Does
+    NOT add a ProximityPrompt -- callers that walk the sheep somewhere
+    first (see PenHandler) should call SheepHandler.makeShearable once it
+    arrives. Returns the spawned Model and its unique id, or (nil, nil) if
+    the chosen species has no valid model/data.
+]]
+function SheepHandler.spawnSheep(position: Vector3): (Model?, number?)
+	local randomSheepName = getRandomSheep()
+	local sheepModel = sheepModels:FindFirstChild(randomSheepName)
+	if not sheepModel or not sheepModel:IsA("Model") then
+		warn(`Sheep with name '{randomSheepName}' is not a valid model.`)
+		return nil, nil
+	end
 
-		local data = SheepData[sheepModel.Name]
-		if not data then
-			warn(`No Data found for Sheep with the name: '{sheepModel.Name}'`)
-			continue
-		end
+	local data = SheepData[sheepModel.Name]
+	if not data then
+		warn(`No Data found for Sheep with the name: '{sheepModel.Name}'`)
+		return nil, nil
+	end
 
-		local humanoidRootPart = sheepModel:FindFirstChild("HumanoidRootPart")
-		if not humanoidRootPart then
-			continue
-		end
+	sheepModel = sheepModel:Clone()
+	collectionService:AddTag(sheepModel, "Sheep")
+	sheepModel.Parent = workspace.Base.Sheeps
 
-		nextSheepId += 1
-		local id = nextSheepId
-		sheepById[id] = sheepModel
+	local humanoidRootPart = sheepModel:FindFirstChild("HumanoidRootPart")
+	if not humanoidRootPart then
+		sheepModel:Destroy()
+		return nil, nil
+	end
 
-		_setupProximityPrompt(humanoidRootPart, {sheepName = sheepModel.Name, id = id})
+	nextSheepId += 1
+	local id = nextSheepId
+	sheepById[id] = sheepModel
 
-		local shearHealthUI = humanoidRootPart:FindFirstChild("Health")
-		local healthText = shearHealthUI and shearHealthUI:FindFirstChild("TextLabel")
-		if healthText then
-			healthText.Text = tostring(data.ShearHealth) .. " / " .. tostring(data.ShearHealth)
-		end
+	local shearHealthUI = humanoidRootPart:FindFirstChild("Health")
+	local healthText = shearHealthUI and shearHealthUI:FindFirstChild("TextLabel")
+	if healthText then
+		healthText.Text = tostring(data.ShearHealth) .. " / " .. tostring(data.ShearHealth)
+	end
 
-		-- Set the data
-		sheepModel:SetAttribute("id", id)
-		sheepModel:SetAttribute("ShearHealth", data.ShearHealth)
-		sheepModel:SetAttribute("MaxShearHealth", data.ShearHealth)
-		sheepModel:SetAttribute("WoolAmount", data.WoolAmount)
-        
-		-- Setting the position
-		local randomPosition = Vector3.new(
-			math.random(
-				sheepSpawnArea.Position.X - sheepSpawnArea.Size.X / 2,
-				sheepSpawnArea.Position.X + sheepSpawnArea.Size.X / 2
-			),
-			sheepSpawnArea.Position.Y + humanoidRootPart.Size.Y / 2,
-			math.random(
-				sheepSpawnArea.Position.Z - sheepSpawnArea.Size.Z / 2,
-				sheepSpawnArea.Position.Z + sheepSpawnArea.Size.Z / 2
-			)
-		)
-		humanoidRootPart.CFrame = CFrame.new(randomPosition)
-    end
+	-- Set the data
+	sheepModel:SetAttribute("id", id)
+	sheepModel:SetAttribute("ShearHealth", data.ShearHealth)
+	sheepModel:SetAttribute("MaxShearHealth", data.ShearHealth)
+	sheepModel:SetAttribute("WoolAmount", data.WoolAmount)
+
+	humanoidRootPart.CFrame = CFrame.new(position)
+
+	return sheepModel, id
 end
 
 return SheepHandler

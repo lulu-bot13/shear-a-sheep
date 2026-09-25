@@ -2,6 +2,7 @@
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local contextActionService = game:GetService("ContextActionService")
 local collectionService = game:GetService("CollectionService")
+local tweenService = game:GetService("TweenService")
 
 --// Player
 local player = game.Players.LocalPlayer
@@ -13,26 +14,28 @@ local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 local network = require(replicatedStorage.Shared.Utils.Network)
 
 --// Configurations
--- TODO: Replace with a real shearing animation asset once one exists.
-local SHEAR_ANIMATION_ID = ""
 local CAMERA_SIDE_OFFSET = 8
 local CAMERA_HEIGHT_OFFSET = 5
+local WOOL_BURST_COUNT = 18
+local FILL_TWEEN_INFO = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local PUNCH_TWEEN_INFO = TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local LOW_HEALTH_COLOR = Color3.fromRGB(220, 60, 60)
+local FULL_HEALTH_COLOR = Color3.fromRGB(90, 200, 90)
 
 --// Variables
 local currentSheep: Model? = nil
 local healthChangedConnection: RBXScriptConnection? = nil
 local defaultWalkSpeed = humanoid.WalkSpeed
 local defaultJumpPower = humanoid.JumpPower
-
--- local animator = humanoid:WaitForChild("Animator") :: Animator
--- local shearAnimation = Instance.new("Animation")
--- shearAnimation.AnimationId = SHEAR_ANIMATION_ID ~= "" and SHEAR_ANIMATION_ID
--- local shearAnimationTrack = animator:LoadAnimation(shearAnimation)
+local shearTool: Tool? = nil
+local shearToolActivatedConnection: RBXScriptConnection? = nil
 
 --[[
-    Minimalistic health bar for the sheep currently being sheared. Built
-    entirely in script (no StarterGui counterpart exists in this repo) and
-    shown/hidden alongside the shearing lifecycle.
+    Health bar for the sheep currently being sheared. Built entirely in
+    script (no StarterGui counterpart exists in this repo) and shown/hidden
+    alongside the shearing lifecycle. The fill tweens smoothly, shifts from
+    green to red as health drops, shows a "current / max" label, and gives
+    a quick punch-scale on every hit so shears feel like they land.
 ]]
 local playerGui = player:WaitForChild("PlayerGui")
 
@@ -55,10 +58,14 @@ local healthBarTrackCorner = Instance.new("UICorner")
 healthBarTrackCorner.CornerRadius = UDim.new(1, 0)
 healthBarTrackCorner.Parent = healthBarTrack
 
+local healthBarScale = Instance.new("UIScale")
+healthBarScale.Scale = 1
+healthBarScale.Parent = healthBarTrack
+
 local healthBarFill = Instance.new("Frame")
 healthBarFill.Name = "Fill"
 healthBarFill.Size = UDim2.fromScale(1, 1)
-healthBarFill.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+healthBarFill.BackgroundColor3 = FULL_HEALTH_COLOR
 healthBarFill.BorderSizePixel = 0
 healthBarFill.Parent = healthBarTrack
 
@@ -66,28 +73,69 @@ local healthBarFillCorner = Instance.new("UICorner")
 healthBarFillCorner.CornerRadius = UDim.new(1, 0)
 healthBarFillCorner.Parent = healthBarFill
 
+local healthBarText = Instance.new("TextLabel")
+healthBarText.Name = "HealthText"
+healthBarText.BackgroundTransparency = 1
+healthBarText.Size = UDim2.fromScale(1, 1)
+healthBarText.Font = Enum.Font.GothamBold
+healthBarText.TextSize = 14
+healthBarText.TextColor3 = Color3.fromRGB(255, 255, 255)
+healthBarText.Text = ""
+healthBarText.ZIndex = 2
+healthBarText.Parent = healthBarTrack
+
+local healthBarTextStroke = Instance.new("UIStroke")
+healthBarTextStroke.Thickness = 1.5
+healthBarTextStroke.Color = Color3.fromRGB(0, 0, 0)
+healthBarTextStroke.Parent = healthBarText
+
 healthBarGui.Parent = playerGui
 
 --[[
-    Updates the fill bar's width to reflect the given health ratio.
+    Updates the fill bar's width, color, and label to reflect the given
+    health ratio -- tweened rather than snapped -- and gives the bar a
+    quick punch-scale so each hit feels like it landed.
 ]]
 local function updateHealthBar(current: number, max: number)
 	local ratio = max > 0 and math.clamp(current / max, 0, 1) or 0
-	healthBarFill.Size = UDim2.fromScale(ratio, 1)
+
+	tweenService:Create(healthBarFill, FILL_TWEEN_INFO, {
+		Size = UDim2.fromScale(ratio, 1),
+		BackgroundColor3 = LOW_HEALTH_COLOR:Lerp(FULL_HEALTH_COLOR, ratio),
+	}):Play()
+
+	healthBarText.Text = `{math.max(current, 0)} / {max}`
+
+	healthBarScale.Scale = 1.12
+	tweenService:Create(healthBarScale, PUNCH_TWEEN_INFO, { Scale = 1 }):Play()
+end
+
+--[[
+    Bursts a handful of wool particles off the sheep's Torso. Called on
+    every individual shear hit, not just the final one, for per-hit
+    feedback. No-ops quietly if the sheep model doesn't have the emitter
+    (e.g. an older clone from before it was added to the template).
+]]
+local function emitWoolBurst(sheepModel: Model)
+	local torso = sheepModel:FindFirstChild("Torso")
+	local emitter = torso and torso:FindFirstChild("WoolBurst") :: ParticleEmitter?
+	if emitter then
+		emitter:Emit(WOOL_BURST_COUNT)
+	end
 end
 
 --[[
     Points the camera at a fixed CFrame framing both the player and the
-    sheep from the side. Computed once on activation since neither the
-    player nor the sheep move while shearing is in progress.
+    sheep from the side. Takes explicit positions (the pen's PlayerPos and
+    SheepPos marks, sent by the server) rather than reading live character
+    positions, so the shot is stable and identical for every pen.
 ]]
-local function faceCameraAtShearing(sheepModel: Model)
+local function faceCameraAtShearing(sheepPosition: Vector3, playerPosition: Vector3)
 	local camera = workspace.CurrentCamera
-	local sheepPart = sheepModel.PrimaryPart or sheepModel:FindFirstChild("HumanoidRootPart")
-	if not camera or not sheepPart then return end
+	if not camera then return end
 
-	local midpoint = (humanoidRootPart.Position + sheepPart.Position) / 2
-	local separation = humanoidRootPart.Position - sheepPart.Position
+	local midpoint = (playerPosition + sheepPosition) / 2
+	local separation = playerPosition - sheepPosition
 
 	local flatSeparation = Vector3.new(separation.X, 0, separation.Z)
 	if flatSeparation.Magnitude == 0 then
@@ -118,10 +166,30 @@ local function findSheepById(sheepId: number): Model?
 end
 
 --[[
+    Finds the player's "Shear" Tool, whether it's sitting in their Backpack
+    or already equipped in their Character (checked fresh each call rather
+    than cached, since which one it's in changes as it gets equipped).
+]]
+local function findShearTool(): Tool?
+	local backpack = player:FindFirstChild("Backpack")
+	local fromBackpack = backpack and backpack:FindFirstChild("Shear")
+	if fromBackpack and fromBackpack:IsA("Tool") then
+		return fromBackpack
+	end
+
+	local fromCharacter = character:FindFirstChild("Shear")
+	if fromCharacter and fromCharacter:IsA("Tool") then
+		return fromCharacter
+	end
+
+	return nil
+end
+
+--[[
     Halts the player's movement and locks the camera onto the player and
     sheep so they can shear in place.
 ]]
-local function startShearing(sheepId: number)
+local function startShearing(sheepId: number, sheepPosition: Vector3?, playerPosition: Vector3?)
 	local sheepModel = findSheepById(sheepId)
 	if not sheepModel then
 		warn(`No active sheep found for id: {sheepId}`)
@@ -133,24 +201,47 @@ local function startShearing(sheepId: number)
 	humanoid.WalkSpeed = 0
 	humanoid.JumpPower = 0
 
-	faceCameraAtShearing(sheepModel)
+	-- Prefer the pen's fixed marks (sent by the server); fall back to live
+	-- positions only if a sheep somehow isn't tied to a pen.
+	local sheepPart = sheepModel.PrimaryPart or sheepModel:FindFirstChild("HumanoidRootPart")
+	local resolvedSheepPosition = sheepPosition or (sheepPart and sheepPart.Position)
+	local resolvedPlayerPosition = playerPosition or humanoidRootPart.Position
+
+	if resolvedSheepPosition then
+		faceCameraAtShearing(resolvedSheepPosition, resolvedPlayerPosition)
+	end
 
 	updateHealthBar(sheepModel:GetAttribute("ShearHealth"), sheepModel:GetAttribute("MaxShearHealth"))
 	healthBarTrack.Visible = true
 
 	healthChangedConnection = sheepModel:GetAttributeChangedSignal("ShearHealth"):Connect(function()
 		updateHealthBar(sheepModel:GetAttribute("ShearHealth"), sheepModel:GetAttribute("MaxShearHealth"))
+		emitWoolBurst(sheepModel)
 	end)
 
-	contextActionService:BindAction("Shear", function(actionName, inputState)
-		if actionName ~= "Shear" then return end
-		if inputState ~= Enum.UserInputState.Begin then return end
-		if not currentSheep then return end
+	-- Equip the real Shear tool and drive shearing off its Activated event
+	-- (a normal click/tap while holding it) rather than a raw input bind.
+	-- With no custom Animation on the tool, equipping it makes the
+	-- character's default Animate script play its built-in tool-swing
+	-- animation automatically on every Activated -- a real swinging-shears
+	-- motion with no animation asset needed.
+	shearTool = findShearTool()
+	if shearTool then
+		humanoid:EquipTool(shearTool)
+		shearToolActivatedConnection = shearTool.Activated:Connect(function()
+			if not currentSheep then return end
+			network.fireServer(network.RemoteEvents.Shear)
+		end)
+	else
+		warn("Shear tool not found in Backpack or Character; falling back to click-to-shear without a tool.")
+		contextActionService:BindAction("Shear", function(actionName, inputState)
+			if actionName ~= "Shear" then return end
+			if inputState ~= Enum.UserInputState.Begin then return end
+			if not currentSheep then return end
 
-		print(`Shearing action is clicked`)
-		network.fireServer(network.RemoteEvents.Shear)
-		-- shearAnimationTrack:Play()
-	end, false, Enum.UserInputType.MouseButton1, Enum.UserInputType.Touch)
+			network.fireServer(network.RemoteEvents.Shear)
+		end, false, Enum.UserInputType.MouseButton1, Enum.UserInputType.Touch)
+	end
 end
 
 --[[
@@ -158,11 +249,17 @@ end
     (the sheep was fully sheared and removed by the server).
 ]]
 local function stopShearing()
-	contextActionService:UnbindAction("Shear")
+	if shearToolActivatedConnection then
+		shearToolActivatedConnection:Disconnect()
+		shearToolActivatedConnection = nil
+	end
 
-	-- if shearAnimationTrack.IsPlaying then
-	-- 	shearAnimationTrack:Stop()
-	-- end
+	if shearTool then
+		humanoid:UnequipTools()
+		shearTool = nil
+	else
+		contextActionService:UnbindAction("Shear")
+	end
 
 	currentSheep = nil
 
@@ -190,8 +287,8 @@ end
 ]]
 network.waitUntilReadyAsync()
 
-network.connectEvent(network.RemoteEvents.ActivateShearing, function(sheepId: number)
-	startShearing(sheepId)
+network.connectEvent(network.RemoteEvents.ActivateShearing, function(sheepId: number, sheepPosition: Vector3?, playerPosition: Vector3?)
+	startShearing(sheepId, sheepPosition, playerPosition)
 end)
 
 network.connectEvent(network.RemoteEvents.DeactivateShearing, function()
