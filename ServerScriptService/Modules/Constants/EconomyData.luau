@@ -1,0 +1,3 @@
+local ecomonyData = {}
+
+return ecomonyData

@@ -12,10 +12,12 @@ local ShearData = require(game.ServerScriptService.Modules.Constants.ShearData)
 local shearHandler = {}
 
 --[[
-    Resolves the sheep a player is currently shearing, or nil if they aren't
-    shearing anything (CurrentSheepId defaults to 0, used as the "not
-    shearing" sentinel since sheep ids start at 1).
-]]
+Resolves the sheep a player is currently shearing
+
+@param player The player to look up
+@return sheep The sheep model, or nil if not shearing
+@return currentSheepId The player's CurrentSheepId value
+]]--
 local function getCurrentSheep(player: Player): (Model?, IntValue?)
     local currentSheepId = player:FindFirstChild("CurrentSheepId") :: IntValue?
     if not currentSheepId or currentSheepId.Value == 0 then
@@ -25,16 +27,13 @@ local function getCurrentSheep(player: Player): (Model?, IntValue?)
     return SheepHandler.getSheep(currentSheepId.Value), currentSheepId
 end
 
+--[[
+Connects the shear remote so each click damages the player's current sheep
+]]--
 function shearHandler.Start()
-    -- Guards against firing/connecting remotes before Network.startServer()
-    -- has set up the remote folder (see Network.waitUntilReadyAsync).
     network.waitUntilReadyAsync()
 
-    --[[
-        Handles a single shear click from the client. The client sends no
-        payload -- the server resolves the player's current sheep itself so
-        it never has to trust which sheep the client claims to be shearing.
-    ]]
+	-- Shear function
     network.connectEvent(network.RemoteEvents.Shear, function(player: Player)
         local sheep, currentSheepId = getCurrentSheep(player)
         if not sheep or not currentSheepId then
@@ -56,22 +55,26 @@ function shearHandler.Start()
             currentSheepId.Value = 0
 
             network.fireClient(network.RemoteEvents.DeactivateShearing, player)
+            
+            -- Reposition player
+            local character = player.Character or player.CharacterAdded:Wait()
+            local humanoidRootPart: BasePart = character:FindFirstChild("HumanoidRootPart")
+            if humanoidRootPart then
+                humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(-5, 0, 0)
+				print(`Repositioned`)
+            end
 
-            -- Free up the pen this sheep belonged to so the next one can
-            -- walk in.
             PenHandler.onSheepRemoved(sheepId)
         end
     end)
 end
 
 --[[
-    Snaps the player's HumanoidRootPart to the pen's PlayerPos, facing the
-    sheep, so every pen frames the same way no matter where the player was
-    standing when they triggered the prompt. Position is set here, on the
-    server, rather than trusting the client to place itself. The look-at
-    target keeps the player's own Y so a raised SheepPos doesn't tilt the
-    player's body up toward it -- they just turn to face it horizontally.
-]]
+Moves the player to the pen's PlayerPos, facing the sheep
+
+@param player The player to move
+@param pen The pen holding the player and sheep positions
+]]--
 local function snapPlayerToPen(player: Player, pen: {playerPosition: Vector3, sheepPosition: Vector3})
 	local character = player.Character
 	local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
@@ -84,9 +87,11 @@ local function snapPlayerToPen(player: Player, pen: {playerPosition: Vector3, sh
 end
 
 --[[
-        Handles the player equipping the sheep when they catch up to them and
-        prevents them from selecting while already shearing another sheep.
-    ]]
+	Starts shearing when a player triggers a sheep's "Shear" prompt
+
+	@param prompt The triggered prompt
+	@param player The player who triggered it
+]]--
 proximityPromptService.PromptTriggered:Connect(function(prompt: ProximityPrompt, player: Player)
 	local actionText = prompt.ActionText
 
@@ -119,6 +124,9 @@ proximityPromptService.PromptTriggered:Connect(function(prompt: ProximityPrompt,
 	if pen then
 		snapPlayerToPen(player, pen)
 	end
+
+	-- Make the proximity not visible
+	prompt.Enabled = false
 
 	network.fireClient(
 		network.RemoteEvents.ActivateShearing,

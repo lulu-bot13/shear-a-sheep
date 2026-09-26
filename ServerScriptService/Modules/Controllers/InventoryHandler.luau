@@ -1,10 +1,8 @@
 --!strict
 
 --[[
-    Generic per-player item inventory backed by IntValue instances under a
-    Player.Inventory folder. Item entries are created lazily by name, so
-    adding a new item type later requires no changes to this module.
-]]
+	Per-player item inventory stored as IntValues under Player.Inventory
+]]--
 
 local InventoryHandler = {}
 
@@ -12,9 +10,7 @@ local function getInventoryFolder(player: Player): Folder
 	return player:FindFirstChild("Inventory") :: Folder
 end
 
---[[
-    Ensures the player has an Inventory folder. Call once from PlayerAdded.
-]]
+-- Ensures the player has an Inventory folder.
 function InventoryHandler.setupPlayer(player: Player): ()
 	if getInventoryFolder(player) then
 		return
@@ -40,10 +36,7 @@ local function getOrCreateItem(player: Player, itemName: string): IntValue
 	return item
 end
 
---[[
-    Adds amount to the player's count of itemName, creating the item entry
-    if it doesn't exist yet. Returns the new total.
-]]
+-- Adds to the player's count of an item and returns the new total.
 function InventoryHandler.addItem(player: Player, itemName: string, amount: number): number
 	local item = getOrCreateItem(player, itemName)
 	item.Value += amount
@@ -51,10 +44,7 @@ function InventoryHandler.addItem(player: Player, itemName: string, amount: numb
 	return item.Value
 end
 
---[[
-    Subtracts amount from the player's count of itemName. Returns false
-    (no change made) if amount is greater than the current count.
-]]
+-- Subtracts from an item's count; returns false if the player doesn't have enough.
 function InventoryHandler.removeItem(player: Player, itemName: string, amount: number): boolean
 	local item = getOrCreateItem(player, itemName)
 	if amount > item.Value then
@@ -66,10 +56,7 @@ function InventoryHandler.removeItem(player: Player, itemName: string, amount: n
 	return true
 end
 
---[[
-    Returns the player's current count of itemName, or 0 if the item entry
-    doesn't exist yet.
-]]
+-- Returns the player's count of an item, or 0.
 function InventoryHandler.getItem(player: Player, itemName: string): number
 	local inventory = getInventoryFolder(player)
 	local item = inventory:FindFirstChild(itemName) :: IntValue?
@@ -77,9 +64,7 @@ function InventoryHandler.getItem(player: Player, itemName: string): number
 	return item and item.Value or 0
 end
 
---[[
-    Returns whether the player has at least amount (default 1) of itemName.
-]]
+-- Returns whether the player has at least amount (default 1) of an item.
 function InventoryHandler.hasItem(player: Player, itemName: string, amount: number?): boolean
 	return InventoryHandler.getItem(player, itemName) >= (amount or 1)
 end
