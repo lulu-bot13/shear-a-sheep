@@ -43,8 +43,6 @@ function shearHandler.Start()
         local shearHealth = math.max(sheep:GetAttribute("ShearHealth") - ShearData.Default.damage, 0)
         sheep:SetAttribute("ShearHealth", shearHealth)
 
-        print(`Shearing sheep. Deducted {ShearData.Default.damage} health. Current Health: {shearHealth}`)
-
         if shearHealth <= 0 then
             local sheepId = currentSheepId.Value
             local woolAmount = sheep:GetAttribute("WoolAmount") :: number
@@ -61,7 +59,6 @@ function shearHandler.Start()
             local humanoidRootPart: BasePart = character:FindFirstChild("HumanoidRootPart")
             if humanoidRootPart then
                 humanoidRootPart.CFrame = humanoidRootPart.CFrame * CFrame.new(-5, 0, 0)
-				print(`Repositioned`)
             end
 
             PenHandler.onSheepRemoved(sheepId)

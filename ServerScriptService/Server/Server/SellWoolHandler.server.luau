@@ -1,39 +1,79 @@
---// Services
-local collectionService =  game:GetService("CollectionService")
+--!strict
 
---// Prompt
-local sellPrompt = collectionService:GetTagged("SellWool")
+--[[
+Sells a player's wool for money when they trigger a sell prompt
+
+Location: ServerScriptService.Server.SellWoolHandler
+]]--
+
+--// Services
+local collectionService = game:GetService("CollectionService")
+local players = game:GetService("Players")
+local serverScriptService = game:GetService("ServerScriptService")
+
+--// Modules
+local InventoryHandler = require(serverScriptService.Modules.Controllers.InventoryHandler)
 
 --// Variables
-local playerDebounces = {}
-local debounce = false
-local cooldownTime = 3
+local onCooldown: { [Player]: boolean } = {}
 
 --// Configs
+local SELL_PROMPT_TAG = "SellWool"
+local WOOL_ITEM = "Wool"
 local BASE_AMOUNT = 0.5
+local COOLDOWN_SECONDS = 3
 
-local function calculateCashReward(woolAmount: number)
-    
-    return woolAmount * BASE_AMOUNT
-
+local function calculateCashReward(woolAmount: number): number
+	return math.floor(woolAmount * BASE_AMOUNT)
 end
 
-sellPrompt.Triggered:Connect(function(player: Player)
-    if playerDebounces[player] == true then return end
-    playerDebounces[player] = true
-    task.delay(cooldownTime, function()
-        playerDebounces[player] = false
-    end)
+-- Sells the player's whole wool stack; nothing is taken unless the money can be paid out.
+local function sellWool(player: Player)
+	if onCooldown[player] then
+		return
+	end
 
-    local inventory = player:WaitForChild("Inventory")
-    if not inventory then
-        warn(`No inventory found for player: {player.Name}`)
-        return
-    end
-    local woolAmount = inventory:FindFirstChild("WoolAmount")
-    if not woolAmount or woolAmount <= 0 then return end
+	local woolAmount = InventoryHandler.getItem(player, WOOL_ITEM)
+	if woolAmount <= 0 then
+		return
+	end
 
-    local cashToGrant = calculateCashReward()
-    player.leaderstats.Money.Value += cashToGrant
+	local leaderstats = player:FindFirstChild("leaderstats")
+	local money = leaderstats and leaderstats:FindFirstChild("Money")
+	if not money or not money:IsA("IntValue") then
+		warn(`SellWoolHandler: {player.Name} has no Money stat.`)
+		return
+	end
 
+	if not InventoryHandler.removeItem(player, WOOL_ITEM, woolAmount) then
+		return
+	end
+
+	local cash = calculateCashReward(woolAmount)
+	money.Value += cash
+	print(`{player.Name} sold {woolAmount} wool for {cash}.`)
+
+	onCooldown[player] = true
+	task.delay(COOLDOWN_SECONDS, function()
+		onCooldown[player] = nil
+	end)
+end
+
+-- Every tagged prompt sells, so each plot's farmer works, including ones added later.
+local function connectPrompt(instance: Instance)
+	if not instance:IsA("ProximityPrompt") then
+		warn(`SellWoolHandler: {instance:GetFullName()} is tagged {SELL_PROMPT_TAG} but is not a ProximityPrompt.`)
+		return
+	end
+
+	instance.Triggered:Connect(sellWool)
+end
+
+for _, instance in collectionService:GetTagged(SELL_PROMPT_TAG) do
+	connectPrompt(instance)
+end
+collectionService:GetInstanceAddedSignal(SELL_PROMPT_TAG):Connect(connectPrompt)
+
+players.PlayerRemoving:Connect(function(player)
+	onCooldown[player] = nil
 end)

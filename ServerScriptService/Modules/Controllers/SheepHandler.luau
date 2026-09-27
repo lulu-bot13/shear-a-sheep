@@ -35,17 +35,21 @@ function SheepHandler.removeSheep(id: number)
 	sheep:Destroy()
 end
 
-local function getRandomSheep()
+local function getChance(sheepName: string, data: { chance: number }, chances: { [string]: number }?): number
+	return if chances and chances[sheepName] then chances[sheepName] else data.chance
+end
+
+local function getRandomSheep(chances: { [string]: number }?)
     local totalChance = 0
-    for _, data in pairs(SheepData) do
-        totalChance += data.chance
+    for sheepName, data in SheepData do
+        totalChance += getChance(sheepName, data, chances)
     end
 
     local randomValue = math.random(1, totalChance)
     local cumulativeChance = 0
 
-    for sheepName, data in pairs(SheepData) do
-        cumulativeChance += data.chance
+    for sheepName, data in SheepData do
+        cumulativeChance += getChance(sheepName, data, chances)
         if randomValue <= cumulativeChance then
             return sheepName
         end
@@ -84,8 +88,8 @@ end
     arrives. Returns the spawned Model and its unique id, or (nil, nil) if
     the chosen species has no valid model/data.
 ]]
-function SheepHandler.spawnSheep(position: Vector3): (Model?, number?)
-	local randomSheepName = getRandomSheep()
+function SheepHandler.spawnSheep(position: Vector3, chances: { [string]: number }?): (Model?, number?)
+	local randomSheepName = getRandomSheep(chances)
 	local sheepModel = sheepModels:FindFirstChild(randomSheepName)
 	if not sheepModel or not sheepModel:IsA("Model") then
 		warn(`Sheep with name '{randomSheepName}' is not a valid model.`)

@@ -59,6 +59,7 @@ local function assignPlot(player: Player)
 	end
 
 	plot:SetAttribute(OWNER_ATTRIBUTE, player.UserId)
+	player:SetAttribute("PlotName", plot.Name)
 end
 
 -- Frees the player's base plot and every pen they bought.

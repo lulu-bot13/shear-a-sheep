@@ -1,38 +1,51 @@
 --!strict
 
+--[[
+	Builds each player's pens from their plot and tracks them per player
+
+	Location: ServerScriptService.Modules.Controllers.PenHandler
+]]--
+
 --// Services
-local pathfindingService = game:GetService("PathfindingService")
-local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
+local players = game:GetService("Players")
+local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
-local SheepHandler = require(script.Parent.SheepHandler)
+local Pen = require(script.Parent.Parent.Classes.Pen)
+local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
+
+--// Instances
+local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 
 --// Configurations
 local INITIAL_SPAWN_DELAY_SECONDS = 5
-local RESPAWN_DELAY_SECONDS = 3
-local SHEEP_WALK_SPEED = 8
-local SHEEP_Y_OFFSET = 3
--- WaypointSpacing = math.huge returns only the points where the route turns,
--- instead of one every 4 studs along straight sections.
-local AGENT_PARAMS = { AgentRadius = 3, AgentHeight = 4, AgentCanJump = false, WaypointSpacing = math.huge }
-local REACH_DISTANCE = 3 -- Studs from a path point at which the sheep heads for the next one.
+local PENS_FOLDER_NAME = "Pens"
+local BASE_PEN_NAME = "Base_Pen"
+local WAYPOINTS_FOLDER_NAME = "Waypoints"
+local PATHS_FOLDER_NAME = "Paths"
+local PLOT_NAME_ATTRIBUTE = "PlotName"
+local SPACING_ATTRIBUTE = "PenSpacing"
+local DIRECTION_ATTRIBUTE = "PenDirection"
+local DEFAULT_PEN_SPACING = 15.8
+local DEFAULT_PEN_DIRECTION = Vector3.new(0, 0, -1)
+local PATH_SEAM_GAP = 0.02
 
-type Pen = {
-	plotName: string,
-	waypointsFolder: Folder?, -- Parts named "1", "2", "3", ... walked in numeric order.
-	groundPosition: Vector3, -- SheepPos at ground level; the last stop of the walk.
-	sheepPosition: Vector3, -- SheepPos with the Y offset applied (final anchored pose).
-	playerPosition: Vector3,
-	occupiedSheepId: number?,
+type PlotParts = {
+	plot: Folder,
+	pens: Folder,
+	basePen: Model,
+	waypoints: Folder?,
+	paths: Folder?,
 }
 
-local pens: { Pen } = {}
-local penBySheepId: { [number]: Pen } = {}
-local started = false -- Set by Start once the initial spawn pass is queued; pens added later spawn themselves.
+--// Variables
+local playerPens: { [Player]: { Pen.Pen } } = {}
+local started = false
 
 local PenHandler = {}
+PenHandler.PenAdded = Signal.new() :: Signal.Signal<Player, Pen.Pen>
 
--- Looks up the part named "1", then "2", then "3", ... until one is missing.
+-- Returns the parts named "1", "2", "3", ... in a folder, stopping at the first gap.
 local function getWaypointParts(folder: Folder?): { BasePart }
 	local parts: { BasePart } = {}
 	if not folder then
@@ -52,205 +65,219 @@ local function getWaypointParts(folder: Folder?): { BasePart }
 	return parts
 end
 
-local function walkSheepToPen(sheepModel: Model, waypointsFolder: Folder?, onArrived: () -> ())
-	local humanoid = sheepModel:FindFirstChildOfClass("Humanoid")
-	local rootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if not humanoid or not rootPart then
-		onArrived()
-		return
-	end
-
-	humanoid.WalkSpeed = SHEEP_WALK_SPEED
-
-	-- Parts leading to the pen
-	local targets: { Vector3 } = {}
-	for _, part in getWaypointParts(waypointsFolder) do
-		table.insert(targets, part.Position)
-	end
-
-	task.spawn(function()
-		local path = pathfindingService:CreatePath(AGENT_PARAMS)
-		local route: { Vector3 } = {}
-		local legStart = rootPart.Position
-
-		for _, target in targets do
-			local offset = legStart - target
-			if Vector3.new(offset.X, 0, offset.Z).Magnitude <= REACH_DISTANCE then
-				continue
-			end
-
-			local success, err = pcall(function()
-				path:ComputeAsync(legStart, target)
-			end)
-
-			if success and path.Status == Enum.PathStatus.Success then
-				local points = path:GetWaypoints()
-				for pointIndex = 2, #points do
-					table.insert(route, points[pointIndex].Position)
-				end
-			else
-				table.insert(route, target)
-				warn(err)
-			end
-
-			legStart = target
-		end
-
-		for index, point in route do
-			if not sheepModel.Parent then
-				return
-			end
-
-			print(`Index: {index}`)
-
-			humanoid:MoveTo(point)
-			humanoid.MoveToFinished:Wait()
-
-			if index == #route and sheepModel then
-				print(`Sheep has arrived.`)
-				onArrived()
-				break
-			end
-		end
-	end)
+local function getPlot(player: Player): Folder?
+	local plotName = player:GetAttribute(PLOT_NAME_ATTRIBUTE)
+	local plot = if typeof(plotName) == "string" then plotsFolder:FindFirstChild(plotName) else nil
+	return if plot and plot:IsA("Folder") then plot else nil
 end
 
-local function spawnIntoPen(pen: Pen)
-	local firstWaypoint = getWaypointParts(pen.waypointsFolder)[1]
-	local startPosition = if firstWaypoint then firstWaypoint.Position else pen.groundPosition
-	local sheepModel, id = SheepHandler.spawnSheep(startPosition)
-	if not sheepModel or not id then
-		-- No valid sheep species could be spawned; try again shortly
-		-- rather than leaving the pen empty forever.
-		task.delay(RESPAWN_DELAY_SECONDS, function()
-			spawnIntoPen(pen)
-		end)
-		return
-	end
-
-	local humanoidRootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
-	humanoidRootPart.Anchored = false
-
-	pen.occupiedSheepId = id
-	penBySheepId[id] = pen
-
-	walkSheepToPen(sheepModel, pen.waypointsFolder, function()
-		local humanoid = sheepModel:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			humanoid.WalkSpeed = 0
-			humanoid.PlatformStand = true
-		end
-
-		print(`Got callback positioning sheep`)
-
-		local finalRootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart?
-		if finalRootPart then
-			local lookTarget = Vector3.new(pen.playerPosition.X, pen.sheepPosition.Y, pen.playerPosition.Z)
-			finalRootPart.CFrame = CFrame.lookAt(pen.sheepPosition + Vector3.new(0,SHEEP_Y_OFFSET, 0), lookTarget)
-			finalRootPart.Anchored = true
-		end
-
-		SheepHandler.makeShearable(sheepModel, id)
-	end)
-end
-
---[[
-    Called by ShearHandler once a pen's sheep has been fully sheared and
-    removed. Frees the pen and queues the next arrival after a short delay.
-]]
-function PenHandler.onSheepRemoved(id: number)
-	local pen = penBySheepId[id]
-	if not pen then
-		return
-	end
-
-	penBySheepId[id] = nil
-	pen.occupiedSheepId = nil
-
-	task.delay(RESPAWN_DELAY_SECONDS, function()
-		spawnIntoPen(pen)
-	end)
-end
-
---[[
-    Returns the pen a given (currently active) sheep id belongs to, or nil.
-    Used by ShearHandler to know which PlayerPos to snap the shearing
-    player to, and which marks to send the client for the camera shot.
-]]
-function PenHandler.getPenForSheep(id: number): Pen?
-	return penBySheepId[id]
-end
-
--- Validates a plot and turns it into a Pen; returns nil (with a warning where useful) if it isn't usable.
-local function buildPen(plot: Instance): Pen?
-	local baseFence = plot:FindFirstChild("Base_Fence")
-	if not baseFence then
+-- Finds the folders a plot needs to hold pens; returns nil if the plot has no Pens/Base_Pen.
+local function findPlotParts(plot: Folder): PlotParts?
+	local pens = plot:FindFirstChild(PENS_FOLDER_NAME)
+	local basePen = if pens then pens:FindFirstChild(BASE_PEN_NAME) else nil
+	if not pens or not pens:IsA("Folder") or not basePen or not basePen:IsA("Model") then
 		return nil
 	end
 
-	local sheepPos = baseFence:FindFirstChild("SheepPos") :: BasePart?
-	local playerPos = baseFence:FindFirstChild("PlayerPos") :: BasePart?
-	if not sheepPos or not playerPos then
-		warn(`Plot '{plot.Name}' is missing SheepPos/PlayerPos in its Base_Fence; skipping.`)
-		return nil
-	end
-
-	-- A plot with no Waypoints folder just gets a direct walk to SheepPos.
-	local waypointsFolder = plot:FindFirstChild("Waypoints")
+	local waypoints = plot:FindFirstChild(WAYPOINTS_FOLDER_NAME)
+	local paths = plot:FindFirstChild(PATHS_FOLDER_NAME)
 
 	return {
-		plotName = plot.Name,
-		waypointsFolder = if waypointsFolder and waypointsFolder:IsA("Folder") then waypointsFolder else nil,
-		groundPosition = sheepPos.Position,
-		sheepPosition = sheepPos.Position,
-		playerPosition = playerPos.Position,
-		occupiedSheepId = nil,
+		plot = plot,
+		pens = pens,
+		basePen = basePen,
+		waypoints = if waypoints and waypoints:IsA("Folder") then waypoints else nil,
+		paths = if paths and paths:IsA("Folder") then paths else nil,
 	}
 end
 
---[[
-    Discovers every valid pen under Workspace.Base.Plots. Runs in the
-    Setup phase (before any sheep spawn) so Start can immediately begin
-    filling every discovered pen.
-]]
-function PenHandler.Setup()
-	for _, plot in plotsFolder:GetChildren() do
-		local pen = buildPen(plot)
-		if pen then
-			table.insert(pens, pen)
-		end
+-- A plot can override how far apart its pens are and which way they grow.
+local function getLayout(plot: Folder): (number, Vector3)
+	local spacing = plot:GetAttribute(SPACING_ATTRIBUTE)
+	local direction = plot:GetAttribute(DIRECTION_ATTRIBUTE)
+
+	local penSpacing = if typeof(spacing) == "number" then spacing else DEFAULT_PEN_SPACING
+	local penDirection = if typeof(direction) == "Vector3" and direction.Magnitude > 0
+		then direction.Unit
+		else DEFAULT_PEN_DIRECTION.Unit
+
+	return penSpacing, penDirection
+end
+
+-- Extends the route by cloning its last waypoint one pen further along.
+local function createWaypoint(folder: Folder?, waypoints: { BasePart }, step: Vector3): BasePart?
+	local last = waypoints[#waypoints]
+	if not folder or not last then
+		return nil
 	end
 
-	print(`PenHandler discovered {#pens} pen(s).`)
+	local waypoint = last:Clone()
+	waypoint.Name = tostring(#waypoints + 1)
+	waypoint.Position = last.Position + step
+	waypoint.Parent = folder
+	return waypoint
+end
+
+-- Clones the first path piece into the new pen's slot, trimmed slightly so neighbours don't z-fight.
+local function createPathPiece(paths: Folder?, penNumber: number, direction: Vector3, offset: Vector3): BasePart?
+	local template = if paths then paths:FindFirstChildWhichIsA("BasePart") else nil
+	if not paths or not template then
+		return nil
+	end
+
+	local piece = template:Clone()
+	piece.Name = `Part{penNumber}`
+	piece.CFrame = template.CFrame + offset
+
+	local size = piece.Size
+	local cframe = piece.CFrame
+	if math.abs(cframe.RightVector:Dot(direction)) >= math.abs(cframe.LookVector:Dot(direction)) then
+		piece.Size = Vector3.new(size.X - PATH_SEAM_GAP, size.Y, size.Z)
+	else
+		piece.Size = Vector3.new(size.X, size.Y, size.Z - PATH_SEAM_GAP)
+	end
+
+	piece.Parent = paths
+	return piece
+end
+
+local function registerPen(player: Player, pen: Pen.Pen)
+	table.insert(playerPens[player], pen)
+
+	if started then
+		pen:start()
+	end
+
+	PenHandler.PenAdded:Fire(player, pen)
+end
+
+-- Gives a player their first pen, which is the Base_Pen already sitting in their plot.
+local function setupPlayer(player: Player)
+	local plot = getPlot(player)
+	local parts = if plot then findPlotParts(plot) else nil
+	if not parts then
+		warn(`PenHandler: {player.Name}'s plot has no {PENS_FOLDER_NAME}/{BASE_PEN_NAME}.`)
+		return
+	end
+
+	local basePen = Pen.new(player, 1, parts.basePen, getWaypointParts(parts.waypoints), {})
+	if not basePen then
+		return
+	end
+
+	playerPens[player] = {}
+	registerPen(player, basePen)
+end
+
+-- Plots are assigned by PlotHandler, which may run after the player joins.
+local function onPlayerAdded(player: Player)
+	if getPlot(player) then
+		setupPlayer(player)
+		return
+	end
+
+	player:GetAttributeChangedSignal(PLOT_NAME_ATTRIBUTE):Once(function()
+		setupPlayer(player)
+	end)
+end
+
+local function onPlayerRemoving(player: Player)
+	local ownedPens = playerPens[player]
+	if not ownedPens then
+		return
+	end
+
+	playerPens[player] = nil
+	for _, pen in ownedPens do
+		pen:destroy()
+	end
 end
 
 --[[
-    Registers a plot created at runtime (e.g. a purchased pen) and starts
-    filling it with sheep. Returns whether the plot was valid.
+	Creates the player's next pen: clones Base_Pen one slot further along the plot,
+	extends the waypoint route to it and adds a matching piece of path.
+	Returns the new pen, or nil if the player has no valid plot.
 ]]
-function PenHandler.addPen(plot: Folder): boolean
-	local pen = buildPen(plot)
+function PenHandler.createPen(player: Player): Pen.Pen?
+	local ownedPens = playerPens[player]
+	local plot = getPlot(player)
+	local parts = if plot then findPlotParts(plot) else nil
+	if not ownedPens or not parts then
+		warn(`PenHandler: cannot create a pen for {player.Name}.`)
+		return nil
+	end
+
+	local penNumber = #ownedPens + 1
+	local spacing, direction = getLayout(parts.plot)
+	local step = direction * spacing
+	local offset = step * (penNumber - 1)
+	local extras: { Instance } = {}
+
+	local model = parts.basePen:Clone()
+	model.Name = `Pen_{penNumber}`
+	model:PivotTo(model:GetPivot() + offset)
+	model.Parent = parts.pens
+	table.insert(extras, model)
+
+	local waypoints = getWaypointParts(parts.waypoints)
+	local waypoint = createWaypoint(parts.waypoints, waypoints, step)
+	if waypoint then
+		table.insert(waypoints, waypoint)
+		table.insert(extras, waypoint)
+	end
+
+	local pathPiece = createPathPiece(parts.paths, penNumber, direction, offset)
+	if pathPiece then
+		table.insert(extras, pathPiece)
+	end
+
+	local pen = Pen.new(player, penNumber, model, waypoints, extras)
 	if not pen then
-		return false
+		for _, instance in extras do
+			instance:Destroy()
+		end
+		return nil
 	end
 
-	table.insert(pens, pen)
-	print(`PenHandler added pen '{pen.plotName}' ({#pens} total).`)
+	registerPen(player, pen)
+	return pen
+end
 
-	-- Before Start runs, its initial pass will spawn this pen with the rest.
-	if started then
-		spawnIntoPen(pen)
+-- Returns a copy of the player's pens, in the order they were created.
+function PenHandler.getPens(player: Player): { Pen.Pen }
+	local ownedPens = playerPens[player]
+	return if ownedPens then table.clone(ownedPens) else {}
+end
+
+-- Returns the pen a currently active sheep belongs to, or nil.
+function PenHandler.getPenForSheep(id: number): Pen.Pen?
+	return Pen.getBySheepId(id)
+end
+
+-- Called by ShearHandler once a sheep has been sheared and removed.
+function PenHandler.onSheepRemoved(id: number)
+	local pen = Pen.getBySheepId(id)
+	if pen then
+		pen:releaseSheep()
 	end
-	return true
+end
+
+function PenHandler.Setup()
+	players.PlayerAdded:Connect(onPlayerAdded)
+	players.PlayerRemoving:Connect(onPlayerRemoving)
+
+	for _, player in players:GetPlayers() do
+		onPlayerAdded(player)
+	end
 end
 
 function PenHandler.Start()
 	-- Give the map time to load before the first sheep spawns and walks.
 	task.delay(INITIAL_SPAWN_DELAY_SECONDS, function()
 		started = true
-		for _, pen in pens do
-			if not pen.occupiedSheepId then
-				spawnIntoPen(pen)
+		for _, ownedPens in playerPens do
+			for _, pen in ownedPens do
+				pen:start()
 			end
 		end
 	end)
