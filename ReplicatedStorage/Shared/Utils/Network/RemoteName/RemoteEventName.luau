@@ -12,11 +12,21 @@ local StrictEnum = require("../Utility/StrictEnum")
 export type EnumType = "ActivateShearing"
     | "DeactivateShearing"
     | "Shear"
+    | "OpenPenMenu"
+    | "ClosePenMenu"
+    | "UpgradePen"
+    | "SellPen"
+    | "HireWorker"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	ActivateShearing = "ActivateShearing",
     DeactivateShearing = "DeactivateShearing",
-    Shear = "Shear"
+    Shear = "Shear",
+    OpenPenMenu = "OpenPenMenu",
+    ClosePenMenu = "ClosePenMenu",
+    UpgradePen = "UpgradePen",
+    SellPen = "SellPen",
+    HireWorker = "HireWorker"
 }
 
 return RemoteEventName

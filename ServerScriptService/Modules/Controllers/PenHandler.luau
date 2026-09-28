@@ -42,6 +42,13 @@ type PlotParts = {
 local playerPens: { [Player]: { Pen.Pen } } = {}
 local started = false
 
+-- New pens are cloned from a pristine snapshot of Base_Pen taken the first time each
+-- plot is resolved (at PlayerAdded, before anything can spawn a sheep, seat a worker,
+-- or otherwise mutate it) -- never from the live Base_Pen itself, which accumulates
+-- runtime state (hired workers, in-progress sheep, prompts) that a freshly-bought pen
+-- must NOT inherit.
+local pristineBasePens: { [Folder]: Model } = {}
+
 local PenHandler = {}
 PenHandler.PenAdded = Signal.new() :: Signal.Signal<Player, Pen.Pen>
 
@@ -77,6 +84,10 @@ local function findPlotParts(plot: Folder): PlotParts?
 	local basePen = if pens then pens:FindFirstChild(BASE_PEN_NAME) else nil
 	if not pens or not pens:IsA("Folder") or not basePen or not basePen:IsA("Model") then
 		return nil
+	end
+
+	if not pristineBasePens[pens] then
+		pristineBasePens[pens] = basePen:Clone()
 	end
 
 	local waypoints = plot:FindFirstChild(WAYPOINTS_FOLDER_NAME)
@@ -213,7 +224,8 @@ function PenHandler.createPen(player: Player): Pen.Pen?
 	local offset = step * (penNumber - 1)
 	local extras: { Instance } = {}
 
-	local model = parts.basePen:Clone()
+	local template = pristineBasePens[parts.pens] or parts.basePen
+	local model = template:Clone()
 	model.Name = `Pen_{penNumber}`
 	model:PivotTo(model:GetPivot() + offset)
 	model.Parent = parts.pens
@@ -247,6 +259,45 @@ end
 function PenHandler.getPens(player: Player): { Pen.Pen }
 	local ownedPens = playerPens[player]
 	return if ownedPens then table.clone(ownedPens) else {}
+end
+
+-- Returns the player's pen with the given id, or nil.
+function PenHandler.getPen(player: Player, penId: number): Pen.Pen?
+	local ownedPens = playerPens[player]
+	if not ownedPens then
+		return nil
+	end
+
+	for _, pen in ownedPens do
+		if pen.id == penId then
+			return pen
+		end
+	end
+
+	return nil
+end
+
+--[[
+	Removes a player's pen. Only the most-recently-bought pen (the highest
+	id, and never the base pen #1) can be sold -- pen numbering and spacing
+	assumes a contiguous, append-only list, so removing from the middle
+	would require re-flowing every pen after it. Returns false if the pen
+	isn't sellable or isn't the player's.
+]]
+function PenHandler.removePen(player: Player, pen: Pen.Pen): boolean
+	local ownedPens = playerPens[player]
+	if not ownedPens then
+		return false
+	end
+
+	local lastIndex = #ownedPens
+	if pen.id ~= lastIndex or pen.id <= 1 then
+		return false
+	end
+
+	pen:destroy()
+	table.remove(ownedPens, lastIndex)
+	return true
 end
 
 -- Returns the pen a currently active sheep belongs to, or nil.

@@ -13,6 +13,7 @@ local serverScriptService = game:GetService("ServerScriptService")
 
 --// Modules
 local PenHandler = require(serverScriptService.Modules.Controllers.PenHandler)
+local EconomyData = require(serverScriptService.Modules.Constants.EconomyData)
 
 --// Instances
 local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
@@ -21,9 +22,7 @@ local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 local lastPurchase: { [Player]: number } = {}
 
 --// Configs
-local BASE_PRICE = 100
-local PRICE_MULTIPLIER = 3
-local MAX_PENS = 6
+local MAX_PENS = EconomyData.MAX_PENS
 local DEBOUNCE_SECONDS = 1
 local OWNER_ATTRIBUTE = "Owner"
 local NO_OWNER = 0
@@ -41,7 +40,7 @@ end
 
 -- Price for pen N = BASE_PRICE * PRICE_MULTIPLIER^(N - 2).
 local function getPrice(penNumber: number): number
-	return math.round(BASE_PRICE * PRICE_MULTIPLIER ^ (penNumber - 2))
+	return EconomyData.getPenPrice(penNumber)
 end
 
 -- The prompt and price label live on the inner BuyPenButton part, so search the whole model.

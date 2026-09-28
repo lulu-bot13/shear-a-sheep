@@ -12,6 +12,13 @@ local runService = game:GetService("RunService")
 
 --// Modules
 local SheepHandler = require(script.Parent.Parent.Controllers.SheepHandler)
+local SheepAnimator = require(script.Parent.Parent.Utils.SheepAnimator)
+local SheepData = require(script.Parent.Parent.Constants.SheepData)
+local ShearData = require(script.Parent.Parent.Constants.ShearData)
+local InventoryHandler = require(script.Parent.Parent.Controllers.InventoryHandler)
+
+--// Services
+local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Configurations
 local RESPAWN_DELAY_SECONDS = 3
@@ -21,6 +28,7 @@ local REACH_DISTANCE = 3
 local LOOKAHEAD_DISTANCE = 4
 local STEP_TIMEOUT_SECONDS = 6
 local AGENT_PARAMS = { AgentRadius = 3, AgentHeight = 4, AgentCanJump = false, WaypointSpacing = math.huge }
+local WORKER_SHEAR_INTERVAL_SECONDS = 1.5
 
 export type PenData = {
 	chances: { [string]: number }?,
@@ -39,6 +47,9 @@ type PenFields = {
 	occupiedSheepId: number?,
 	active: boolean,
 	destroyed: boolean,
+	seated: boolean,
+	level: number,
+	workerModel: Model?,
 	data: PenData,
 }
 
@@ -106,6 +117,7 @@ local function walkSheep(pen: Pen, sheepModel: Model): boolean
 	end
 
 	humanoid.WalkSpeed = SHEEP_WALK_SPEED
+	SheepAnimator.setWalking(sheepModel, true)
 
 	local route = computeRoute(rootPart.Position, pen.waypoints)
 
@@ -134,6 +146,8 @@ local function seatSheep(pen: Pen, sheepModel: Model, id: number)
 		humanoid.PlatformStand = true
 	end
 
+	SheepAnimator.setWalking(sheepModel, false)
+
 	local rootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if rootPart then
 		local lookTarget = Vector3.new(pen.playerPosition.X, pen.sheepPosition.Y, pen.playerPosition.Z)
@@ -142,6 +156,7 @@ local function seatSheep(pen: Pen, sheepModel: Model, id: number)
 	end
 
 	SheepHandler.makeShearable(sheepModel, id)
+	pen.seated = true
 end
 
 -- Returns the pen a currently active sheep belongs to, or nil.
@@ -169,8 +184,89 @@ function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart 
 		occupiedSheepId = nil,
 		active = false,
 		destroyed = false,
+		seated = false,
+		level = 1,
+		workerModel = nil,
 		data = { money = 0, automated = false },
 	}, Pen)
+end
+
+-- Current upgrade level (1..SheepData.MaxPenLevel). Higher levels bias spawns toward rarer sheep.
+function Pen.getLevel(self: Pen): number
+	return self.level
+end
+
+-- Bumps the pen to the next level and rebiases its spawn chances; false if already maxed.
+function Pen.upgrade(self: Pen): boolean
+	if self.destroyed or self.level >= SheepData.MaxPenLevel then
+		return false
+	end
+
+	self.level += 1
+	self.data.chances = SheepData.buildChancesForLevel(self.level)
+	return true
+end
+
+-- Hires an auto-shearing worker for this pen; false if one is already hired.
+function Pen.hireWorker(self: Pen): boolean
+	if self.destroyed or self.data.automated then
+		return false
+	end
+
+	self.data.automated = true
+
+	local npcs = replicatedStorage.Assets:FindFirstChild("Npcs")
+	local template = npcs and npcs:FindFirstChild("Worker")
+	if template and self.model.Parent then
+		local worker = template:Clone()
+		worker.Name = `Worker_{self.id}`
+		local lookTarget = Vector3.new(self.sheepPosition.X, self.playerPosition.Y, self.sheepPosition.Z)
+		worker:PivotTo(CFrame.lookAt(self.playerPosition, lookTarget))
+		worker.Parent = self.model
+		table.insert(self.extras, worker)
+		self.workerModel = worker
+	end
+
+	task.spawn(function()
+		while self.data.automated and not self.destroyed do
+			task.wait(WORKER_SHEAR_INTERVAL_SECONDS)
+			if self.data.automated and not self.destroyed then
+				self:_workerShearTick()
+			end
+		end
+	end)
+
+	return true
+end
+
+-- Applies one tick of automatic shearing to whatever sheep is currently seated in the pen.
+function Pen._workerShearTick(self: Pen)
+	local id = self.occupiedSheepId
+	if not id or not self.seated then
+		return
+	end
+
+	local sheep = SheepHandler.getSheep(id)
+	if not sheep then
+		return
+	end
+
+	local current = sheep:GetAttribute("ShearHealth") :: number
+	if type(current) ~= "number" then
+		return
+	end
+
+	local newHealth = math.max(current - ShearData.Default.damage, 0)
+	sheep:SetAttribute("ShearHealth", newHealth)
+
+	if newHealth <= 0 then
+		local woolAmount = sheep:GetAttribute("WoolAmount") :: number
+		if self.owner and self.owner.Parent then
+			InventoryHandler.addItem(self.owner, "Wool", woolAmount)
+		end
+		SheepHandler.removeSheep(id)
+		self:releaseSheep()
+	end
 end
 
 -- Spawns a sheep at the start of the route and walks it into the pen; does nothing if the pen is busy.
@@ -193,6 +289,7 @@ function Pen.spawnSheep(self: Pen)
 	rootPart.Anchored = false
 
 	self.occupiedSheepId = id
+	self.seated = false
 	penBySheepId[id] = self
 
 	task.spawn(function()
@@ -211,6 +308,7 @@ function Pen.releaseSheep(self: Pen)
 
 	penBySheepId[id] = nil
 	self.occupiedSheepId = nil
+	self.seated = false
 
 	task.delay(RESPAWN_DELAY_SECONDS, function()
 		self:spawnSheep()
@@ -226,6 +324,7 @@ end
 -- Removes the pen's sheep and every instance that was created for it.
 function Pen.destroy(self: Pen)
 	self.destroyed = true
+	self.data.automated = false
 
 	local id = self.occupiedSheepId
 	if id then

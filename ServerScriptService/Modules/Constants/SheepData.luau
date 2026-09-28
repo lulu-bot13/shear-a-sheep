@@ -1,6 +1,29 @@
 --[[
-	Sheep species stats and spawn chances
+	Sheep species stats, rarity tier and spawn weight.
+
+	`chance` is a WEIGHT, not a percentage: the odds of any one species
+	spawning are chance / (sum of all chances). Every species has its own
+	unique weight, so every sheep has its own distinct rarity -- nothing
+	ties for odds with anything else. Weights sum to exactly 1,000,000 so
+	"1 in N" odds come out clean.
+
+	Rarity ladder (most common -> rarest):
+		Common -> Uncommon -> Rare -> Epic -> Legendary -> Mythic
+
+	Colors are WCAG AA-safe (>=4.5:1 contrast) against a light/white
+	billboard card, used by the SheepHUD billboard and the pen menu.
 ]]--
+
+local RARITY_COLORS = {
+	Common = Color3.fromRGB(107, 114, 128),
+	Uncommon = Color3.fromRGB(21, 128, 61),
+	Rare = Color3.fromRGB(29, 78, 216),
+	Epic = Color3.fromRGB(126, 34, 206),
+	Legendary = Color3.fromRGB(194, 65, 12),
+	Mythic = Color3.fromRGB(190, 18, 60),
+}
+
+local RARITY_ORDER = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic" }
 
 local sheepData = {
 
@@ -9,23 +32,29 @@ local sheepData = {
 		name = "Basic Sheep",
 		ShearHealth = 100,
 		WoolAmount = 15,
-		chance = 80
+		rarity = "Common",
+		color = RARITY_COLORS.Common,
+		chance = 500000,
 	},
 
 	["GreySheep"] = {
 		id = "Grey_Sheep",
 		name = "Grey Sheep",
-		ShearHealth = 100,
+		ShearHealth = 105,
 		WoolAmount = 18,
-		chance = 60
+		rarity = "Common",
+		color = RARITY_COLORS.Common,
+		chance = 250000,
 	},
 
 	["BrownSheep"] = {
 		id = "Brown_Sheep",
 		name = "Brown Sheep",
-		ShearHealth = 100,
-		WoolAmount = 18,
-		chance = 60
+		ShearHealth = 115,
+		WoolAmount = 20,
+		rarity = "Uncommon",
+		color = RARITY_COLORS.Uncommon,
+		chance = 150000,
 	},
 
 	["BlackSheep"] = {
@@ -33,15 +62,19 @@ local sheepData = {
 		name = "Black Sheep",
 		ShearHealth = 130,
 		WoolAmount = 28,
-		chance = 30
+		rarity = "Uncommon",
+		color = RARITY_COLORS.Uncommon,
+		chance = 60000,
 	},
 
 	["FluffySheep"] = {
 		id = "Fluffy_Sheep",
 		name = "Fluffy Sheep",
-		ShearHealth = 130,
-		WoolAmount = 32,
-		chance = 30
+		ShearHealth = 145,
+		WoolAmount = 35,
+		rarity = "Rare",
+		color = RARITY_COLORS.Rare,
+		chance = 30000,
 	},
 
 	["GoldenSheep"] = {
@@ -49,15 +82,29 @@ local sheepData = {
 		name = "Golden Sheep",
 		ShearHealth = 175,
 		WoolAmount = 50,
-		chance = 12
+		rarity = "Epic",
+		color = RARITY_COLORS.Epic,
+		chance = 7500,
 	},
 
 	["EmeraldSheep"] = {
 		id = "Emerald_Sheep",
 		name = "Emerald Sheep",
-		ShearHealth = 175,
-		WoolAmount = 55,
-		chance = 12
+		ShearHealth = 190,
+		WoolAmount = 60,
+		rarity = "Epic",
+		color = RARITY_COLORS.Epic,
+		chance = 2000,
+	},
+
+	["SpottedSheep"] = {
+		id = "Spotted_Sheep",
+		name = "Spotted Sheep",
+		ShearHealth = 215,
+		WoolAmount = 80,
+		rarity = "Legendary",
+		color = RARITY_COLORS.Legendary,
+		chance = 400,
 	},
 
 	["DiamondSheep"] = {
@@ -65,9 +112,73 @@ local sheepData = {
 		name = "Diamond Sheep",
 		ShearHealth = 250,
 		WoolAmount = 100,
-		chance = 4
-	}
+		rarity = "Mythic",
+		color = RARITY_COLORS.Mythic,
+		chance = 100,
+	},
 
 }
+
+--[[
+	Per-rarity-tier weight multipliers used by pen upgrades: as a pen levels
+	up, common sheep get less likely and rare+ sheep get more likely. Level 1
+	is the untouched base table (no override -- see Pen.lua).
+]]--
+sheepData.UpgradeMultipliers = {
+	[1] = { Common = 1,    Uncommon = 1,    Rare = 1,    Epic = 1,   Legendary = 1,  Mythic = 1 },
+	[2] = { Common = 0.8,  Uncommon = 1.3,  Rare = 1.6,  Epic = 2.2, Legendary = 3,  Mythic = 4 },
+	[3] = { Common = 0.6,  Uncommon = 1.6,  Rare = 2.4,  Epic = 3.6, Legendary = 5,  Mythic = 8 },
+	[4] = { Common = 0.45, Uncommon = 2,    Rare = 3.2,  Epic = 5,   Legendary = 8,  Mythic = 14 },
+	[5] = { Common = 0.3,  Uncommon = 2.5,  Rare = 4.5,  Epic = 8,   Legendary = 14, Mythic = 25 },
+}
+sheepData.MaxPenLevel = 5
+
+-- Sum of every species' base weight (1,000,000 by construction).
+function sheepData.getTotalWeight(chances: { [string]: number }?): number
+	local total = 0
+	for sheepName, data in sheepData do
+		if type(data) == "table" and data.chance then
+			total += (chances and chances[sheepName]) or data.chance
+		end
+	end
+	return total
+end
+
+-- Builds a chances table (sheepName -> weight) for the given pen level, biasing rarer tiers upward.
+function sheepData.buildChancesForLevel(level: number): { [string]: number }?
+	local multipliers = sheepData.UpgradeMultipliers[level]
+	if not multipliers or level <= 1 then
+		return nil -- nil means "use the base table as-is"
+	end
+
+	local chances = {}
+	for sheepName, data in sheepData do
+		if type(data) == "table" and data.chance then
+			local multiplier = multipliers[data.rarity] or 1
+			chances[sheepName] = data.chance * multiplier
+		end
+	end
+	return chances
+end
+
+-- Human-readable "1 in N" odds text for a species, honoring a pen's chances override.
+function sheepData.getOddsText(sheepName: string, chances: { [string]: number }?): string
+	local data = sheepData[sheepName]
+	if not data then
+		return "1 in ?"
+	end
+
+	local weight = (chances and chances[sheepName]) or data.chance
+	local total = sheepData.getTotalWeight(chances)
+	if weight <= 0 or total <= 0 then
+		return "1 in ?"
+	end
+
+	local odds = math.max(1, math.floor(total / weight + 0.5))
+	return `1 in {odds}`
+end
+
+sheepData.RarityColors = RARITY_COLORS
+sheepData.RarityOrder = RARITY_ORDER
 
 return sheepData
