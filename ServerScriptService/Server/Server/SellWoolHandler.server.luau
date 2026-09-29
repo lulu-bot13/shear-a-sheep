@@ -9,10 +9,13 @@ Location: ServerScriptService.Server.SellWoolHandler
 --// Services
 local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
+local replicatedStorage = game:GetService("ReplicatedStorage")
 local serverScriptService = game:GetService("ServerScriptService")
 
 --// Modules
+local network = require(replicatedStorage.Shared.Utils.Network)
 local InventoryHandler = require(serverScriptService.Modules.Controllers.InventoryHandler)
+local EconomyData = require(serverScriptService.Modules.Constants.EconomyData)
 
 --// Variables
 local onCooldown: { [Player]: boolean } = {}
@@ -20,7 +23,7 @@ local onCooldown: { [Player]: boolean } = {}
 --// Configs
 local SELL_PROMPT_TAG = "SellWool"
 local WOOL_ITEM = "Wool"
-local BASE_AMOUNT = 0.5
+local BASE_AMOUNT = EconomyData.WOOL_SELL_PRICE
 local COOLDOWN_SECONDS = 3
 
 local function calculateCashReward(woolAmount: number): number
@@ -52,6 +55,7 @@ local function sellWool(player: Player)
 	local cash = calculateCashReward(woolAmount)
 	money.Value += cash
 	print(`{player.Name} sold {woolAmount} wool for {cash}.`)
+	network.fireClient(network.RemoteEvents.WoolSold, player, woolAmount, cash)
 
 	onCooldown[player] = true
 	task.delay(COOLDOWN_SECONDS, function()

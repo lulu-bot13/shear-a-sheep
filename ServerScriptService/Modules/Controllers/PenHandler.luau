@@ -42,11 +42,6 @@ type PlotParts = {
 local playerPens: { [Player]: { Pen.Pen } } = {}
 local started = false
 
--- New pens are cloned from a pristine snapshot of Base_Pen taken the first time each
--- plot is resolved (at PlayerAdded, before anything can spawn a sheep, seat a worker,
--- or otherwise mutate it) -- never from the live Base_Pen itself, which accumulates
--- runtime state (hired workers, in-progress sheep, prompts) that a freshly-bought pen
--- must NOT inherit.
 local pristineBasePens: { [Folder]: Model } = {}
 
 local PenHandler = {}
@@ -212,33 +207,33 @@ end
 function PenHandler.createPen(player: Player): Pen.Pen?
 	local ownedPens = playerPens[player]
 	local plot = getPlot(player)
-	local parts = if plot then findPlotParts(plot) else nil
-	if not ownedPens or not parts then
+	local plotParts = if plot then findPlotParts(plot) :: PlotParts else nil
+	if not ownedPens or not plotParts then
 		warn(`PenHandler: cannot create a pen for {player.Name}.`)
 		return nil
 	end
 
 	local penNumber = #ownedPens + 1
-	local spacing, direction = getLayout(parts.plot)
+	local spacing, direction = getLayout(plotParts.plot)
 	local step = direction * spacing
 	local offset = step * (penNumber - 1)
 	local extras: { Instance } = {}
 
-	local template = pristineBasePens[parts.pens] or parts.basePen
+	local template = pristineBasePens[plotParts.pens] or plotParts.basePen
 	local model = template:Clone()
 	model.Name = `Pen_{penNumber}`
 	model:PivotTo(model:GetPivot() + offset)
-	model.Parent = parts.pens
+	model.Parent = plotParts.pens
 	table.insert(extras, model)
 
-	local waypoints = getWaypointParts(parts.waypoints)
-	local waypoint = createWaypoint(parts.waypoints, waypoints, step)
+	local waypoints = getWaypointParts(plotParts.waypoints)
+	local waypoint = createWaypoint(plotParts.waypoints, waypoints, step)
 	if waypoint then
 		table.insert(waypoints, waypoint)
 		table.insert(extras, waypoint)
 	end
 
-	local pathPiece = createPathPiece(parts.paths, penNumber, direction, offset)
+	local pathPiece = createPathPiece(plotParts.paths, penNumber, direction, offset)
 	if pathPiece then
 		table.insert(extras, pathPiece)
 	end

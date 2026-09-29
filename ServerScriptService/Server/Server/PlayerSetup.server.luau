@@ -33,6 +33,14 @@ local function assignPlayerCollisionGroup(character: Model)
 	end)
 end
 
+-- Hides the floating name/health tag above a character's head.
+local function hideHumanoidName(character: Model)
+	local humanoid = character:WaitForChild("Humanoid", 10)
+	if humanoid and humanoid:IsA("Humanoid") then
+		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	end
+end
+
 local function onPlayerAdded(player: Player)
     print(`Player {player.Name} has joined the game!`)
 
@@ -54,9 +62,14 @@ local function onPlayerAdded(player: Player)
 
     if player.Character then
         assignPlayerCollisionGroup(player.Character)
+        task.spawn(hideHumanoidName, player.Character)
     end
     player.CharacterAdded:Connect(assignPlayerCollisionGroup)
+    player.CharacterAdded:Connect(function(character: Model)
+        task.spawn(hideHumanoidName, character)
+    end)
 
 end
 
 players.PlayerAdded:Connect(onPlayerAdded)
+

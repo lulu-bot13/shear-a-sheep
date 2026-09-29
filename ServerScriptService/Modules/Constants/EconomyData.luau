@@ -32,6 +32,9 @@ function ecomonyData.getPenSellValue(penNumber: number): number
 	return math.floor(ecomonyData.getPenPrice(penNumber) * ecomonyData.PEN_SELL_REFUND_RATIO)
 end
 
+-- Money paid per wool when selling (also used for the worker's estimated income).
+ecomonyData.WOOL_SELL_PRICE = 0.5
+
 -- One-time cost to hire an auto-shearing worker for a pen.
 ecomonyData.WORKER_HIRE_COST = 750
 

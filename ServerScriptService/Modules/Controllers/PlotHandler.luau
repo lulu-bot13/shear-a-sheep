@@ -13,19 +13,17 @@ local players = game:GetService("Players")
 local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 
 --// Configs
-local OWNER_ATTRIBUTE = "Owner"
-local PURCHASED_ATTRIBUTE = "Purchased" -- Set by PenPurchase on pens bought later; those are never handed out as a base.
 local NO_OWNER = 0
 
 local PlotHandler = {}
 
 local function getOwnerId(plot: Instance): number
-	local owner = plot:GetAttribute(OWNER_ATTRIBUTE)
-	return if typeof(owner) == "number" then owner else NO_OWNER
+	local owner = plot:GetAttribute("Owner")
+	return if typeof(owner) == "number" then owner else 0
 end
 
 local function isBasePlot(plot: Instance): boolean
-	return plot:IsA("Folder") and not plot:GetAttribute(PURCHASED_ATTRIBUTE)
+	return plot:IsA("Folder") and not plot:GetAttribute("Purchased")
 end
 
 -- A plot is open when it is a base plot with no owner yet.
@@ -58,7 +56,7 @@ local function assignPlot(player: Player)
 		return
 	end
 
-	plot:SetAttribute(OWNER_ATTRIBUTE, player.UserId)
+	plot:SetAttribute("Owner", player.UserId)
 	player:SetAttribute("PlotName", plot.Name)
 end
 
@@ -66,7 +64,7 @@ end
 local function releasePlots(player: Player)
 	for _, plot in plotsFolder:GetChildren() do
 		if getOwnerId(plot) == player.UserId then
-			plot:SetAttribute(OWNER_ATTRIBUTE, NO_OWNER)
+			plot:SetAttribute("Owner", NO_OWNER)
 		end
 	end
 end

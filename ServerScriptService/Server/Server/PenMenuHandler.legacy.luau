@@ -1,16 +1,13 @@
---!strict
-
 --[[
-	Lets a plot's owner select one of their pens -- by walking up to its
-	"Manage Pen" proximity prompt, or by clicking it with the mouse -- to
-	open a small management menu: see the pen's current rarity boost,
-	upgrade it, sell it (last pen only) and hire an auto-shearing worker.
+	The pen menu: pops up on its own when a plot owner walks up to one of their
+	pens and closes again when they walk away. From it they can START SHEARING,
+	upgrade the pen (better odds for rare sheep), automate it with a worker, or
+	sell it (only the newest pen).
 
 	Location: ServerScriptService.Server.PenMenuHandler
 ]]--
 
 --// Services
-local debris = game:GetService("Debris")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local serverScriptService = game:GetService("ServerScriptService")
@@ -18,35 +15,26 @@ local serverScriptService = game:GetService("ServerScriptService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local PenHandler = require(serverScriptService.Modules.Controllers.PenHandler)
-local PenClass = require(serverScriptService.Modules.Classes.Pen)
+local SheepHandler = require(serverScriptService.Modules.Controllers.SheepHandler)
+local ShearHandler = require(serverScriptService.Modules.Controllers.ShearHandler)
 local SheepData = require(serverScriptService.Modules.Constants.SheepData)
 local EconomyData = require(serverScriptService.Modules.Constants.EconomyData)
-type Pen = PenClass.Pen
 
 --// Configs
-local SELECT_HIGHLIGHT_SECONDS = 1.5
-local MANAGE_ACTION_TEXT = "Manage Pen"
-local MAX_ACTIVATION_DISTANCE = 10
-local CLICK_MAX_DISTANCE = 32
-local SELECTION_COLOR = Color3.fromRGB(255, 205, 70)
+local ENTER_DISTANCE = 8 -- studs from the pen's PlayerPos before the menu pops up
+local EXIT_DISTANCE = 11 -- studs before it closes again (bigger, so it doesn't flicker at the edge)
+local ACTION_DISTANCE = 16 -- how far away a player may still press the menu's buttons
+local POLL_SECONDS = 0.2
 
--- Briefly outlines the pen so a click/prompt trigger reads as a clear "selection".
-local function flashSelection(pen: Pen)
-	local existing = pen.model:FindFirstChild("_SelectionHighlight")
-	if existing then
-		existing:Destroy()
-	end
+type Zone = {
+	penId: number,
+	signature: string,
+}
 
-	local highlight = Instance.new("Highlight")
-	highlight.Name = "_SelectionHighlight"
-	highlight.FillTransparency = 1
-	highlight.OutlineColor = SELECTION_COLOR
-	highlight.OutlineTransparency = 0
-	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-	highlight.Parent = pen.model
+--// State
+local zones: { [Player]: Zone } = {}
 
-	debris:AddItem(highlight, SELECT_HIGHLIGHT_SECONDS)
-end
+--// Helpers -------------------------------------------------------------------
 
 local function getMoney(player: Player): IntValue?
 	local leaderstats = player:FindFirstChild("leaderstats")
@@ -54,40 +42,129 @@ local function getMoney(player: Player): IntValue?
 	return if money and money:IsA("IntValue") then money else nil
 end
 
--- Everything the client needs to render the pen menu for one pen.
-local function buildMenuData(player: Player, pen: Pen)
+local function getMoneyAmount(player: Player): number
+	local money = getMoney(player)
+	return if money then money.Value else 0
+end
+
+-- Flat (ground-plane) distance from a player's character to a pen's PlayerPos; nil if they have no live character.
+local function getDistanceToPen(player: Player, pen: any): number?
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not humanoid or humanoid.Health <= 0 or not rootPart then
+		return nil
+	end
+
+	local offset = rootPart.Position - pen.playerPosition
+	return Vector3.new(offset.X, 0, offset.Z).Magnitude
+end
+
+-- Everything the client needs to draw the menu for one pen.
+local function buildMenuData(player: Player, pen: any)
 	local ownedPens = PenHandler.getPens(player)
-	local isLast = pen.id == #ownedPens
-	local canSell = isLast and pen.id > 1
+	local canSell = pen.id == #ownedPens and pen.id > 1
 	local level = pen:getLevel()
+	local upgradeCost = EconomyData.getPenUpgradeCost(level)
+	local multipliers = SheepData.UpgradeMultipliers[level] or SheepData.UpgradeMultipliers[1]
+	local money = getMoneyAmount(player)
+
+	local sheep = if pen.occupiedSheepId then SheepHandler.getSheep(pen.occupiedSheepId) else nil
+	local sheepReady = sheep ~= nil and pen.seated == true
+
+	local sheepType, sheepName, rarity, rarityColor, sheepDamaged
+	if sheep and sheepReady then
+		sheepType = sheep:GetAttribute("SheepType")
+		local data = if type(sheepType) == "string" then SheepData[sheepType] else nil
+		sheepName = if data then data.name else sheep.Name
+		rarity = sheep:GetAttribute("Rarity")
+		rarityColor = sheep:GetAttribute("RarityColor")
+		sheepDamaged = (sheep:GetAttribute("ShearHealth") :: number) < (sheep:GetAttribute("MaxShearHealth") :: number)
+	end
 
 	return {
 		penId = pen.id,
-		penName = pen.model.Name,
+		penName = `Pen {pen.id}`,
+		penModel = pen.model,
 		level = level,
 		maxLevel = SheepData.MaxPenLevel,
-		multipliers = SheepData.UpgradeMultipliers[level] or SheepData.UpgradeMultipliers[1],
-		rarityOrder = SheepData.RarityOrder,
-		rarityColors = SheepData.RarityColors,
-		upgradeCost = EconomyData.getPenUpgradeCost(level),
-		canSell = canSell,
-		sellValue = canSell and EconomyData.getPenSellValue(pen.id) or 0,
+		luck = multipliers.Rare,
+		upgradeCost = upgradeCost,
+		canAffordUpgrade = upgradeCost ~= nil and money >= upgradeCost,
 		workerHired = pen.data.automated,
 		workerCost = EconomyData.WORKER_HIRE_COST,
+		canAffordWorker = money >= EconomyData.WORKER_HIRE_COST,
+		canSell = canSell,
+		sellValue = if canSell then EconomyData.getPenSellValue(pen.id) else 0,
+		sheepReady = sheepReady,
+		sheepId = pen.occupiedSheepId,
+		sheepType = sheepType,
+		sheepName = sheepName,
+		rarity = rarity,
+		rarityColor = rarityColor,
+		sheepDamaged = sheepDamaged == true,
 	}
 end
 
-local function openMenu(player: Player, pen: Pen)
-	flashSelection(pen)
-	network.fireClient(network.RemoteEvents.OpenPenMenu, player, buildMenuData(player, pen))
+-- Only the parts of the menu data that change what's drawn (so we don't spam the client).
+local function getSignature(data: any): string
+	return table.concat({
+		tostring(data.penId),
+		tostring(data.level),
+		tostring(data.canAffordUpgrade),
+		tostring(data.workerHired),
+		tostring(data.canAffordWorker),
+		tostring(data.canSell),
+		tostring(data.sheepReady),
+		tostring(data.sheepId),
+		tostring(data.sheepDamaged),
+	}, "|")
 end
 
-local function onUpgradePen(player: Player, penId: number)
-	if typeof(penId) ~= "number" then
-		return
+-- Draws (or redraws) the menu on the player's screen and remembers what was sent.
+local function pushMenu(player: Player, pen: any)
+	local data = buildMenuData(player, pen)
+
+	local zone = zones[player]
+	if not zone or zone.penId ~= pen.id then
+		zone = { penId = pen.id, signature = "" }
+		zones[player] = zone
+	end
+	zone.signature = getSignature(data)
+
+	network.fireClient(network.RemoteEvents.OpenPenMenu, player, data)
+end
+
+local function closeMenu(player: Player)
+	if zones[player] then
+		zones[player] = nil
+		network.fireClient(network.RemoteEvents.ClosePenMenu, player)
+	end
+end
+
+-- Returns the pen for a menu button press, or nil if the press isn't allowed.
+local function getActionPen(player: Player, penId: any): any?
+	if typeof(penId) ~= "number" or ShearHandler.isShearing(player) then
+		return nil
 	end
 
 	local pen = PenHandler.getPen(player, penId)
+	if not pen then
+		return nil
+	end
+
+	local distance = getDistanceToPen(player, pen)
+	if not distance or distance > ACTION_DISTANCE then
+		return nil
+	end
+
+	return pen
+end
+
+--// Menu buttons ---------------------------------------------------------------
+
+local function onUpgradePen(player: Player, penId: any)
+	local pen = getActionPen(player, penId)
 	if not pen then
 		return
 	end
@@ -104,16 +181,12 @@ local function onUpgradePen(player: Player, penId: number)
 
 	if pen:upgrade() then
 		money.Value -= cost
-		openMenu(player, pen)
+		pushMenu(player, pen)
 	end
 end
 
-local function onSellPen(player: Player, penId: number)
-	if typeof(penId) ~= "number" then
-		return
-	end
-
-	local pen = PenHandler.getPen(player, penId)
+local function onSellPen(player: Player, penId: any)
+	local pen = getActionPen(player, penId)
 	if not pen then
 		return
 	end
@@ -129,16 +202,12 @@ local function onSellPen(player: Player, penId: number)
 		if money then
 			money.Value += refund
 		end
-		network.fireClient(network.RemoteEvents.ClosePenMenu, player)
+		closeMenu(player)
 	end
 end
 
-local function onHireWorker(player: Player, penId: number)
-	if typeof(penId) ~= "number" then
-		return
-	end
-
-	local pen = PenHandler.getPen(player, penId)
+local function onHireWorker(player: Player, penId: any)
+	local pen = getActionPen(player, penId)
 	if not pen or pen.data.automated then
 		return
 	end
@@ -150,46 +219,59 @@ local function onHireWorker(player: Player, penId: number)
 
 	if pen:hireWorker() then
 		money.Value -= EconomyData.WORKER_HIRE_COST
-		openMenu(player, pen)
+		pushMenu(player, pen)
 	end
 end
 
--- Wires the "Manage Pen" prompt and mouse-click selection onto one newly created pen.
-local function connectPen(player: Player, pen: Pen)
-	local playerPos = pen.model:FindFirstChild("PlayerPos")
-	if not playerPos or not playerPos:IsA("BasePart") then
-		warn(`PenMenuHandler: {pen.model.Name} has no PlayerPos to attach a menu prompt to.`)
+--// Walk-up detection -------------------------------------------------------------
+
+-- Opens/closes/refreshes the menu depending on where the player is standing.
+local function updateZone(player: Player)
+	if ShearHandler.isShearing(player) then
+		closeMenu(player)
 		return
 	end
 
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.Name = "ManagePenPrompt"
-	prompt.ActionText = MANAGE_ACTION_TEXT
-	prompt.ObjectText = pen.model.Name
-	prompt.RequiresLineOfSight = false
-	prompt.MaxActivationDistance = MAX_ACTIVATION_DISTANCE
-	prompt.Parent = playerPos
+	local zone = zones[player]
+	local target: any = nil
 
-	prompt.Triggered:Connect(function(triggeringPlayer: Player)
-		if triggeringPlayer == player then
-			openMenu(player, pen)
+	-- Stay on the current pen until the player is clearly out of range...
+	if zone then
+		local current = PenHandler.getPen(player, zone.penId)
+		local distance = if current then getDistanceToPen(player, current) else nil
+		if current and distance and distance <= EXIT_DISTANCE then
+			target = current
 		end
-	end)
+	end
 
-	-- Mouse-click selection: clicking anywhere on the pen's marker parts opens the same menu.
-	for _, part in { playerPos, pen.model:FindFirstChild("SheepPos") } do
-		if part and part:IsA("BasePart") then
-			local clickDetector = Instance.new("ClickDetector")
-			clickDetector.Name = "ManagePenClick"
-			clickDetector.MaxActivationDistance = CLICK_MAX_DISTANCE
-			clickDetector.Parent = part
-
-			clickDetector.MouseClick:Connect(function(clickingPlayer: Player)
-				if clickingPlayer == player then
-					openMenu(player, pen)
-				end
-			end)
+	-- ...otherwise pick the closest pen they've walked up to.
+	if not target then
+		local nearestDistance = ENTER_DISTANCE
+		for _, pen in PenHandler.getPens(player) do
+			local distance = getDistanceToPen(player, pen)
+			if distance and distance <= nearestDistance then
+				nearestDistance = distance
+				target = pen
+			end
 		end
+	end
+
+	if not target then
+		closeMenu(player)
+		return
+	end
+
+	local latest = zones[player]
+	if not latest or latest.penId ~= target.id then
+		latest = { penId = target.id, signature = "" }
+		zones[player] = latest
+	end
+
+	local data = buildMenuData(player, target)
+	local signature = getSignature(data)
+	if signature ~= latest.signature then
+		latest.signature = signature
+		network.fireClient(network.RemoteEvents.OpenPenMenu, player, data)
 	end
 end
 
@@ -199,15 +281,18 @@ network.connectEvent(network.RemoteEvents.UpgradePen, onUpgradePen)
 network.connectEvent(network.RemoteEvents.SellPen, onSellPen)
 network.connectEvent(network.RemoteEvents.HireWorker, onHireWorker)
 
--- Connect first, THEN catch up on any pens created before this script got a chance to
--- connect (e.g. base pens handed out to players who joined before this script ran) --
--- covers both possible orderings against PenHandler.Setup() without ever double-connecting.
-PenHandler.PenAdded:Connect(connectPen)
+players.PlayerRemoving:Connect(function(player: Player)
+	zones[player] = nil
+end)
 
-for _, player in players:GetPlayers() do
-	for _, pen in PenHandler.getPens(player) do
-		if not pen.model:FindFirstChild("ManagePenPrompt", true) then
-			connectPen(player, pen)
+task.spawn(function()
+	while true do
+		task.wait(POLL_SECONDS)
+		for _, player in players:GetPlayers() do
+			local ok, err = pcall(updateZone, player)
+			if not ok then
+				warn(`PenMenuHandler: {err}`)
+			end
 		end
 	end
-end
+end)

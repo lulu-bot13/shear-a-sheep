@@ -5,16 +5,15 @@ local collectionService = game:GetService("CollectionService")
 --// Modules
 local SheepData = require(game.ServerScriptService.Modules.Constants.SheepData)
 local ObjectPool = require(game.ServerScriptService.Modules.Utils.ObjectPool)
-local SheepAnimator = require(game.ServerScriptService.Modules.Utils.SheepAnimator)
 
 --// References
 local sheepModels = replicatedStorage.Assets.Models.Sheeps
 local sheepHudTemplate = replicatedStorage.Assets.UI.SheepHUD :: BillboardGui
 
 --// Object pool keys
-local SHEEP_POOL = "SheepModel" -- keyed by species name, since meshes differ per species
+local SHEEP_POOL = "SheepModel" -- keyed by sheepType name, since meshes differ per sheepType
 local HUD_POOL = "SheepHUD"
-local HUD_KEY = "SheepHUD" -- one shared bucket; every sheep uses the same billboard template
+local HUD_KEY = "SheepHUD"
 
 local sheepById: { [number]: Model } = {}
 local nextSheepId = 0
@@ -22,11 +21,11 @@ local nextSheepId = 0
 local SheepHandler = {}
 
 --[[
-	Only the actual species entries in SheepData carry a numeric `chance`
+	Only the actual sheepType entries in SheepData carry a numeric `chance`
 	field (helper tables like RarityColors/UpgradeMultipliers and helper
 	functions live alongside them in the same module and must be skipped).
 ]]--
-local function isSpeciesEntry(data: any): boolean
+local function isSheepTypeEntry(data: any): boolean
 	return type(data) == "table" and type(data.chance) == "number"
 end
 
@@ -38,11 +37,7 @@ function SheepHandler.getSheep(id: number): Model?
 	return sheepById[id]
 end
 
--- Removes every dynamic bit a pooled sheep model picked up while it was active, so the
--- next spawn reuses it as if it were fresh out of ReplicatedStorage.
 local function resetSheepForPool(sheep: Model)
-	SheepAnimator.snapToRest(sheep) -- avoid baking a mid-stride pose in as the next "rest"
-	SheepAnimator.unregister(sheep)
 
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
 	if humanoid then
@@ -52,11 +47,6 @@ local function resetSheepForPool(sheep: Model)
 
 	local root = sheep:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if root then
-		local prompt = root:FindFirstChildOfClass("ProximityPrompt")
-		if prompt then
-			prompt:Destroy()
-		end
-
 		local hud = root:FindFirstChild("SheepHUD")
 		if hud and hud:IsA("BillboardGui") then
 			hud.Adornee = nil
@@ -70,7 +60,7 @@ end
 --[[
     Removes the sheep registered under the given id from the registry and
     returns its Model to the object pool for reuse (destroyed only if it
-    has no known species, which shouldn't normally happen).
+    has no known sheepType, which shouldn't normally happen).
 ]]
 function SheepHandler.removeSheep(id: number)
 	local sheep = sheepById[id]
@@ -80,11 +70,10 @@ function SheepHandler.removeSheep(id: number)
 
 	sheepById[id] = nil
 
-	local species = sheep:GetAttribute("Species")
-	if type(species) == "string" then
-		ObjectPool.release(SHEEP_POOL, species, sheep, resetSheepForPool)
+	local sheepType = sheep:GetAttribute("SheepType")
+	if type(sheepType) == "string" then
+		ObjectPool.release(SHEEP_POOL, sheepType, sheep, resetSheepForPool(sheep))
 	else
-		SheepAnimator.unregister(sheep)
 		sheep:Destroy()
 	end
 end
@@ -96,7 +85,7 @@ end
 local function getRandomSheep(chances: { [string]: number }?)
     local totalChance = 0
     for sheepName, data in SheepData do
-        if isSpeciesEntry(data) then
+        if isSheepTypeEntry(data) then
             totalChance += getChance(sheepName, data, chances)
         end
     end
@@ -111,7 +100,7 @@ local function getRandomSheep(chances: { [string]: number }?)
     local cumulativeChance = 0
 
     for sheepName, data in SheepData do
-        if isSpeciesEntry(data) then
+        if isSheepTypeEntry(data) then
             cumulativeChance += getChance(sheepName, data, chances)
             if randomValue <= cumulativeChance then
                 return sheepName
@@ -122,37 +111,6 @@ local function getRandomSheep(chances: { [string]: number }?)
     return nil
 end
 
---[[
-    Adds a "Shear" ProximityPrompt to the sheep's HumanoidRootPart, making
-    it selectable by players. Called once the sheep has finished walking
-    into its pen -- sheep are not shearable while still travelling to it.
-]]
-function SheepHandler.makeShearable(sheepModel: Model, id: number)
-	local humanoidRootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if not humanoidRootPart then
-		return
-	end
-
-	local proximityPrompt = Instance.new("ProximityPrompt")
-	proximityPrompt.ActionText = "Shear"
-	proximityPrompt.ObjectText = sheepModel.Name
-	proximityPrompt.RequiresLineOfSight = false
-	proximityPrompt.MaxActivationDistance = 10
-	proximityPrompt.Parent = humanoidRootPart
-
-	proximityPrompt:SetAttribute("SheepName", sheepModel.Name)
-	proximityPrompt:SetAttribute("Id", id)
-end
-
---[[
-    Clones a random sheep species (weighted by SheepData chance), sets its
-    gameplay attributes, and places it at the given world position. Does
-    NOT add a ProximityPrompt -- callers that walk the sheep somewhere
-    first (see PenHandler) should call SheepHandler.makeShearable once it
-    arrives. Returns the spawned Model and its unique id, or (nil, nil) if
-    the chosen species has no valid model/data.
-]]
--- Acquires a SheepHUD billboard from the pool, or clones a fresh one if the pool is empty.
 local function acquireHud(): BillboardGui
 	local hud = ObjectPool.acquire(HUD_POOL, HUD_KEY)
 	if not hud then
@@ -162,7 +120,7 @@ local function acquireHud(): BillboardGui
 end
 
 -- Fills in and (re)parents a SheepHUD billboard under the sheep's HumanoidRootPart.
-local function attachHud(sheepModel: Model, humanoidRootPart: BasePart, data, oddsText: string)
+local function attachHud(humanoidRootPart: BasePart, data, oddsText: string)
 	local hud = acquireHud()
 
 	local card = hud:FindFirstChild("Card")
@@ -190,13 +148,11 @@ local function attachHud(sheepModel: Model, humanoidRootPart: BasePart, data, od
 end
 
 --[[
-    Clones a random sheep species (weighted by SheepData chance), sets its
-    gameplay attributes, attaches its SheepHUD billboard (name/rarity/odds)
-    and places it at the given world position. Does NOT add a
-    ProximityPrompt -- callers that walk the sheep somewhere first (see
-    PenHandler) should call SheepHandler.makeShearable once it arrives.
-    Returns the spawned Model and its unique id, or (nil, nil) if the
-    chosen species has no valid model/data.
+    Clones a sheep and sets it's data
+
+	@param position The position for the sheep
+	@param chances Chance for the rarity UI
+	@return Model, number The sheep and it's unique id
 ]]
 function SheepHandler.spawnSheep(position: Vector3, chances: { [string]: number }?): (Model?, number?)
 	local randomSheepName = getRandomSheep(chances)
@@ -214,7 +170,7 @@ function SheepHandler.spawnSheep(position: Vector3, chances: { [string]: number 
 			return nil, nil
 		end
 		sheepModel = template:Clone()
-		sheepModel:SetAttribute("Species", randomSheepName)
+		sheepModel:SetAttribute("SheepType", randomSheepName)
 	end
 
 	collectionService:AddTag(sheepModel, "Sheep")
@@ -223,6 +179,13 @@ function SheepHandler.spawnSheep(position: Vector3, chances: { [string]: number 
 	local humanoidRootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not humanoidRootPart then
 		sheepModel:Destroy()
+		return nil, nil
+	end
+	
+	-- Handle animations
+	local humanoid = sheepModel:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		warn(`No humaniod found for sheepModel: {sheepModel.Name}`)
 		return nil, nil
 	end
 
@@ -243,6 +206,7 @@ function SheepHandler.spawnSheep(position: Vector3, chances: { [string]: number 
 	sheepModel:SetAttribute("ShearHealth", data.ShearHealth)
 	sheepModel:SetAttribute("MaxShearHealth", data.ShearHealth)
 	sheepModel:SetAttribute("WoolAmount", data.WoolAmount)
+	sheepModel:SetAttribute("SheepName", data.name)
 	sheepModel:SetAttribute("Rarity", data.rarity)
 	sheepModel:SetAttribute("RarityColor", data.color)
 	sheepModel:SetAttribute("Odds", oddsText)
@@ -250,8 +214,7 @@ function SheepHandler.spawnSheep(position: Vector3, chances: { [string]: number 
 	humanoidRootPart.Anchored = false
 	humanoidRootPart.CFrame = CFrame.new(position)
 
-	attachHud(sheepModel, humanoidRootPart, data, oddsText)
-	SheepAnimator.register(sheepModel)
+	attachHud(humanoidRootPart, data, oddsText)
 
 	return sheepModel, id
 end

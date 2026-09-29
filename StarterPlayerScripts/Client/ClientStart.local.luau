@@ -1,12 +1,18 @@
-local replicatedStorage = game:GetService("ReplicatedStorage")
+--[[
+	Starts the client network and keeps the wool label updated
+]]--
 
-local sourceFolder = replicatedStorage:WaitForChild("Source")
-local moduleLoader = require(sourceFolder.ModuleLoader)
+--// Services
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local players = game:GetService("Players")
+
+--// Modules
+local moduleLoader = require(replicatedStorage:WaitForChild("Source"):WaitForChild("ModuleLoader"))
 local network = require(replicatedStorage.Shared.Utils.Network)
 
-local player = game.Players.LocalPlayer
+--// Instances
+local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-
 local inventory = player:WaitForChild("Inventory")
 local woolAmountValue = inventory:WaitForChild("Wool") :: IntValue
 local woolAmountLabel = playerGui:WaitForChild("Main").WoolAmount
