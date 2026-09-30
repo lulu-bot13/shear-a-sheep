@@ -21,6 +21,7 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 local SheepHandler = require(script.Parent.SheepHandler)
 local InventoryHandler = require(script.Parent.InventoryHandler)
 local PenHandler = require(script.Parent.PenHandler)
+local ShearShopHandler = require(script.Parent.ShearShopHandler)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 
 --// Configs
@@ -242,9 +243,12 @@ local function sendWave(session: Session)
 		resolved = false,
 	}
 
+	-- The player's shear decides how hard a x1.0 weak point hits.
+	local hitDamage = ShearShopHandler.getDamage(session.player)
+
 	local payload = {}
 	for _, point in pickWeakPoints(ShearData.WaveSize) do
-		local damage = math.max(1, math.round(ShearData.HitDamage * point.multiplier))
+		local damage = math.max(1, math.round(hitDamage * point.multiplier))
 		wave.points[point.id] = { damage = damage, hit = false }
 		wave.total += 1
 
@@ -345,7 +349,8 @@ local function runWaves(session: Session)
 			end
 		end
 
-		task.wait(ShearData.WaveGapSeconds)
+		-- Faster shears get the next wave sooner.
+		task.wait(ShearData.WaveGapSeconds / ShearShopHandler.getSpeed(session.player))
 	end
 end
 
@@ -442,6 +447,7 @@ local function onShearHit(player: Player, waveId: any, pointId: any)
 	end
 
 	point.hit = true
+	ShearShopHandler.registerSnip(player)
 	wave.hits += 1
 	wave.damage += point.damage
 	wave.firstHitAt = wave.firstHitAt or now

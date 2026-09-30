@@ -1,13 +1,9 @@
 --[[
 	Client side of the shearing mini-game.
 
-	Starting to shear puts the player "at the pen station": movement is locked and the camera
-	swings round behind the (side-on) sheep so the player and sheep are both in frame. While
-	a sheep is being sheared, circles pop up on its weak points and the player taps/clicks them
-	to deal damage (wool chunks fly out of each spot that's hit). When the sheep is done the
-	camera stays where it is -- the player can start the next sheep from the pen menu -- until
-	they press Leave, which releases the camera and the server moves them out of the pen.
-	The server owns all damage/timing; this script only draws things and reports what was popped.
+	Handles the main shearing effects on the client, the circles that popup, the
+	animations and states of the 
+	shearing process.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.ShearingClient
 ]]--
@@ -26,6 +22,10 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+
+--// Animations
+local shearToolAnim = replicatedStorage.Assets.Animations.ShearTool
+local shearRigAnim = replicatedStorage.Assets.Animations.ShearRig
 
 --// Camera tuning (studs / degrees). Tweak these to reframe the shot.
 local CAMERA_DISTANCE = 6.5 -- how far behind the sheep the camera sits
@@ -355,21 +355,51 @@ local function spawnWoolChunks(origin: Vector3, outward: Vector3, count: number,
 	end
 end
 
--- Makes the character swing the equipped shears (the default Animate script plays this on "toolanim").
-local function playToolSwing()
+local function playShearAnimation()
 	local tool = shearTool
-	if not tool or tool.Parent ~= character or tool:FindFirstChild("toolanim") then
+	if not tool or tool.Parent ~= character then
 		return
 	end
+	local toolAnimationController = tool:FindFirstChild("AnimationController") 
+	local toolAnimator = toolAnimationController:FindFirstChild("Animator")
+	local shearToolTrack = toolAnimator:LoadAnimation(shearToolAnim) :: AnimationTrack
+	shearToolTrack.Priority = Enum.AnimationPriority.Action
 
-	local swing = Instance.new("StringValue")
-	swing.Name = "toolanim"
-	swing.Value = "Slash"
-	swing.Parent = tool
+	local characterAnimator = humanoid:FindFirstChild("Animator") 
+	local shearRigTrack = characterAnimator:LoadAnimation(shearRigAnim) :: AnimationTrack
+	shearRigTrack.Priority = Enum.AnimationPriority.Action
+
+	-- Better shears snip faster (the server sets ShearSpeed from the shear's data).
+	local speed = (player:GetAttribute("ShearSpeed") :: number?) or 1
+
+	-- Electric shears crackle on every snip (other players see it via the tool's "Snips" attribute).
+	for _, descendant in tool:GetDescendants() do
+		if descendant:IsA("ParticleEmitter") and descendant.Name == "ElectricBurst" then
+			descendant:Emit(18)
+		end
+	end
+
+	if shearToolTrack and not shearToolTrack.IsPlaying then
+		shearToolTrack:Play()
+		shearToolTrack:AdjustSpeed(speed)
+		shearToolTrack.Looped = false
+		task.delay(shearToolTrack.Length, function()
+			shearToolTrack:Stop()
+		end)
+		print(`Playing animation`)
+	end
+	if shearRigTrack and not shearRigTrack.IsPlaying then
+		shearRigTrack:Play()
+		shearRigTrack:AdjustSpeed(speed)
+		shearRigTrack.Looped = false
+		task.delay(shearRigTrack.Length, function()
+			shearRigTrack:Stop()
+		end)
+		print(`playing animation`)
+	end
 end
 
 --// Circles ------------------------------------------------------------------------
-
 local function getTierColor(multiplier: number): Color3
 	if multiplier >= 2 then
 		return TIER_HIGH
@@ -402,7 +432,7 @@ local function popCircle(circle: Circle)
 	circle.popped = true
 
 	network.fireServer(network.RemoteEvents.ShearHit, circle.waveId, circle.pointId)
-	playToolSwing()
+	playShearAnimation()
 	spawnPopup(`+{circle.damage}`, circle.screenPosition + Vector2.new(0, -circle.size * 0.4), WHITE, 26, 60, 0.7)
 
 	-- Wool flies out of the spot that was hit, away from the sheep's body.
@@ -636,13 +666,20 @@ local function findSheepById(sheepId: number): Model?
 	return nil
 end
 
--- Names the shears tool can have; the first one found in the Backpack (or already held) is used.
+-- Fallback names for the shears tool; normally the player's "ShearId" attribute (set by the server, changed
+-- when they buy a shear in the shop) names the tool to use.
 local SHEAR_TOOL_NAMES = { "DefaultShear", "Shear" }
 
 local function findShearTool(): Tool?
 	local backpack = player:FindFirstChild("Backpack")
 
-	for _, toolName in SHEAR_TOOL_NAMES do
+	local toolNames = table.clone(SHEAR_TOOL_NAMES)
+	local equippedId = player:GetAttribute("ShearId")
+	if type(equippedId) == "string" then
+		table.insert(toolNames, 1, equippedId)
+	end
+
+	for _, toolName in toolNames do
 		local fromBackpack = backpack and backpack:FindFirstChild(toolName)
 		if fromBackpack and fromBackpack:IsA("Tool") then
 			return fromBackpack
@@ -654,7 +691,7 @@ local function findShearTool(): Tool?
 		end
 	end
 
-	warn(`ShearingClient: no shears found. Looked for {table.concat(SHEAR_TOOL_NAMES, ", ")} in the Backpack and character.`)
+	warn(`ShearingClient: no shears found. Looked for {table.concat(toolNames, ", ")} in the Backpack and character.`)
 	return nil
 end
 

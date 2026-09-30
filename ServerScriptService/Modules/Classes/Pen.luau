@@ -9,6 +9,7 @@
 --// Services
 local pathfindingService = game:GetService("PathfindingService")
 local runService = game:GetService("RunService")
+local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
@@ -24,7 +25,7 @@ local sheepWalkingAnimation = replicatedStorage.Assets.Animations.SheepWalking
 --// Configurations
 local RESPAWN_DELAY_SECONDS = 3
 local SHEEP_WALK_SPEED = 8
-local SHEEP_Y_OFFSET = 2.2 -- how far above the pen's SheepPos the sheep's root sits while waiting to be sheared
+local SHEEP_Y_OFFSET = 1.45 -- how far above the pen's SheepPos the sheep's root sits while waiting to be sheared (puts its hooves on the grass)
 local REACH_DISTANCE = 3
 local LOOKAHEAD_DISTANCE = 4
 local STEP_TIMEOUT_SECONDS = 6
@@ -127,22 +128,26 @@ local function walkSheep(pen: Pen, sheepModel: Model): boolean
 
 	local route = computeRoute(rootPart.Position, pen.waypoints)
 
-	for index, point in ipairs(route) do
+	for _, point in ipairs(route) do
 		if not sheepModel.Parent or pen.destroyed then
+			if walkAnimationTrack then
+				walkAnimationTrack:Stop(0.5)
+			end
 			return false
+		end
+
+		-- The animation must start BEFORE the sheep starts moving toward a point; starting it after
+		-- MoveToFinished only kicks in from the second waypoint on.
+		if walkAnimationTrack and not walkAnimationTrack.IsPlaying then
+			walkAnimationTrack:Play()
 		end
 
 		humanoid:MoveTo(point)
 		humanoid.MoveToFinished:Wait()
+	end
 
-		if index == #route then
-			walkAnimationTrack:Stop(0.5)
-			break
-		else
-			if not walkAnimationTrack.IsPlaying then
-				walkAnimationTrack:Play()
-			end
-		end
+	if walkAnimationTrack then
+		walkAnimationTrack:Stop(0.5)
 	end
 
 	return sheepModel.Parent ~= nil and not pen.destroyed
@@ -401,6 +406,111 @@ function Pen.upgrade(self: Pen): boolean
 	return true
 end
 
+local R6_BODY_PARTS = { "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "HumanoidRootPart" }
+
+-- Builds an R6 rig that looks like the player (their avatar), complete with all six limbs. nil if it can't be
+-- loaded (e.g. offline / no avatar) or came back missing a body part.
+local function createOwnerCharacter(owner: Player): Model?
+	local success, result = pcall(function()
+		local description = players:GetHumanoidDescriptionFromUserId(owner.UserId)
+		return players:CreateHumanoidModelFromDescription(description, Enum.HumanoidRigType.R6)
+	end)
+	if not success then
+		return nil
+	end
+
+	for _, partName in R6_BODY_PARTS do
+		if not result:FindFirstChild(partName) then
+			warn(`Pen: owner avatar is missing '{partName}', using the stock worker instead.`)
+			result:Destroy()
+			return nil
+		end
+	end
+
+	return result
+end
+
+--[[
+	Places the pen's worker: a copy of the owner's character standing on the pen's PlayerPos, facing the sheep.
+	It has no ProximityPrompt (the sell NPC keeps those); falls back to the stock Worker rig if the avatar
+	can't be loaded.
+]]--
+function Pen._spawnWorker(self: Pen)
+	local worker = createOwnerCharacter(self.owner)
+
+	if not worker then
+		local npcs = replicatedStorage.Assets:FindFirstChild("Npcs")
+		local template = npcs and npcs:FindFirstChild("Worker")
+		worker = if template then template:Clone() else nil
+	end
+
+	if not worker then
+		return
+	end
+
+	-- The pen may have been sold / the worker fired while the avatar was loading.
+	if self.destroyed or not self.data.automated or not self.model.Parent then
+		worker:Destroy()
+		return
+	end
+
+	worker.Name = `Worker_{self.id}`
+
+	for _, descendant in worker:GetDescendants() do
+		if descendant:IsA("ProximityPrompt") then
+			descendant:Destroy()
+		end
+	end
+
+	-- Anchor only the root: every limb and accessory is joined to it, so the whole body stays put. Anchoring each
+	-- part would freeze accessory handles wherever they were created instead of on the avatar.
+	local workerRoot = worker:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if workerRoot then
+		workerRoot.Anchored = true
+	end
+
+	local humanoid = worker:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	end
+
+	-- Stand on the ground under PlayerPos rather than at PlayerPos itself (that part floats above the grass).
+	local ignore = {}
+	for _, name in { "SheepPos", "PlayerPos" } do
+		local marker = self.model:FindFirstChild(name)
+		if marker then
+			table.insert(ignore, marker)
+		end
+	end
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = ignore
+
+	local lookTarget = Vector3.new(self.sheepPosition.X, self.playerPosition.Y, self.sheepPosition.Z)
+	worker:PivotTo(CFrame.lookAt(self.playerPosition, lookTarget))
+
+	-- Drop the body onto the grass, measured from the lowest limb. Only the rig's own parts count: accessory
+	-- handles aren't in their final place until the model is in the world, so they'd skew a bounding box.
+	local hit = workspace:Raycast(self.playerPosition + Vector3.new(0, 4, 0), Vector3.new(0, -20, 0), rayParams)
+	if hit then
+		local bottomY = math.huge
+		for _, child in worker:GetChildren() do
+			if child:IsA("BasePart") and child.Name ~= "HumanoidRootPart" then
+				bottomY = math.min(bottomY, child.Position.Y - child.Size.Y / 2)
+			end
+		end
+		if bottomY < math.huge then
+			worker:PivotTo(worker:GetPivot() + Vector3.new(0, hit.Position.Y - bottomY, 0))
+		end
+	end
+
+	worker.Parent = self.model
+
+	table.insert(self.extras, worker)
+	self.workerModel = worker
+	self:_createWorkerLabel(worker)
+end
+
 -- Hires an auto-shearing worker for this pen; false if one is already hired.
 function Pen.hireWorker(self: Pen): boolean
 	if self.destroyed or self.data.automated then
@@ -409,18 +519,10 @@ function Pen.hireWorker(self: Pen): boolean
 
 	self.data.automated = true
 
-	local npcs = replicatedStorage.Assets:FindFirstChild("Npcs")
-	local template = npcs and npcs:FindFirstChild("Worker")
-	if template and self.model.Parent then
-		local worker = template:Clone()
-		worker.Name = `Worker_{self.id}`
-		local lookTarget = Vector3.new(self.sheepPosition.X, self.playerPosition.Y, self.sheepPosition.Z)
-		worker:PivotTo(CFrame.lookAt(self.playerPosition, lookTarget))
-		worker.Parent = self.model
-		table.insert(self.extras, worker)
-		self.workerModel = worker
-		self:_createWorkerLabel(worker)
-	end
+	-- Loading the avatar yields, so it happens off to the side while the pen starts automating.
+	task.spawn(function()
+		self:_spawnWorker()
+	end)
 
 	self:_updateHealthBillboard()
 

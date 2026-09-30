@@ -72,4 +72,3 @@ local function onPlayerAdded(player: Player)
 end
 
 players.PlayerAdded:Connect(onPlayerAdded)
-
