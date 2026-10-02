@@ -1,17 +1,18 @@
 --!strict
 
 --[[
-	Server-side (authoritative) data for the shear shop: what each shear costs and how it
-	performs. The client has a matching display-only copy in ShearShopUIData - keep the
-	speed / damage / price numbers in sync when tuning.
+	Server-side (authoritative) data for the shear shop: what each shear costs and how it changes the
+	shearing mini-game. The client has a matching display-only copy in ShearShopUIData - keep the
+	numbers and prices in sync when tuning.
 
-	id       matches the Tool's name in ReplicatedStorage.Assets.Shears
-	price    money cost (the default shear is free, everyone starts with it)
-	damage   damage of a x1.0 weak point (replaces ShearData.HitDamage for this player)
-	speed    shearing tempo multiplier: shortens the pause between waves and speeds up the snip animation
+	id                matches the Tool's name in ReplicatedStorage.Assets.Shears
+	price             money cost (the default shear is free, everyone starts with it)
+	damageMultiplier  scales the wool every hit takes off
+	zoneScale         scales the sweet spot (and the zones around it): bigger = easier to hit
+	cursorSpeed       scales how fast the timing cursor moves: faster shearing, but harder timing
 
-	Order in the list = progression order: a player can only buy a shear that is further
-	down the list than the one they hold, so nobody pays to downgrade.
+	See ShearTimingData.ShearStats. Order in the list = progression order: a player can only buy a
+	shear that is further down the list than the one they hold, so nobody pays to downgrade.
 
 	Location: ServerScriptService.Modules.Constants.ShearShopData
 ]]--
@@ -19,8 +20,9 @@
 export type ShearInfo = {
 	id: string,
 	price: number,
-	damage: number,
-	speed: number,
+	damageMultiplier: number,
+	zoneScale: number,
+	cursorSpeed: number,
 }
 
 local shearShopData = {}
@@ -28,11 +30,11 @@ local shearShopData = {}
 shearShopData.DefaultShearId = "DefaultShear"
 
 shearShopData.Shears = {
-	{ id = "DefaultShear",   price = 0,     damage = 8,  speed = 1.0 },
-	{ id = "SteelShears",    price = 300,   damage = 12, speed = 1.15 },
-	{ id = "LargeShears",    price = 1200,  damage = 18, speed = 1.3 },
-	{ id = "ElectricShears", price = 4000,  damage = 26, speed = 1.6 },
-	{ id = "MasterShears",   price = 12000, damage = 40, speed = 2.0 },
+	{ id = "DefaultShear",   price = 0,     damageMultiplier = 1.0,  zoneScale = 1.0,  cursorSpeed = 1.0 },
+	{ id = "SteelShears",    price = 300,   damageMultiplier = 1.1,  zoneScale = 1.12, cursorSpeed = 1.04 },
+	{ id = "LargeShears",    price = 1200,  damageMultiplier = 1.2,  zoneScale = 1.22, cursorSpeed = 1.06 },
+	{ id = "ElectricShears", price = 4000,  damageMultiplier = 1.35, zoneScale = 1.32, cursorSpeed = 1.1 },
+	{ id = "MasterShears",   price = 12000, damageMultiplier = 1.6,  zoneScale = 1.45, cursorSpeed = 1.12 },
 } :: { ShearInfo }
 
 -- How far (studs) from the shop prompt a player may still buy.

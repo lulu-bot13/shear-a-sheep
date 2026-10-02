@@ -18,6 +18,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local ShearShopData = require(script.Parent.Parent.Constants.ShearShopData)
+local ShearTimingData = require(replicatedStorage.Shared.Constants.ShearTimingData)
 
 --// Configs
 local PURCHASE_COOLDOWN = 0.3
@@ -124,8 +125,6 @@ local function setShear(player: Player, id: string)
 	end
 
 	player:SetAttribute("ShearId", id)
-	player:SetAttribute("ShearSpeed", info.speed)
-	player:SetAttribute("ShearDamage", info.damage)
 	syncTools(player)
 end
 
@@ -182,17 +181,21 @@ function shearShopHandler.getShearId(player: Player): string
 	return getShearId(player)
 end
 
-function shearShopHandler.getDamage(player: Player): number
+-- The player's shear stats for the shearing mini-game (multipliers; 1 = the basic shear).
+function shearShopHandler.getStats(player: Player): ShearTimingData.ShearStats
 	local info = ShearShopData.get(getShearId(player))
-	return if info then info.damage else 1
+	if not info then
+		return table.clone(ShearTimingData.DefaultShearStats)
+	end
+
+	return {
+		damageMultiplier = info.damageMultiplier,
+		zoneScale = info.zoneScale,
+		cursorSpeed = info.cursorSpeed,
+	}
 end
 
-function shearShopHandler.getSpeed(player: Player): number
-	local info = ShearShopData.get(getShearId(player))
-	return if info then info.speed else 1
-end
-
--- Bumps the equipped shear's "Snips" attribute; clients watch it to play snip effects for everyone.
+-- Bumps the equipped shear's "Snips" attribute on every successful hit; clients watch it to play snip effects for everyone.
 function shearShopHandler.registerSnip(player: Player)
 	local currentId = getShearId(player)
 	for _, tool in getShearTools(player) do

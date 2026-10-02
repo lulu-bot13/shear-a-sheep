@@ -187,7 +187,7 @@ local function createCards()
 		local purchase = frame:WaitForChild("Purchase") :: TextButton
 
 		nameLabel.Text = info.displayName
-		buffsLabel.Text = `Speed: x{string.format("%.2f", info.speed)}\nDamage: {info.damage}`
+		buffsLabel.Text = `Damage: x{string.format("%.2f", info.damageMultiplier)}\nSweet spot: x{string.format("%.2f", info.zoneScale)}`
 		purchase.AutoButtonColor = true
 
 		local card: Card = {

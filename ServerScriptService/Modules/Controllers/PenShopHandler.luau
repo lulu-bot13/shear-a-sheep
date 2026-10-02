@@ -153,7 +153,10 @@ end
 local function applyToAllPens(player: Player)
 	local skinId = getEquipped(player)
 	for _, pen in PenHandler.getPens(player) do
-		applySkin(pen.model, skinId)
+		-- A pen the player swapped for another type from their inventory keeps that look.
+		if pen.penType == PenShopData.DefaultSkinId then
+			applySkin(pen.penModel, skinId)
+		end
 	end
 end
 
@@ -241,7 +244,7 @@ function penShopHandler.Start()
 	PenHandler.PenAdded:Connect(function(player: Player, pen)
 		local skinId = getEquipped(player)
 		if skinId ~= PenShopData.DefaultSkinId then
-			applySkin(pen.model, skinId)
+			applySkin(pen.penModel, skinId)
 		end
 	end)
 

@@ -3,7 +3,7 @@
 --[[
 	Client-side display data for the shear shop UI: names, stats and prices as shown on the cards.
 	The server (ServerScriptService.Modules.Constants.ShearShopData) is the authority - it decides
-	what a purchase costs and what a shear does - so keep the speed / damage / price numbers here
+	what a purchase costs and what a shear does - so keep the damage / sweet spot / price numbers here
 	in sync with it when tuning.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Modules.ShearShopUIData
@@ -13,19 +13,19 @@ export type ShearUI = {
 	id: string, -- Tool name in ReplicatedStorage.Assets.Shears
 	displayName: string,
 	price: number,
-	damage: number,
-	speed: number,
+	damageMultiplier: number, -- matches ShearShopData
+	zoneScale: number,
 }
 
 local shearShopUIData = {}
 
 -- In progression order (the card order in the shop, cheapest first).
 shearShopUIData.Shears = {
-	{ id = "DefaultShear",   displayName = "Basic Shear",     price = 0,     damage = 8,  speed = 1.0 },
-	{ id = "SteelShears",    displayName = "Steel Shears",    price = 300,   damage = 12, speed = 1.15 },
-	{ id = "LargeShears",    displayName = "Large Shears",    price = 1200,  damage = 18, speed = 1.3 },
-	{ id = "ElectricShears", displayName = "Electric Shears", price = 4000,  damage = 26, speed = 1.6 },
-	{ id = "MasterShears",   displayName = "Master Shears",   price = 12000, damage = 40, speed = 2.0 },
+	{ id = "DefaultShear",   displayName = "Basic Shear",     price = 0,     damageMultiplier = 1.0,  zoneScale = 1.0 },
+	{ id = "SteelShears",    displayName = "Steel Shears",    price = 300,   damageMultiplier = 1.1,  zoneScale = 1.12 },
+	{ id = "LargeShears",    displayName = "Large Shears",    price = 1200,  damageMultiplier = 1.2,  zoneScale = 1.22 },
+	{ id = "ElectricShears", displayName = "Electric Shears", price = 4000,  damageMultiplier = 1.35, zoneScale = 1.32 },
+	{ id = "MasterShears",   displayName = "Master Shears",   price = 12000, damageMultiplier = 1.6,  zoneScale = 1.45 },
 } :: { ShearUI }
 
 --// Preview (the spinning 3D shear on each card)

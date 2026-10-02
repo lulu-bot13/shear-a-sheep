@@ -45,7 +45,8 @@ export type PenData = {
 type PenFields = {
 	id: number,
 	owner: Player,
-	model: Model,
+	penModel: Model, -- the pen's model in the plot; swapped out by replaceModel
+	penType: string, -- template name (ReplicatedStorage.Assets.Models.Pens) that penModel was built from
 	waypoints: { BasePart },
 	extras: { Instance },
 	sheepPosition: Vector3,
@@ -67,6 +68,8 @@ type PenFields = {
 
 local Pen = {}
 Pen.__index = Pen
+
+Pen.DEFAULT_PEN_TYPE = "Base_Pen"
 
 export type Pen = typeof(setmetatable({} :: PenFields, Pen))
 
@@ -239,7 +242,7 @@ local function createHealthBillboard(pen: Pen): BillboardGui
 	billboard.StudsOffset = Vector3.new(0, 4.6, 0)
 	billboard.MaxDistance = 60
 	billboard.Enabled = false
-	billboard.Parent = pen.model
+	billboard.Parent = pen.penModel
 
 	local track = Instance.new("Frame")
 	track.Name = "Track"
@@ -356,8 +359,8 @@ function Pen.getBySheepId(id: number): Pen?
 	return penBySheepId[id]
 end
 
--- Builds a pen from its model; returns nil if the model has no SheepPos/PlayerPos.
-function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart }, extras: { Instance }): Pen?
+-- Builds a pen from its model; returns nil if the model has no SheepPos/PlayerPos. penType defaults to the base pen.
+function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart }, extras: { Instance }, penType: string?): Pen?
 	local sheepPos = model:FindFirstChild("SheepPos") :: BasePart?
 	local playerPos = model:FindFirstChild("PlayerPos") :: BasePart?
 	if not sheepPos or not playerPos then
@@ -368,7 +371,8 @@ function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart 
 	return setmetatable({
 		id = id,
 		owner = owner,
-		model = model,
+		penModel = model,
+		penType = penType or Pen.DEFAULT_PEN_TYPE,
 		waypoints = waypoints,
 		extras = extras,
 		sheepPosition = sheepPos.Position,
@@ -387,6 +391,70 @@ function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart 
 		workerModel = nil,
 		data = { money = 0, automated = false },
 	}, Pen)
+end
+
+--[[
+	Swaps the pen's model for a clone of `template` (an entry of ReplicatedStorage.Assets.Models.Pens).
+	The new model takes the old one's name and place, and whatever the pen attached to the old model
+	(worker, health bar) moves across before the old one is destroyed. Returns false, leaving the pen
+	untouched, if the template can't be used.
+]]--
+function Pen.replaceModel(self: Pen, template: Model, penType: string): boolean
+	if self.destroyed then
+		return false
+	end
+
+	local oldModel = self.penModel
+	local newModel = template:Clone()
+	local newSheepPos = newModel:FindFirstChild("SheepPos")
+	local newPlayerPos = newModel:FindFirstChild("PlayerPos")
+	if not newSheepPos or not newSheepPos:IsA("BasePart") or not newPlayerPos or not newPlayerPos:IsA("BasePart") then
+		warn(`Pen: template '{template.Name}' is missing SheepPos/PlayerPos.`)
+		newModel:Destroy()
+		return false
+	end
+
+	newModel.Name = oldModel.Name
+	newModel:PivotTo(oldModel:GetPivot())
+
+	-- Templates share one layout, so these are normally zero; they keep the sheep and worker on their spots if not.
+	local sheepShift = newSheepPos.Position - self.sheepPosition
+	local playerShift = newPlayerPos.Position - self.playerPosition
+
+	for _, instance in self.extras do
+		if instance ~= oldModel and instance:IsDescendantOf(oldModel) then
+			instance.Parent = newModel
+		end
+	end
+
+	-- Pens bought later own their model (it is destroyed with them); the base pen's model is not in extras.
+	local extraIndex = table.find(self.extras, oldModel)
+	if extraIndex then
+		self.extras[extraIndex] = newModel
+	end
+
+	newModel.Parent = oldModel.Parent
+	oldModel:Destroy()
+
+	self.penModel = newModel
+	self.penType = penType
+	self.sheepPosition = newSheepPos.Position
+	self.playerPosition = newPlayerPos.Position
+
+	if sheepShift.Magnitude > 0.01 and self.seated and self.occupiedSheepId then
+		local sheep = SheepHandler.getSheep(self.occupiedSheepId)
+		local root = if sheep then sheep:FindFirstChild("HumanoidRootPart") else nil
+		if root and root:IsA("BasePart") then
+			root.CFrame += sheepShift
+		end
+	end
+
+	local worker = self.workerModel
+	if worker and playerShift.Magnitude > 0.01 then
+		worker:PivotTo(worker:GetPivot() + playerShift)
+	end
+
+	return true
 end
 
 -- Current upgrade level (1..SheepData.MaxPenLevel). Higher levels bias spawns toward rarer sheep.
@@ -449,7 +517,7 @@ function Pen._spawnWorker(self: Pen)
 	end
 
 	-- The pen may have been sold / the worker fired while the avatar was loading.
-	if self.destroyed or not self.data.automated or not self.model.Parent then
+	if self.destroyed or not self.data.automated or not self.penModel.Parent then
 		worker:Destroy()
 		return
 	end
@@ -459,11 +527,11 @@ function Pen._spawnWorker(self: Pen)
 	for _, descendant in worker:GetDescendants() do
 		if descendant:IsA("ProximityPrompt") then
 			descendant:Destroy()
+		elseif descendant:IsA("BasePart") then
+			descendant.CanCollide = false
 		end
 	end
 
-	-- Anchor only the root: every limb and accessory is joined to it, so the whole body stays put. Anchoring each
-	-- part would freeze accessory handles wherever they were created instead of on the avatar.
 	local workerRoot = worker:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if workerRoot then
 		workerRoot.Anchored = true
@@ -477,7 +545,7 @@ function Pen._spawnWorker(self: Pen)
 	-- Stand on the ground under PlayerPos rather than at PlayerPos itself (that part floats above the grass).
 	local ignore = {}
 	for _, name in { "SheepPos", "PlayerPos" } do
-		local marker = self.model:FindFirstChild(name)
+		local marker = self.penModel:FindFirstChild(name)
 		if marker then
 			table.insert(ignore, marker)
 		end
@@ -489,22 +557,7 @@ function Pen._spawnWorker(self: Pen)
 	local lookTarget = Vector3.new(self.sheepPosition.X, self.playerPosition.Y, self.sheepPosition.Z)
 	worker:PivotTo(CFrame.lookAt(self.playerPosition, lookTarget))
 
-	-- Drop the body onto the grass, measured from the lowest limb. Only the rig's own parts count: accessory
-	-- handles aren't in their final place until the model is in the world, so they'd skew a bounding box.
-	local hit = workspace:Raycast(self.playerPosition + Vector3.new(0, 4, 0), Vector3.new(0, -20, 0), rayParams)
-	if hit then
-		local bottomY = math.huge
-		for _, child in worker:GetChildren() do
-			if child:IsA("BasePart") and child.Name ~= "HumanoidRootPart" then
-				bottomY = math.min(bottomY, child.Position.Y - child.Size.Y / 2)
-			end
-		end
-		if bottomY < math.huge then
-			worker:PivotTo(worker:GetPivot() + Vector3.new(0, hit.Position.Y - bottomY, 0))
-		end
-	end
-
-	worker.Parent = self.model
+	worker.Parent = self.penModel
 
 	table.insert(self.extras, worker)
 	self.workerModel = worker
@@ -581,7 +634,7 @@ function Pen.spawnSheep(self: Pen)
 
 	local firstWaypoint = self.waypoints[1]
 	local startPosition = if firstWaypoint then firstWaypoint.Position else self.sheepPosition
-	local sheepModel, id = SheepHandler.spawnSheep(startPosition, self.data.chances)
+	local sheepModel, id = SheepHandler.spawnSheep(self.owner, startPosition, self.data.chances)
 	if not sheepModel or not id then
 		task.delay(RESPAWN_DELAY_SECONDS, function()
 			self:spawnSheep()

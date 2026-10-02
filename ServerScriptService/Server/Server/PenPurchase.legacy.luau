@@ -148,14 +148,14 @@ local function onTriggered(plot: Folder, player: Player)
 	end
 
 	money.Value -= price
-	print(`{player.Name} bought {newPen.model.Name} for {price}.`)
+	print(`{player.Name} bought {newPen.penModel.Name} for {price}.`)
 
 	local prompt = getButtonParts(plot)
 	if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
 		playPurchaseEffect(prompt.Parent.Position + Vector3.new(0, EFFECT_HEIGHT / 2, 0))
 	end
 
-	playPurchaseEffect(newPen.model:GetPivot().Position + Vector3.new(0, EFFECT_HEIGHT, 0))
+	playPurchaseEffect(newPen.penModel:GetPivot().Position + Vector3.new(0, EFFECT_HEIGHT, 0))
 end
 
 local function connectPlot(plot: Folder)

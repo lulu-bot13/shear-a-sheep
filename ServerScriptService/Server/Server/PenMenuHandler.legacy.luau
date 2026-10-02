@@ -25,6 +25,7 @@ local ENTER_DISTANCE = 8 -- studs from the pen's PlayerPos before the menu pops 
 local EXIT_DISTANCE = 11 -- studs before it closes again (bigger, so it doesn't flicker at the edge)
 local ACTION_DISTANCE = 16 -- how far away a player may still press the menu's buttons
 local POLL_SECONDS = 0.2
+local REPLACE_COOLDOWN_SECONDS = 0.5
 
 type Zone = {
 	penId: number,
@@ -33,6 +34,7 @@ type Zone = {
 
 --// State
 local zones: { [Player]: Zone } = {}
+local lastReplace: { [Player]: number } = {}
 
 --// Helpers -------------------------------------------------------------------
 
@@ -85,7 +87,8 @@ local function buildMenuData(player: Player, pen: any)
 	return {
 		penId = pen.id,
 		penName = `Pen {pen.id}`,
-		penModel = pen.model,
+		penModel = pen.penModel,
+		penType = pen.penType,
 		level = level,
 		maxLevel = SheepData.MaxPenLevel,
 		luck = multipliers.Rare,
@@ -110,6 +113,7 @@ end
 local function getSignature(data: any): string
 	return table.concat({
 		tostring(data.penId),
+		tostring(data.penType),
 		tostring(data.level),
 		tostring(data.canAffordUpgrade),
 		tostring(data.workerHired),
@@ -223,6 +227,28 @@ local function onHireWorker(player: Player, penId: any)
 	end
 end
 
+-- Swaps the pen's model for a pen from the player's inventory (chosen in the pen manager).
+local function onReplacePen(player: Player, penId: any, penType: any)
+	if typeof(penType) ~= "string" then
+		return
+	end
+
+	local now = os.clock()
+	if now - (lastReplace[player] or 0) < REPLACE_COOLDOWN_SECONDS then
+		return
+	end
+	lastReplace[player] = now
+
+	local pen = getActionPen(player, penId)
+	if not pen then
+		return
+	end
+
+	if PenHandler.replacePenModel(player, pen, penType) then
+		pushMenu(player, pen)
+	end
+end
+
 --// Walk-up detection -------------------------------------------------------------
 
 -- Opens/closes/refreshes the menu depending on where the player is standing.
@@ -280,9 +306,11 @@ network.waitUntilReadyAsync()
 network.connectEvent(network.RemoteEvents.UpgradePen, onUpgradePen)
 network.connectEvent(network.RemoteEvents.SellPen, onSellPen)
 network.connectEvent(network.RemoteEvents.HireWorker, onHireWorker)
+network.connectEvent(network.RemoteEvents.ReplacePen, onReplacePen)
 
 players.PlayerRemoving:Connect(function(player: Player)
 	zones[player] = nil
+	lastReplace[player] = nil
 end)
 
 task.spawn(function()

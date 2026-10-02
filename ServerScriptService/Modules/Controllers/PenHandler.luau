@@ -12,10 +12,12 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
 local Pen = require(script.Parent.Parent.Classes.Pen)
+local PlotHandler = require(script.Parent.PlotHandler)
+local InventoryHandler = require(script.Parent.InventoryHandler)
 local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
 
 --// Instances
-local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
+local penTemplates = replicatedStorage:WaitForChild("Assets"):WaitForChild("Models"):WaitForChild("Pens")
 
 --// Configurations
 local INITIAL_SPAWN_DELAY_SECONDS = 5
@@ -68,9 +70,7 @@ local function getWaypointParts(folder: Folder?): { BasePart }
 end
 
 local function getPlot(player: Player): Folder?
-	local plotName = player:GetAttribute(PLOT_NAME_ATTRIBUTE)
-	local plot = if typeof(plotName) == "string" then plotsFolder:FindFirstChild(plotName) else nil
-	return if plot and plot:IsA("Folder") then plot else nil
+	return PlotHandler.getPlayerPlot(player)
 end
 
 -- Finds the folders a plot needs to hold pens; returns nil if the plot has no Pens/Base_Pen.
@@ -187,6 +187,19 @@ local function onPlayerAdded(player: Player)
 	end)
 end
 
+-- The base pen's model is part of the plot itself, so it is swapped back to an untouched copy for the plot's next owner.
+local function restoreBasePen(pen: Pen.Pen)
+	local model = pen.penModel
+	local pens = model.Parent
+	local pristine = if pens then pristineBasePens[pens :: Folder] else nil
+	if not pens or not pristine then
+		return
+	end
+
+	model:Destroy()
+	pristine:Clone().Parent = pens
+end
+
 local function onPlayerRemoving(player: Player)
 	local ownedPens = playerPens[player]
 	if not ownedPens then
@@ -196,6 +209,11 @@ local function onPlayerRemoving(player: Player)
 	playerPens[player] = nil
 	for _, pen in ownedPens do
 		pen:destroy()
+	end
+
+	local basePen = ownedPens[1]
+	if basePen then
+		restoreBasePen(basePen)
 	end
 end
 
@@ -292,6 +310,30 @@ function PenHandler.removePen(player: Player, pen: Pen.Pen): boolean
 
 	pen:destroy()
 	table.remove(ownedPens, lastIndex)
+	return true
+end
+
+--[[
+	Replaces a pen's model with one of the pens in the player's inventory. The pen type the pen had
+	goes back into the inventory, so nothing is lost. Returns false if the swap isn't allowed.
+]]
+function PenHandler.replacePenModel(player: Player, pen: Pen.Pen, penType: string): boolean
+	if pen.owner ~= player or pen.destroyed or pen.penType == penType then
+		return false
+	end
+
+	local template = penTemplates:FindFirstChild(penType)
+	if not template or not template:IsA("Model") or not InventoryHandler.hasPen(player, penType) then
+		return false
+	end
+
+	local previousType = pen.penType
+	if not pen:replaceModel(template, penType) then
+		return false
+	end
+
+	InventoryHandler.removePen(player, penType)
+	InventoryHandler.addPen(player, previousType)
 	return true
 end
 

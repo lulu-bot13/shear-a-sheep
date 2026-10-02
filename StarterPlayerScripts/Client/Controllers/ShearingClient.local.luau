@@ -1,9 +1,26 @@
 --[[
-	Client side of the shearing mini-game.
+	Client side of the shearing timing mini-game.
 
-	Handles the main shearing effects on the client, the circles that popup, the
-	animations and states of the 
-	shearing process.
+	Drives the hand-built `Shearing` ScreenGui (StarterGui.Shearing). The names this script looks for:
+
+		Shearing [ScreenGui]
+		├─ PopupLayer [Frame]            floating PERFECT! / MISS! / "+N Wool" text is added here
+		├─ SheepHUD [Frame]
+		│  ├─ SheepName [TextLabel]
+		│  └─ HealthBar [Frame]
+		│     ├─ Fill [Frame]            its width follows the sheep's wool
+		│     └─ HealthText [TextLabel]
+		├─ TimingBar [Frame]
+		│  ├─ Zones [Frame]              the track the cursor runs along
+		│  │  └─ Frame [Frame]           the PERFECT zone (wider GREAT / GOOD / POOR bands are cloned behind it)
+		│  ├─ Cursor [Frame]
+		│  └─ Hint [TextLabel]
+		└─ Exit [TextButton]
+
+	While a sheep is being sheared the camera sits behind it, the cursor bounces along the track and the
+	sweet spot moves after every attempt. Click, tap, Space or gamepad A to shear. The client only moves the
+	cursor and reports where it was when the player pressed; the server scores the press and takes the wool
+	off. The client predicts the result with the same maths (ShearTiming) so the feedback is instant.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.ShearingClient
 ]]--
@@ -11,52 +28,90 @@
 --// Services
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local collectionService = game:GetService("CollectionService")
+local contextActionService = game:GetService("ContextActionService")
 local debris = game:GetService("Debris")
 local runService = game:GetService("RunService")
 local tweenService = game:GetService("TweenService")
+local userInputService = game:GetService("UserInputService")
 local players = game:GetService("Players")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local ShearTiming = require(replicatedStorage.Shared.Utils.ShearTiming)
+local ShearTimingData = require(replicatedStorage.Shared.Constants.ShearTimingData)
 
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+
+local shearingGui = playerGui:WaitForChild("Shearing") :: ScreenGui
+local popupLayer = shearingGui:WaitForChild("PopupLayer") :: Frame
+local sheepHud = shearingGui:WaitForChild("SheepHUD") :: Frame
+local sheepNameLabel = sheepHud:WaitForChild("SheepName") :: TextLabel
+local healthBar = sheepHud:WaitForChild("HealthBar") :: Frame
+local healthFill = healthBar:WaitForChild("Fill") :: Frame
+local healthText = healthBar:WaitForChild("HealthText") :: TextLabel
+local timingBar = shearingGui:WaitForChild("TimingBar") :: Frame
+local zoneTrack = timingBar:WaitForChild("Zones") :: Frame
+local perfectZone = zoneTrack:WaitForChild("Frame") :: Frame
+local cursor = timingBar:WaitForChild("Cursor") :: Frame
+local hintLabel = timingBar:WaitForChild("Hint") :: TextLabel
+local exitButton = shearingGui:WaitForChild("Exit") :: TextButton
+
+-- The script keeps references into this GUI for the whole session, so it must survive respawns.
+shearingGui.ResetOnSpawn = false
 
 --// Animations
 local shearToolAnim = replicatedStorage.Assets.Animations.ShearTool
 local shearRigAnim = replicatedStorage.Assets.Animations.ShearRig
 
 --// Camera tuning (studs / degrees). Tweak these to reframe the shot.
-local CAMERA_DISTANCE = 6.5 -- how far behind the sheep the camera sits
-local CAMERA_HEIGHT = 3.2 -- how far above the sheep's centre (also keeps it above the pen fence)
-local CAMERA_LOOK_AHEAD = 2.2 -- aim this far from the sheep towards the player, so both are in frame
+local CAMERA_DISTANCE = 5.5
+local CAMERA_HEIGHT = 3.2
+local CAMERA_LOOK_AHEAD = 2.2
 local CAMERA_LOOK_HEIGHT = 0.6
 local CAMERA_FOV = 60
 local CAMERA_TWEEN = TweenInfo.new(0.7, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
 
---// Circle tuning
-local BASE_CIRCLE_SIZE = 84 -- pixels at 720p, scaled by rarity and screen size
-local RING_EXTRA = 1.4 -- the approach ring starts this much bigger than the circle
-local WOOL_BURST_COUNT = 18
+--// Input: any of these shears while the timing bar is up. Keys go through ContextActionService (so Space
+--// doesn't also try to jump); clicks and taps through UserInputService (so the Exit button still works).
+local PRESS_INPUT_TYPES = {
+	[Enum.UserInputType.MouseButton1] = true,
+	[Enum.UserInputType.Touch] = true,
+}
+local PRESS_KEYS = { Enum.KeyCode.Space, Enum.KeyCode.ButtonA }
+local PRESS_ACTION = "ShearTimingPress"
 
---// Wool chunk tuning (little spheres that fly off the sheep when a circle is popped)
-local WOOL_CHUNKS_PER_POP = 2
-local WOOL_CHUNKS_PER_CRIT = 8
+--// Wool effects
+local WOOL_BURST_COUNT = 18
 local WOOL_CHUNK_LIFETIME = 1.4
 
---// Layout
-local HEALTH_HUD_BOTTOM_OFFSET = -110 -- pixels up from the bottom edge, clear of the default hotbar
-
 --// Style
-local FONT = Enum.Font.FredokaOne
+local POPUP_FONT = sheepNameLabel.Font -- popups match the font of the GUI
 local WHITE = Color3.new(1, 1, 1)
 local BLACK = Color3.new(0, 0, 0)
-local LOW_HEALTH_COLOR = Color3.fromRGB(230, 70, 70)
-local FULL_HEALTH_COLOR = Color3.fromRGB(90, 210, 100)
-local TIER_LOW = Color3.fromRGB(80, 170, 255)
-local TIER_MID = Color3.fromRGB(255, 170, 40)
-local TIER_HIGH = Color3.fromRGB(255, 70, 90)
+
+-- Tier colours come from ShearTimingData.TierColors; these are used for any tier it doesn't list.
+local DEFAULT_TIER_COLORS: { [string]: Color3 } = {
+	PERFECT = Color3.fromRGB(72, 255, 69),
+	GREAT = Color3.fromRGB(150, 235, 80),
+	GOOD = Color3.fromRGB(240, 205, 70),
+	POOR = Color3.fromRGB(240, 150, 60),
+	MISS = Color3.fromRGB(190, 192, 202),
+}
+local BAND_ORDER = { "POOR", "GOOD", "GREAT" } -- widest first; the PERFECT zone (your Frame) sits on top
+local BAND_TRANSPARENCY: { [string]: number } = { POOR = 0.55, GOOD = 0.35, GREAT = 0.2 }
+
+local function getTierColor(tier: string): Color3
+	local colors = ShearTimingData.TierColors :: { [string]: Color3 }
+	return colors[tier] or DEFAULT_TIER_COLORS[tier] or WHITE
+end
+
+--// Layout, read from the GUI as it was built in Studio
+local TRACK_LEFT = zoneTrack.Position.X.Scale -- the track's span inside TimingBar, so the cursor lines up with it
+local TRACK_WIDTH = zoneTrack.Size.X.Scale
+local CURSOR_Y = cursor.Position.Y
+local TIMING_HOME = timingBar.Position
 
 --// Character
 local character: Model
@@ -65,35 +120,17 @@ local humanoidRootPart: BasePart
 
 --// State
 local inStation = false -- camera locked at the pen (from the first START SHEARING until Leave)
-local shearing = false -- a sheep is currently being sheared (circles active)
+local shearing = false -- a sheep is currently being sheared (timing bar up)
 local stationToken = 0 -- bumps every time the station ends, so a late "start" can tell it's stale
 local currentSheep: Model? = nil
-local previousHealth = 0
 local shearTool: Tool? = nil
 local healthConnection: RBXScriptConnection? = nil
 local renderConnection: RBXScriptConnection? = nil
 local savedWalkSpeed = 16
 local savedFieldOfView = 70
 
-type Circle = {
-	waveId: number,
-	pointId: string,
-	offset: Vector3,
-	damage: number,
-	born: number,
-	lifetime: number,
-	size: number,
-	color: Color3,
-	frame: Frame,
-	ring: Frame,
-	button: TextButton,
-	screenPosition: Vector2,
-	popped: boolean,
-	expired: boolean,
-	removed: boolean,
-}
-
-local circles: { Circle } = {}
+-- The live attempt, as sent by the server plus when it arrived and whether it's been used up.
+local attempt: any = nil
 
 --// Character handling ---------------------------------------------------------
 
@@ -121,140 +158,49 @@ end
 bindCharacter(player.Character or player.CharacterAdded:Wait())
 player.CharacterAdded:Connect(bindCharacter)
 
---// GUI ------------------------------------------------------------------------
+--// GUI setup --------------------------------------------------------------------
 
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "ShearingGui"
-screenGui.ResetOnSpawn = false
-screenGui.IgnoreGuiInset = true
-screenGui.DisplayOrder = 8
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
-local circleLayer = Instance.new("Frame")
-circleLayer.Name = "CircleLayer"
-circleLayer.BackgroundTransparency = 1
-circleLayer.Size = UDim2.fromScale(1, 1)
-circleLayer.ZIndex = 2
-circleLayer.Parent = screenGui
-
-local popupLayer = Instance.new("Frame")
-popupLayer.Name = "PopupLayer"
-popupLayer.BackgroundTransparency = 1
-popupLayer.Size = UDim2.fromScale(1, 1)
-popupLayer.ZIndex = 4
-popupLayer.Parent = screenGui
-
-local function addStroke(instance: Instance, thickness: number, color: Color3?): UIStroke
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = color or BLACK
-	stroke.Thickness = thickness
-	if instance:IsA("TextLabel") or instance:IsA("TextButton") then
-		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
-	end
-	stroke.Parent = instance
-	return stroke
-end
-
--- Sheep name + health bar, bottom centre (raised so it clears the default inventory hotbar).
-local hud = Instance.new("Frame")
-hud.Name = "Hud"
-hud.AnchorPoint = Vector2.new(0.5, 1)
-hud.Position = UDim2.new(0.5, 0, 1, HEALTH_HUD_BOTTOM_OFFSET)
-hud.Size = UDim2.fromOffset(360, 64)
-hud.BackgroundTransparency = 1
-hud.Visible = false
-hud.ZIndex = 3
-hud.Parent = screenGui
-
-local sheepNameLabel = Instance.new("TextLabel")
-sheepNameLabel.Name = "SheepName"
-sheepNameLabel.BackgroundTransparency = 1
-sheepNameLabel.Size = UDim2.new(1, 0, 0, 28)
-sheepNameLabel.Font = FONT
-sheepNameLabel.TextSize = 24
-sheepNameLabel.TextColor3 = WHITE
-sheepNameLabel.Text = ""
-sheepNameLabel.ZIndex = 3
-sheepNameLabel.Parent = hud
-addStroke(sheepNameLabel, 3)
-
-local healthTrack = Instance.new("Frame")
-healthTrack.Name = "HealthTrack"
-healthTrack.AnchorPoint = Vector2.new(0.5, 1)
-healthTrack.Position = UDim2.fromScale(0.5, 1)
-healthTrack.Size = UDim2.new(1, 0, 0, 28)
-healthTrack.BackgroundColor3 = Color3.fromRGB(16, 17, 24)
-healthTrack.BorderSizePixel = 0
-healthTrack.ZIndex = 3
-healthTrack.Parent = hud
-
-local healthTrackCorner = Instance.new("UICorner")
-healthTrackCorner.CornerRadius = UDim.new(1, 0)
-healthTrackCorner.Parent = healthTrack
-addStroke(healthTrack, 3, BLACK)
+-- Everything starts hidden; the station and the mini-game switch the pieces on.
+shearingGui.Enabled = false
+sheepHud.Visible = false
+timingBar.Visible = false
+exitButton.Visible = false
 
 local healthScale = Instance.new("UIScale")
-healthScale.Parent = healthTrack
+healthScale.Parent = healthBar
 
-local healthFill = Instance.new("Frame")
-healthFill.Name = "Fill"
-healthFill.Size = UDim2.fromScale(1, 1)
-healthFill.BackgroundColor3 = FULL_HEALTH_COLOR
-healthFill.BorderSizePixel = 0
-healthFill.ZIndex = 3
-healthFill.Parent = healthTrack
+local timingScale = Instance.new("UIScale")
+timingScale.Parent = timingBar
 
-local healthFillCorner = Instance.new("UICorner")
-healthFillCorner.CornerRadius = UDim.new(1, 0)
-healthFillCorner.Parent = healthFill
+-- The cursor is positioned by its centre.
+cursor.AnchorPoint = Vector2.new(0.5, cursor.AnchorPoint.Y)
 
-local healthText = Instance.new("TextLabel")
-healthText.Name = "HealthText"
-healthText.BackgroundTransparency = 1
-healthText.Size = UDim2.fromScale(1, 1)
-healthText.Font = FONT
-healthText.TextSize = 16
-healthText.TextColor3 = WHITE
-healthText.Text = ""
-healthText.ZIndex = 4
-healthText.Parent = healthTrack
-addStroke(healthText, 2)
+-- Your Frame is the PERFECT zone. The wider tiers are copies of it behind it, so they share its look.
+local bands: { [string]: Frame } = {}
+for index, tier in BAND_ORDER do
+	local band = perfectZone:Clone()
+	band.Name = `{tier}Zone`
+	band.BackgroundColor3 = getTierColor(tier)
+	band.BackgroundTransparency = BAND_TRANSPARENCY[tier]
+	band.ZIndex = index
+	band.Parent = zoneTrack
+	bands[tier] = band
+end
+perfectZone.ZIndex = #BAND_ORDER + 1
+cursor.ZIndex = #BAND_ORDER + 2
 
--- Leave button, top right: ends the mini-game (the sheep keeps its health) and leaves the pen station.
-local leaveButton = Instance.new("TextButton")
-leaveButton.Name = "LeaveButton"
-leaveButton.AnchorPoint = Vector2.new(1, 0)
-leaveButton.Position = UDim2.new(1, -20, 0, 20)
-leaveButton.Size = UDim2.fromOffset(112, 44)
-leaveButton.AutoButtonColor = false
-leaveButton.BackgroundColor3 = Color3.fromRGB(232, 78, 88)
-leaveButton.Font = FONT
-leaveButton.TextSize = 22
-leaveButton.TextColor3 = WHITE
-leaveButton.Text = "Leave"
-leaveButton.Visible = false
-leaveButton.ZIndex = 5
-leaveButton.Parent = screenGui
-
-local leaveCorner = Instance.new("UICorner")
-leaveCorner.CornerRadius = UDim.new(0, 10)
-leaveCorner.Parent = leaveButton
-addStroke(leaveButton, 2.5)
-
-local leaveEdge = Instance.new("UIStroke")
-leaveEdge.Color = Color3.fromRGB(150, 34, 48)
-leaveEdge.Thickness = 3
-leaveEdge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-leaveEdge.Parent = leaveButton
-
-screenGui.Parent = playerGui
+-- Snip sound (only when a sound id is set in ShearTimingData).
+local shearSound: Sound? = nil
+if ShearTimingData.ShearSoundId ~= "" then
+	local sound = Instance.new("Sound")
+	sound.Name = "ShearSnip"
+	sound.SoundId = ShearTimingData.ShearSoundId
+	sound.Volume = ShearTimingData.ShearSoundVolume
+	sound.Parent = shearingGui
+	shearSound = sound
+end
 
 --// Small helpers -----------------------------------------------------------------
-
-local function getUiScale(): number
-	local camera = workspace.CurrentCamera
-	return if camera then math.clamp(camera.ViewportSize.Y / 720, 0.75, 1.4) else 1
-end
 
 -- The game's own HUD (wool / money labels) is hidden while a sheep is being sheared.
 local function setMainHudVisible(visible: boolean)
@@ -264,15 +210,26 @@ local function setMainHudVisible(visible: boolean)
 	end
 end
 
+local function addStroke(instance: Instance, thickness: number): UIStroke
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = BLACK
+	stroke.Thickness = thickness
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+	stroke.Parent = instance
+	return stroke
+end
+
 -- Floating text at a screen position that drifts upward and fades out.
-local function spawnPopup(text: string, position: Vector2, color: Color3, textSize: number, rise: number, duration: number)
+local function spawnPopup(text: string, screenPosition: Vector2, color: Color3, textSize: number, rise: number, duration: number)
+	local position = screenPosition - popupLayer.AbsolutePosition
+
 	local label = Instance.new("TextLabel")
 	label.AnchorPoint = Vector2.new(0.5, 0.5)
 	label.Position = UDim2.fromOffset(position.X, position.Y)
 	label.Size = UDim2.fromOffset(0, 0)
 	label.AutomaticSize = Enum.AutomaticSize.XY
 	label.BackgroundTransparency = 1
-	label.Font = FONT
+	label.Font = POPUP_FONT
 	label.TextSize = textSize
 	label.TextColor3 = color
 	label.Text = text
@@ -296,13 +253,12 @@ local function updateHealthBar(current: number, maximum: number)
 	local ratio = if maximum > 0 then math.clamp(current / maximum, 0, 1) else 0
 
 	tweenService:Create(healthFill, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		Size = UDim2.fromScale(ratio, 1),
-		BackgroundColor3 = LOW_HEALTH_COLOR:Lerp(FULL_HEALTH_COLOR, ratio),
+		Size = UDim2.new(ratio, 0, 1, 0),
 	}):Play()
 
-	healthText.Text = `{math.ceil(math.max(current, 0))} / {maximum}`
+	healthText.Text = `{math.ceil(math.max(current, 0))}/{maximum}`
 
-	healthScale.Scale = 1.1
+	healthScale.Scale = 1.05
 	tweenService:Create(healthScale, TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 end
 
@@ -322,7 +278,7 @@ local function getSheepRoot(): BasePart?
 	return (sheepModel.PrimaryPart or sheepModel:FindFirstChild("HumanoidRootPart")) :: BasePart?
 end
 
--- Little wool spheres (the sheep torso's colour) that fly out from `origin` in the `outward` direction.
+-- Little wool spheres (the sheep's wool colour) that fly out from `origin` in the `outward` direction.
 local function spawnWoolChunks(origin: Vector3, outward: Vector3, count: number, sizeScale: number)
 	local torso = if currentSheep then currentSheep:FindFirstChild("Torso") else nil
 	local color = if torso and torso:IsA("BasePart") then torso.Color else WHITE
@@ -355,22 +311,54 @@ local function spawnWoolChunks(origin: Vector3, outward: Vector3, count: number,
 	end
 end
 
+-- Throws `count` chunks off the side of the sheep that faces the camera.
+local function flyWool(count: number, sizeScale: number)
+	local sheepRoot = getSheepRoot()
+	local camera = workspace.CurrentCamera
+	if count <= 0 or not sheepRoot or not camera then
+		return
+	end
+
+	local toCamera = camera.CFrame.Position - sheepRoot.Position
+	toCamera = Vector3.new(toCamera.X, 0, toCamera.Z)
+	local outward = if toCamera.Magnitude > 0.05 then toCamera.Unit else sheepRoot.CFrame.RightVector
+
+	for _ = 1, count do
+		local scatter = Vector3.new(math.random() - 0.5, math.random() * 0.8, math.random() - 0.5) * 1.6
+		spawnWoolChunks(sheepRoot.Position + Vector3.new(0, 0.8, 0) + scatter, outward, 1, sizeScale)
+	end
+end
+
+--[[
+	Animation tracks are loaded once and replayed on every swing. Loading a new track per swing leaks
+	one track each time until the animator's 64 track limit is hit and animations stop playing.
+	The caches are weak, so a track goes away with its tool (shear swapped) or animator (respawn).
+]]--
+local toolTracks: { [Animator]: AnimationTrack } = setmetatable({}, { __mode = "k" }) :: any
+local rigTracks: { [Animator]: AnimationTrack } = setmetatable({}, { __mode = "k" }) :: any
+
+local function getTrack(cache: { [Animator]: AnimationTrack }, animator: Animator, animation: Animation): AnimationTrack
+	local track = cache[animator]
+	if not track then
+		track = animator:LoadAnimation(animation)
+		track.Priority = Enum.AnimationPriority.Action
+		track.Looped = false
+		cache[animator] = track
+	end
+	return track
+end
+
 local function playShearAnimation()
 	local tool = shearTool
 	if not tool or tool.Parent ~= character then
 		return
 	end
-	local toolAnimationController = tool:FindFirstChild("AnimationController") 
-	local toolAnimator = toolAnimationController:FindFirstChild("Animator")
-	local shearToolTrack = toolAnimator:LoadAnimation(shearToolAnim) :: AnimationTrack
-	shearToolTrack.Priority = Enum.AnimationPriority.Action
-
-	local characterAnimator = humanoid:FindFirstChild("Animator") 
-	local shearRigTrack = characterAnimator:LoadAnimation(shearRigAnim) :: AnimationTrack
-	shearRigTrack.Priority = Enum.AnimationPriority.Action
-
-	-- Better shears snip faster (the server sets ShearSpeed from the shear's data).
-	local speed = (player:GetAttribute("ShearSpeed") :: number?) or 1
+	local toolAnimationController = tool:FindFirstChild("AnimationController")
+	local toolAnimator = toolAnimationController and toolAnimationController:FindFirstChildOfClass("Animator")
+	local characterAnimator = humanoid:FindFirstChildOfClass("Animator")
+	if not toolAnimator or not characterAnimator then
+		return
+	end
 
 	-- Electric shears crackle on every snip (other players see it via the tool's "Snips" attribute).
 	for _, descendant in tool:GetDescendants() do
@@ -379,295 +367,171 @@ local function playShearAnimation()
 		end
 	end
 
-	if shearToolTrack and not shearToolTrack.IsPlaying then
+	-- Tracks aren't looped, so each one stops by itself when the swing ends.
+	local shearToolTrack = getTrack(toolTracks, toolAnimator, shearToolAnim)
+	local shearRigTrack = getTrack(rigTracks, characterAnimator, shearRigAnim)
+	if not shearToolTrack.IsPlaying then
 		shearToolTrack:Play()
-		shearToolTrack:AdjustSpeed(speed)
-		shearToolTrack.Looped = false
-		task.delay(shearToolTrack.Length, function()
-			shearToolTrack:Stop()
-		end)
-		print(`Playing animation`)
 	end
-	if shearRigTrack and not shearRigTrack.IsPlaying then
+	if not shearRigTrack.IsPlaying then
 		shearRigTrack:Play()
-		shearRigTrack:AdjustSpeed(speed)
-		shearRigTrack.Looped = false
-		task.delay(shearRigTrack.Length, function()
-			shearRigTrack:Stop()
-		end)
-		print(`playing animation`)
 	end
 end
 
---// Circles ------------------------------------------------------------------------
-local function getTierColor(multiplier: number): Color3
-	if multiplier >= 2 then
-		return TIER_HIGH
-	elseif multiplier > 1 then
-		return TIER_MID
-	end
-	return TIER_LOW
+--// Timing bar ------------------------------------------------------------------------
+
+-- Moves the cursor to a bar position (0..1) along the zone track.
+local function setCursor(position: number)
+	cursor.Position = UDim2.new(TRACK_LEFT + position * TRACK_WIDTH, 0, CURSOR_Y.Scale, CURSOR_Y.Offset)
 end
 
-local function fadeStrokes(instance: Instance, duration: number)
-	for _, child in instance:GetChildren() do
-		if child:IsA("UIStroke") then
-			tweenService:Create(child, TweenInfo.new(duration), { Transparency = 1 }):Play()
-		end
-	end
+-- Screen point just above the track at a bar position (for the result popup).
+local function getBarPoint(position: number): Vector2
+	local trackPosition = zoneTrack.AbsolutePosition
+	local trackSize = zoneTrack.AbsoluteSize
+	return Vector2.new(trackPosition.X + trackSize.X * position, trackPosition.Y - 14)
 end
 
-local function removeCircle(circle: Circle, delay: number)
-	circle.removed = true
-	task.delay(delay, function()
-		circle.frame:Destroy()
-	end)
+-- Puts a zone frame over [centre - halfWidth, centre + halfWidth] of the track, kept inside it.
+local function placeZone(zone: Frame, center: number, halfWidth: number)
+	local left = math.max(center - halfWidth, 0)
+	local right = math.min(center + halfWidth, 1)
+	zone.Position = UDim2.new(left, 0, zone.Position.Y.Scale, zone.Position.Y.Offset)
+	zone.Size = UDim2.new(right - left, 0, zone.Size.Y.Scale, zone.Size.Y.Offset)
 end
 
--- Pop: reports the hit to the server, flings wool off that spot and plays the burst effect.
-local function popCircle(circle: Circle)
-	if circle.popped or circle.expired or not shearing then
-		return
-	end
-	circle.popped = true
+local function layoutAttempt(current: any)
+	placeZone(perfectZone, current.sweetSpot, current.zones.perfect)
+	placeZone(bands.GREAT, current.sweetSpot, current.zones.great)
+	placeZone(bands.GOOD, current.sweetSpot, current.zones.good)
+	placeZone(bands.POOR, current.sweetSpot, current.zones.poor)
 
-	network.fireServer(network.RemoteEvents.ShearHit, circle.waveId, circle.pointId)
-	playShearAnimation()
-	spawnPopup(`+{circle.damage}`, circle.screenPosition + Vector2.new(0, -circle.size * 0.4), WHITE, 26, 60, 0.7)
-
-	-- Wool flies out of the spot that was hit, away from the sheep's body.
-	local sheepRoot = getSheepRoot()
-	if sheepRoot then
-		local worldPosition = sheepRoot.CFrame:PointToWorldSpace(circle.offset)
-		local outward = worldPosition - sheepRoot.Position
-		outward = if outward.Magnitude > 0.05 then outward.Unit else sheepRoot.CFrame.RightVector
-		spawnWoolChunks(worldPosition, outward, WOOL_CHUNKS_PER_POP, 1)
-	end
-
-	circle.ring.Visible = false
-	local scale = circle.frame:FindFirstChildOfClass("UIScale")
-	if scale then
-		tweenService:Create(scale, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1.7 }):Play()
-	end
-	tweenService:Create(circle.button, TweenInfo.new(0.18), { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
-	fadeStrokes(circle.button, 0.18)
-
-	removeCircle(circle, 0.25)
+	cursor.BackgroundTransparency = 0
+	setCursor(ShearTiming.getCursorPosition(current.cursorStart, current.cursorSpeed, 0))
 end
 
--- Ran out of time: the circle greys out and a "Miss" floats up.
-local function expireCircle(circle: Circle)
-	circle.expired = true
-	circle.ring.Visible = false
-
-	circle.button.BackgroundColor3 = Color3.fromRGB(110, 112, 122)
-	tweenService:Create(circle.button, TweenInfo.new(0.25), { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
-	fadeStrokes(circle.button, 0.25)
-
-	spawnPopup("Miss", circle.screenPosition, Color3.fromRGB(200, 202, 212), 20, 30, 0.5)
-	removeCircle(circle, 0.3)
-end
-
-local function createCircle(waveId: number, point: any, lifetime: number, sizeScale: number)
-	local size = math.floor(BASE_CIRCLE_SIZE * sizeScale * getUiScale())
-	local color = getTierColor(point.multiplier)
-
-	local frame = Instance.new("Frame")
-	frame.Name = `Circle_{point.id}`
-	frame.AnchorPoint = Vector2.new(0.5, 0.5)
-	frame.Size = UDim2.fromOffset(size, size)
-	frame.BackgroundTransparency = 1
-	frame.Visible = false
-	frame.Parent = circleLayer
-
-	local frameScale = Instance.new("UIScale")
-	frameScale.Scale = 0.2
-	frameScale.Parent = frame
-
-	-- Approach ring: starts big and shrinks onto the circle as its time runs out.
-	local ring = Instance.new("Frame")
-	ring.Name = "Ring"
-	ring.AnchorPoint = Vector2.new(0.5, 0.5)
-	ring.Position = UDim2.fromScale(0.5, 0.5)
-	ring.Size = UDim2.fromOffset(size * (1 + RING_EXTRA), size * (1 + RING_EXTRA))
-	ring.BackgroundTransparency = 1
-	ring.Parent = frame
-
-	local ringCorner = Instance.new("UICorner")
-	ringCorner.CornerRadius = UDim.new(1, 0)
-	ringCorner.Parent = ring
-
-	local ringStroke = Instance.new("UIStroke")
-	ringStroke.Color = color
-	ringStroke.Thickness = 4
-	ringStroke.Transparency = 0.1
-	ringStroke.Parent = ring
-
-	local button = Instance.new("TextButton")
-	button.Name = "Hit"
-	button.AnchorPoint = Vector2.new(0.5, 0.5)
-	button.Position = UDim2.fromScale(0.5, 0.5)
-	button.Size = UDim2.fromScale(1, 1)
-	button.AutoButtonColor = false
-	button.BackgroundColor3 = color
-	button.Font = FONT
-	button.TextSize = math.floor(size * 0.4)
-	button.TextColor3 = WHITE
-	button.Text = tostring(point.damage)
-	button.Parent = frame
-
-	local buttonCorner = Instance.new("UICorner")
-	buttonCorner.CornerRadius = UDim.new(1, 0)
-	buttonCorner.Parent = button
-
-	local outline = Instance.new("UIStroke")
-	outline.Name = "Outline"
-	outline.Color = WHITE
-	outline.Thickness = 3
-	outline.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	outline.Parent = button
-
-	local textStroke = Instance.new("UIStroke")
-	textStroke.Name = "TextStroke"
-	textStroke.Color = BLACK
-	textStroke.Thickness = 2
-	textStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
-	textStroke.Parent = button
-
-	tweenService:Create(frameScale, TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-
-	local circle: Circle = {
-		waveId = waveId,
-		pointId = point.id,
-		offset = point.offset,
-		damage = point.damage,
-		born = os.clock(),
-		lifetime = lifetime,
-		size = size,
-		color = color,
-		frame = frame,
-		ring = ring,
-		button = button,
-		screenPosition = Vector2.zero,
-		popped = false,
-		expired = false,
-		removed = false,
-	}
-	table.insert(circles, circle)
-
-	-- InputBegan (not Activated) so the pop lands the instant the mouse/finger goes down.
-	button.InputBegan:Connect(function(input: InputObject)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			popCircle(circle)
-		end
-	end)
-end
-
--- Every frame: keep each circle glued to its spot on the sheep, shrink its ring and time it out.
-local function updateCircles()
-	local sheepRoot = getSheepRoot()
-	local camera = workspace.CurrentCamera
-	if not sheepRoot or not camera then
-		return
-	end
-
-	local now = os.clock()
-	for index = #circles, 1, -1 do
-		local circle = circles[index]
-		if circle.removed and not circle.frame.Parent then
-			table.remove(circles, index)
-			continue
-		end
-
-		local worldPosition = sheepRoot.CFrame:PointToWorldSpace(circle.offset)
-		local viewportPoint, onScreen = camera:WorldToViewportPoint(worldPosition)
-		circle.screenPosition = Vector2.new(viewportPoint.X, viewportPoint.Y)
-		circle.frame.Position = UDim2.fromOffset(viewportPoint.X, viewportPoint.Y)
-		circle.frame.Visible = onScreen and viewportPoint.Z > 0
-
-		if not circle.popped and not circle.expired then
-			local progress = math.clamp((now - circle.born) / circle.lifetime, 0, 1)
-			local ringSize = circle.size * (1 + RING_EXTRA * (1 - progress))
-			circle.ring.Size = UDim2.fromOffset(ringSize, ringSize)
-
-			if progress >= 1 then
-				expireCircle(circle)
+-- A quick punch for good hits and a little shake for a miss.
+local function animateBar(tier: string)
+	if tier == "PERFECT" or tier == "GREAT" then
+		timingScale.Scale = if tier == "PERFECT" then 1.1 else 1.05
+		tweenService:Create(timingScale, TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	elseif tier == "MISS" then
+		task.spawn(function()
+			for _, offset in { -6, 6, -4, 0 } do
+				timingBar.Position = UDim2.new(TIMING_HOME.X.Scale, TIMING_HOME.X.Offset + offset, TIMING_HOME.Y.Scale, TIMING_HOME.Y.Offset)
+				task.wait(0.03)
 			end
+		end)
+	end
+end
+
+local function showResult(tier: string, position: number)
+	local big = tier == "PERFECT"
+	spawnPopup(`{tier}!`, getBarPoint(position), getTierColor(tier), if big then 40 else 30, 46, if big then 0.75 else 0.6)
+	animateBar(tier)
+	cursor.BackgroundTransparency = 0.4
+
+	if shearSound and tier ~= "MISS" then
+		shearSound.PlaybackSpeed = ShearTimingData.TierPitch[tier]
+		shearSound:Play()
+	end
+
+	if tier ~= "MISS" then
+		playShearAnimation()
+		flyWool(ShearTimingData.WoolChunks[tier], if big then 1.4 else 1)
+		if (big or tier == "GREAT") and currentSheep then
+			emitWoolBurst(currentSheep)
 		end
 	end
 end
 
-local function clearCircles()
-	for _, circle in circles do
-		circle.frame:Destroy()
-	end
-	table.clear(circles)
-end
-
---// Critical hit banner ---------------------------------------------------------------
-
-local function showCritical(bonusDamage: number)
-	local camera = workspace.CurrentCamera
-	local viewport = if camera then camera.ViewportSize else Vector2.new(1280, 720)
-
-	local label = Instance.new("TextLabel")
-	label.AnchorPoint = Vector2.new(0.5, 0.5)
-	label.Position = UDim2.fromOffset(viewport.X / 2, viewport.Y * 0.3)
-	label.Size = UDim2.fromOffset(0, 0)
-	label.AutomaticSize = Enum.AutomaticSize.XY
-	label.BackgroundTransparency = 1
-	label.Font = FONT
-	label.TextSize = 54
-	label.TextColor3 = Color3.fromRGB(255, 226, 70)
-	label.Text = `CRITICAL!  +{bonusDamage}`
-	label.ZIndex = 5
-	label.Parent = popupLayer
-	local stroke = addStroke(label, 4)
-
-	local scale = Instance.new("UIScale")
-	scale.Scale = 0.3
-	scale.Parent = label
-	tweenService:Create(scale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-
-	-- A big shower of wool from the whole body.
-	local sheepRoot = getSheepRoot()
-	if sheepRoot then
-		for _ = 1, WOOL_CHUNKS_PER_CRIT do
-			local direction = Vector3.new(math.random() - 0.5, math.random() * 0.4, math.random() - 0.5)
-			direction = if direction.Magnitude > 0.05 then direction.Unit else sheepRoot.CFrame.RightVector
-			spawnWoolChunks(sheepRoot.Position + Vector3.new(0, 0.8, 0), direction, 1, 1.5)
-		end
+-- The player pressed: lock the cursor, tell the server where it was and predict the result.
+local function press()
+	local current = attempt
+	if not shearing or not current or current.done then
+		return
 	end
 
-	task.delay(0.7, function()
-		local fade = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-		tweenService:Create(label, fade, {
-			Position = UDim2.fromOffset(viewport.X / 2, viewport.Y * 0.3 - 40),
-			TextTransparency = 1,
-		}):Play()
-		tweenService:Create(stroke, fade, { Transparency = 1 }):Play()
-		task.wait(0.4)
-		label:Destroy()
-	end)
+	local elapsed = os.clock() - current.receivedAt
+	if elapsed > current.lifetime then
+		return
+	end
+	current.done = true
+	hintLabel.Visible = false
+
+	local position = ShearTiming.getCursorPosition(current.cursorStart, current.cursorSpeed, elapsed)
+	setCursor(position)
+	network.fireServer(network.RemoteEvents.ShearPress, current.id, position)
+
+	local tier = ShearTiming.classify(math.abs(position - current.sweetSpot), current.zones)
+	showResult(tier, position)
 end
+
+-- Every frame: move the cursor; an attempt that runs out of time is a miss (the server agrees).
+local function updateTiming()
+	local current = attempt
+	if not current or current.done then
+		return
+	end
+
+	local elapsed = os.clock() - current.receivedAt
+	if elapsed >= current.lifetime then
+		current.done = true
+		local position = ShearTiming.getCursorPosition(current.cursorStart, current.cursorSpeed, current.lifetime)
+		setCursor(position)
+		showResult("MISS", position)
+		return
+	end
+
+	setCursor(ShearTiming.getCursorPosition(current.cursorStart, current.cursorSpeed, elapsed))
+end
+
+local function onAttempt(data: any)
+	if not shearing or type(data) ~= "table" or type(data.zones) ~= "table" then
+		return
+	end
+
+	attempt = {
+		id = data.id,
+		sweetSpot = data.sweetSpot,
+		zones = data.zones,
+		cursorStart = data.cursorStart,
+		cursorSpeed = data.cursorSpeed,
+		lifetime = data.lifetime,
+		receivedAt = os.clock(),
+		done = false,
+	}
+	layoutAttempt(attempt)
+	timingBar.Visible = true
+end
+
+local function onPressAction(_actionName: string, inputState: Enum.UserInputState): Enum.ContextActionResult
+	if inputState == Enum.UserInputState.Begin then
+		press()
+	end
+	return Enum.ContextActionResult.Sink
+end
+
+-- Clicks and taps that didn't land on a button (the Exit button, the chat...).
+userInputService.InputBegan:Connect(function(input: InputObject, gameProcessed: boolean)
+	if shearing and not gameProcessed and PRESS_INPUT_TYPES[input.UserInputType] then
+		press()
+	end
+end)
 
 --// Station / shearing ------------------------------------------------------------------
 
 -- Finds the active sheep Model by its unique id (waits briefly in case it hasn't replicated yet).
 local function findSheepById(sheepId: number): Model?
-	for _ = 1, 20 do
-		for _, sheepModel in collectionService:GetTagged("Sheep") do
-			if sheepModel:GetAttribute("id") == sheepId then
-				return sheepModel :: Model
-			end
+	for _, sheepModel in collectionService:GetTagged("Sheep") do
+		if sheepModel:GetAttribute("id") == sheepId then
+			return sheepModel :: Model
 		end
-		task.wait(0.1)
 	end
+	task.wait(0.1)
 	return nil
 end
 
--- Fallback names for the shears tool; normally the player's "ShearId" attribute (set by the server, changed
--- when they buy a shear in the shop) names the tool to use.
 local SHEAR_TOOL_NAMES = { "DefaultShear", "Shear" }
 
 local function findShearTool(): Tool?
@@ -733,34 +597,29 @@ local function enterStation(sheepModel: Model, sheepPosition: Vector3?, playerPo
 			savedFieldOfView = camera.FieldOfView
 		end
 
-		leaveButton.Visible = true
+		shearingGui.Enabled = true
+		exitButton.Visible = true
 	end
 
 	frameCamera(sheepModel, sheepPosition, playerPosition)
 end
 
--- Starts the circles mini-game on a sheep.
+-- Starts the timing mini-game on a sheep; the first attempt arrives from the server shortly after.
 local function startMinigame(sheepModel: Model)
 	shearing = true
 	currentSheep = sheepModel
+	attempt = nil
 	setMainHudVisible(false)
 
-	local maxHealth = sheepModel:GetAttribute("MaxShearHealth") :: number
-	previousHealth = sheepModel:GetAttribute("ShearHealth") :: number
-	updateHealthBar(previousHealth, maxHealth)
+	updateHealthBar(sheepModel:GetAttribute("ShearHealth") :: number, sheepModel:GetAttribute("MaxShearHealth") :: number)
 
 	local rarityColor = sheepModel:GetAttribute("RarityColor")
-	sheepNameLabel.TextColor3 = if typeof(rarityColor) == "Color3" then rarityColor:Lerp(WHITE, 0.45) else WHITE
-	sheepNameLabel.Text = `{sheepModel:GetAttribute("SheepName") or sheepModel.Name}  -  {sheepModel:GetAttribute("Rarity") or ""}`
-	hud.Visible = true
+	sheepNameLabel.TextColor3 = if typeof(rarityColor) == "Color3" then rarityColor:Lerp(WHITE, 0.7) else WHITE
+	sheepNameLabel.Text = `{sheepModel:GetAttribute("SheepName") or sheepModel.Name} - {sheepModel:GetAttribute("Rarity") or ""}`
+	sheepHud.Visible = true
 
 	healthConnection = sheepModel:GetAttributeChangedSignal("ShearHealth"):Connect(function()
-		local health = sheepModel:GetAttribute("ShearHealth") :: number
-		updateHealthBar(health, sheepModel:GetAttribute("MaxShearHealth") :: number)
-		if health < previousHealth then
-			emitWoolBurst(sheepModel)
-		end
-		previousHealth = health
+		updateHealthBar(sheepModel:GetAttribute("ShearHealth") :: number, sheepModel:GetAttribute("MaxShearHealth") :: number)
 	end)
 
 	-- Hold the shears while working.
@@ -769,16 +628,23 @@ local function startMinigame(sheepModel: Model)
 		humanoid:EquipTool(shearTool)
 	end
 
-	renderConnection = runService.RenderStepped:Connect(updateCircles)
+	timingScale.Scale = 1
+	hintLabel.Visible = true
+
+	contextActionService:BindActionAtPriority(PRESS_ACTION, onPressAction, false, Enum.ContextActionPriority.High.Value, table.unpack(PRESS_KEYS))
+	renderConnection = runService.RenderStepped:Connect(updateTiming)
 end
 
--- Stops the circles mini-game (sheep finished or player left) but leaves the camera/station alone.
+-- Stops the mini-game (sheep finished or player left) but leaves the camera/station alone.
 endMinigame = function()
 	if not shearing then
 		return
 	end
 	shearing = false
 	currentSheep = nil
+	attempt = nil
+
+	contextActionService:UnbindAction(PRESS_ACTION)
 
 	if healthConnection then
 		healthConnection:Disconnect()
@@ -789,8 +655,9 @@ endMinigame = function()
 		renderConnection = nil
 	end
 
-	clearCircles()
-	hud.Visible = false
+	timingBar.Visible = false
+	timingBar.Position = TIMING_HOME
+	sheepHud.Visible = false
 	setMainHudVisible(true)
 
 	if shearTool then
@@ -806,7 +673,14 @@ exitStation = function()
 	end
 	inStation = false
 	stationToken += 1
-	leaveButton.Visible = false
+	exitButton.Visible = false
+
+	-- Leave the GUI up just long enough for the "+N Wool" popup to finish.
+	task.delay(1.3, function()
+		if not inStation then
+			shearingGui.Enabled = false
+		end
+	end)
 
 	humanoid.WalkSpeed = savedWalkSpeed
 	humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
@@ -825,7 +699,7 @@ exitStation = function()
 	end
 end
 
-leaveButton.MouseButton1Click:Connect(function()
+exitButton.Activated:Connect(function()
 	if inStation then
 		network.fireServer(network.RemoteEvents.StopShearing)
 	end
@@ -860,31 +734,15 @@ network.connectEvent(network.RemoteEvents.ActivateShearing, function(sheepId: nu
 	startMinigame(sheepModel)
 end)
 
--- Shearing ended (sheep finished, player left, or aborted): release the camera and movement.
 network.connectEvent(network.RemoteEvents.DeactivateShearing, function(completed: boolean?, woolAmount: number?)
 	endMinigame()
 
 	if completed and woolAmount then
-		local camera = workspace.CurrentCamera
-		local viewport = if camera then camera.ViewportSize else Vector2.new(1280, 720)
-		spawnPopup(`+{woolAmount} Wool`, Vector2.new(viewport.X / 2, viewport.Y * 0.4), WHITE, 44, 70, 1.2)
+		local center = popupLayer.AbsolutePosition + popupLayer.AbsoluteSize * Vector2.new(0.5, 0.4)
+		spawnPopup(`+{woolAmount} Wool`, center, WHITE, 44, 70, 1.2)
 	end
 
 	exitStation()
 end)
 
-network.connectEvent(network.RemoteEvents.ShearWave, function(waveId: number, lifetime: number, sizeScale: number, _critWindow: number, points: { any })
-	if not shearing then
-		return
-	end
-
-	for _, point in points do
-		createCircle(waveId, point, lifetime, sizeScale)
-	end
-end)
-
-network.connectEvent(network.RemoteEvents.ShearFeedback, function(kind: string, value: number)
-	if kind == "Crit" and shearing then
-		showCritical(value)
-	end
-end)
+network.connectEvent(network.RemoteEvents.ShearAttempt, onAttempt)

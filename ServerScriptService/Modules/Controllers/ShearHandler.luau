@@ -1,12 +1,16 @@
 --[[
-	Server side of the shearing mini-game.
+	Server side of the shearing timing mini-game.
 
-	When a player presses START SHEARING in a pen's menu, the sheep is turned side-on,
-	the player is snapped to the pen and the server starts sending "waves" of circles.
-	Each wave is a few weak points on the sheep; the client shows a circle on each and
-	reports the ones the player pops. The server decides damage (never the client),
-	checks timing, heals the sheep for misses on harder rarities, and awards a critical
-	when a whole wave is popped quickly.
+	When a player presses START SHEARING in a pen's menu, the sheep is turned side-on, the player is
+	snapped to the pen and a run of timing attempts starts. For each attempt the server picks a new
+	sweet spot on the timing bar and how the cursor moves, and sends both to the client. The client
+	only reports where the cursor was when the player pressed; the server checks the cursor really
+	could have been there, scores the press itself (PERFECT / GREAT / GOOD / POOR / MISS), takes the
+	wool off the sheep and pays the wool out once, when the sheep is bare. An attempt nobody presses
+	in time is a MISS, and shearing just carries on with the next one.
+
+	Tuning: ReplicatedStorage.Shared.Constants.ShearTimingData
+	Maths shared with the client: ReplicatedStorage.Shared.Utils.ShearTiming
 
 	Location: ServerScriptService.Modules.Controllers.ShearHandler
 ]]--
@@ -18,27 +22,37 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local ShearTiming = require(replicatedStorage.Shared.Utils.ShearTiming)
+local ShearTimingData = require(replicatedStorage.Shared.Constants.ShearTimingData)
 local SheepHandler = require(script.Parent.SheepHandler)
 local InventoryHandler = require(script.Parent.InventoryHandler)
 local PenHandler = require(script.Parent.PenHandler)
 local ShearShopHandler = require(script.Parent.ShearShopHandler)
-local ShearData = require(script.Parent.Parent.Constants.ShearData)
 
 --// Configs
-local MAX_START_DISTANCE = 14 -- how far from the pen's PlayerPos a player may be to start shearing
 local LEAVE_DISTANCE = 9.5 -- how far outside the pen (from its PlayerPos) a player is moved when they leave
 local SHEEP_TURN_TWEEN = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local LOOP_STEP_SECONDS = 0.05
+
+type Attempt = ShearTiming.Attempt & {
+	sentAt: number,
+	resolved: boolean,
+}
 
 type Session = {
 	player: Player,
 	pen: any,
 	sheep: Model,
 	sheepId: number,
-	difficulty: any,
 	active: boolean,
-	waveCounter: number,
-	wave: any?,
+	damageMultiplier: number, -- from the player's shear
+	damageScale: number, -- sheep wool / ShearTimingData.StartingWoolHealth (1 when scaling is off)
+	zoneScale: number, -- shear * sheep rarity
+	cursorSpeed: number, -- bar widths per second
+	attemptCounter: number,
+	attempt: Attempt?,
+	lastSweetSpot: number?,
+	random: Random,
 	connections: { RBXScriptConnection },
 }
 
@@ -61,6 +75,18 @@ end
 local function getPenAxis(pen: any): Vector3
 	local flat = Vector3.new(pen.playerPosition.X - pen.sheepPosition.X, 0, pen.playerPosition.Z - pen.sheepPosition.Z)
 	return if flat.Magnitude > 0.01 then flat.Unit else Vector3.new(0, 0, 1)
+end
+
+-- Flat (ground-plane) distance from a player's character to the pen's PlayerPos; nil without a character.
+local function getDistanceToPen(player: Player, pen: any): number?
+	local character = player.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not rootPart then
+		return nil
+	end
+
+	local offset = rootPart.Position - pen.playerPosition
+	return Vector3.new(offset.X, 0, offset.Z).Magnitude
 end
 
 -- Turns the sheep so its flank (not its head) faces the player and the camera.
@@ -114,58 +140,6 @@ local function movePlayerOutOfPen(player: Player, pen: any)
 	humanoidRootPart.CFrame = CFrame.lookAt(target, target + outward)
 end
 
--- Picks `count` distinct weak points (weighted), keeping them apart from each other.
-local function pickWeakPoints(count: number): { any }
-	local pool = table.clone(ShearData.WeakPoints)
-	local picked: { any } = {}
-
-	local attempts = 0
-	while #picked < count and #pool > 0 and attempts < 40 do
-		attempts += 1
-
-		local totalWeight = 0
-		for _, point in pool do
-			totalWeight += point.weight
-		end
-
-		local roll = math.random() * totalWeight
-		local chosenIndex = #pool
-		for index, point in pool do
-			roll -= point.weight
-			if roll <= 0 then
-				chosenIndex = index
-				break
-			end
-		end
-
-		local candidate = pool[chosenIndex]
-		local farEnough = true
-		for _, existing in picked do
-			if (existing.offset - candidate.offset).Magnitude < ShearData.MinPointSeparation then
-				farEnough = false
-				break
-			end
-		end
-
-		table.remove(pool, chosenIndex)
-		if farEnough then
-			table.insert(picked, candidate)
-		end
-	end
-
-	-- Fallback: never send a short wave just because the separation rule was too strict.
-	local fillIndex = 1
-	while #picked < count and fillIndex <= #ShearData.WeakPoints do
-		local point = ShearData.WeakPoints[fillIndex]
-		if not table.find(picked, point) then
-			table.insert(picked, point)
-		end
-		fillIndex += 1
-	end
-
-	return picked
-end
-
 --// Session lifecycle -----------------------------------------------------------
 
 -- Tears a session down without telling the client (callers do that with the right message).
@@ -192,7 +166,7 @@ local function endSession(session: Session)
 	end
 end
 
--- The sheep is fully sheared: pay out the wool, free the pen and tell the client.
+-- The sheep is bare: pay out the wool (once - the session is ended first), free the pen and tell the client.
 local function finishSheep(session: Session)
 	local player = session.player
 	local sheepId = session.sheepId
@@ -209,13 +183,15 @@ local function finishSheep(session: Session)
 	PenHandler.onSheepRemoved(sheepId)
 end
 
--- Changes the sheep's health by `delta` (negative = damage). Returns true if it just died.
-local function changeHealth(session: Session, delta: number): boolean
+-- Takes `damage` wool off the sheep (never below 0). Returns true if that sheared it bare.
+local function applyDamage(session: Session, damage: number): boolean
 	local sheep = session.sheep
-	local maxHealth = sheep:GetAttribute("MaxShearHealth") :: number
-	local health = sheep:GetAttribute("ShearHealth") :: number
+	local health = sheep:GetAttribute("ShearHealth")
+	if type(health) ~= "number" or health <= 0 then
+		return false
+	end
 
-	local newHealth = math.clamp(health + delta, 0, maxHealth)
+	local newHealth = math.max(health - damage, 0)
 	sheep:SetAttribute("ShearHealth", newHealth)
 
 	if newHealth <= 0 then
@@ -225,89 +201,71 @@ local function changeHealth(session: Session, delta: number): boolean
 	return false
 end
 
--- Builds the next wave, records it as the session's live wave and sends it to the client.
-local function sendWave(session: Session)
-	session.waveCounter += 1
-
-	local difficulty = session.difficulty
-	local wave = {
-		id = session.waveCounter,
-		sentAt = os.clock(),
-		lifetime = difficulty.lifetime,
-		critWindow = difficulty.critWindow,
-		points = {},
-		total = 0,
-		hits = 0,
-		damage = 0,
-		firstHitAt = nil,
-		resolved = false,
-	}
-
-	-- The player's shear decides how hard a x1.0 weak point hits.
-	local hitDamage = ShearShopHandler.getDamage(session.player)
-
-	local payload = {}
-	for _, point in pickWeakPoints(ShearData.WaveSize) do
-		local damage = math.max(1, math.round(hitDamage * point.multiplier))
-		wave.points[point.id] = { damage = damage, hit = false }
-		wave.total += 1
-
-		table.insert(payload, {
-			id = point.id,
-			offset = point.offset,
-			multiplier = point.multiplier,
-			damage = damage,
-		})
-	end
-
-	session.wave = wave
-	network.fireClient(
-		network.RemoteEvents.ShearWave,
-		session.player,
-		wave.id,
-		wave.lifetime,
-		difficulty.sizeScale,
-		wave.critWindow,
-		payload
-	)
+local function computeDamage(session: Session, tier: ShearTiming.Tier, distance: number, zones: ShearTiming.Zones): number
+	local base = ShearTiming.getTierDamage(tier, distance, zones)
+	return math.max(0, math.round(base * session.damageMultiplier * session.damageScale))
 end
 
--- Circles that ran out of time cost the player: harder sheep regrow some health.
-local function expireWave(session: Session)
-	local wave = session.wave
-	if not wave then
+-- Settles an attempt exactly once: snip effect for a hit, then the wool comes off.
+local function resolveAttempt(session: Session, attempt: Attempt, tier: ShearTiming.Tier, damage: number)
+	if attempt.resolved then
 		return
 	end
+	attempt.resolved = true
 
-	local missed = 0
-	for _, point in wave.points do
-		if not point.hit then
-			missed += 1
-		end
+	if tier ~= "MISS" then
+		ShearShopHandler.registerSnip(session.player)
 	end
-
-	wave.resolved = true
-
-	local healRatio = session.difficulty.missHeal
-	if missed > 0 and healRatio > 0 then
-		local maxHealth = session.sheep:GetAttribute("MaxShearHealth") :: number
-		changeHealth(session, math.round(maxHealth * healRatio * missed))
+	if damage > 0 then
+		applyDamage(session, damage)
 	end
 end
 
--- True while the session's pen, sheep and player are all still valid.
+-- Picks a new sweet spot and cursor run, records it as the live attempt and sends it to the client.
+local function sendAttempt(session: Session)
+	session.attemptCounter += 1
+
+	local sweetSpot = ShearTiming.pickSweetSpot(session.lastSweetSpot, session.random)
+	session.lastSweetSpot = sweetSpot
+
+	local attempt: Attempt = {
+		id = session.attemptCounter,
+		sweetSpot = sweetSpot,
+		zones = ShearTiming.buildZones(session.zoneScale),
+		cursorStart = if session.random:NextNumber() < 0.5 then 0 else 1,
+		cursorSpeed = session.cursorSpeed,
+		lifetime = ShearTimingData.TimeLimit,
+		sentAt = os.clock(),
+		resolved = false,
+	}
+	session.attempt = attempt
+
+	network.fireClient(network.RemoteEvents.ShearAttempt, session.player, {
+		id = attempt.id,
+		sweetSpot = attempt.sweetSpot,
+		zones = attempt.zones,
+		cursorStart = attempt.cursorStart,
+		cursorSpeed = attempt.cursorSpeed,
+		lifetime = attempt.lifetime,
+	})
+end
+
+-- True while the session's pen, sheep and player are all still valid and the player is still at the pen.
 local function isSessionValid(session: Session): boolean
 	local character = session.player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local distance = getDistanceToPen(session.player, session.pen)
 	return session.player.Parent ~= nil
 		and humanoid ~= nil
 		and humanoid.Health > 0
+		and distance ~= nil
+		and distance <= ShearTimingData.MaxShearingDistance
 		and not session.pen.destroyed
 		and session.sheep.Parent ~= nil
 		and SheepHandler.getSheep(session.sheepId) == session.sheep
 end
 
--- Ends a session that went invalid (player died/left, pen sold...) and tells the client.
+-- Ends a session that went invalid (player died/left/walked off, pen sold...) and tells the client.
 local function abortSession(session: Session)
 	if not session.active then
 		return
@@ -320,9 +278,9 @@ local function abortSession(session: Session)
 	end
 end
 
--- Runs wave after wave until the sheep is sheared or the session is ended.
-local function runWaves(session: Session)
-	task.wait(ShearData.FirstWaveDelaySeconds)
+-- Runs attempt after attempt until the sheep is bare or the session is ended.
+local function runAttempts(session: Session)
+	task.wait(ShearTimingData.FirstAttemptDelay)
 
 	while session.active do
 		if not isSessionValid(session) then
@@ -330,11 +288,12 @@ local function runWaves(session: Session)
 			return
 		end
 
-		sendWave(session)
-		local wave = session.wave
+		sendAttempt(session)
+		local attempt = session.attempt :: Attempt
 
-		local deadline = wave.sentAt + wave.lifetime + ShearData.HitGraceSeconds
-		while session.active and not wave.resolved and os.clock() < deadline do
+		-- Presses may arrive up to LatencyAllowance after the client's timer ran out.
+		local deadline = attempt.sentAt + attempt.lifetime + ShearTimingData.LatencyAllowance
+		while session.active and not attempt.resolved and os.clock() < deadline do
 			task.wait(LOOP_STEP_SECONDS)
 		end
 
@@ -342,15 +301,14 @@ local function runWaves(session: Session)
 			return
 		end
 
-		if not wave.resolved then
-			expireWave(session)
+		if not attempt.resolved then
+			resolveAttempt(session, attempt, "MISS", ShearTimingData.TimeoutDamage)
 			if not session.active then
 				return
 			end
 		end
 
-		-- Faster shears get the next wave sooner.
-		task.wait(ShearData.WaveGapSeconds / ShearShopHandler.getSpeed(session.player))
+		task.wait(ShearTimingData.CooldownBetweenAttempts)
 	end
 end
 
@@ -363,17 +321,18 @@ local function onStartShearing(player: Player, penId: any)
 
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if not humanoid or humanoid.Health <= 0 or not rootPart then
+	if not humanoid or humanoid.Health <= 0 then
 		return
 	end
 
+	-- Only the pen's owner gets their pens back from PenHandler, so nobody can shear someone else's sheep.
 	local pen = PenHandler.getPen(player, penId)
 	if not pen or pen.shearingPlayer or not pen.seated or not pen.occupiedSheepId then
 		return
 	end
 
-	if (rootPart.Position - pen.playerPosition).Magnitude > MAX_START_DISTANCE then
+	local distance = getDistanceToPen(player, pen)
+	if not distance or distance > ShearTimingData.MaxShearingDistance then
 		return
 	end
 
@@ -385,19 +344,28 @@ local function onStartShearing(player: Player, penId: any)
 	end
 
 	local health = sheep:GetAttribute("ShearHealth")
-	if type(health) ~= "number" or health <= 0 then
-		return
+	local maxHealth = sheep:GetAttribute("MaxShearHealth")
+	if type(health) ~= "number" or health <= 0 or type(maxHealth) ~= "number" or maxHealth <= 0 then
+		return -- already bare
 	end
+
+	local stats = ShearShopHandler.getStats(player)
+	local rarity = ShearTimingData.getRarityModifier(sheep:GetAttribute("Rarity"))
 
 	local session: Session = {
 		player = player,
 		pen = pen,
 		sheep = sheep,
 		sheepId = sheepId,
-		difficulty = ShearData.getDifficulty(sheep:GetAttribute("Rarity") :: string?),
 		active = true,
-		waveCounter = 0,
-		wave = nil,
+		damageMultiplier = stats.damageMultiplier,
+		damageScale = if ShearTimingData.ScaleDamageToWoolHealth then maxHealth / ShearTimingData.StartingWoolHealth else 1,
+		zoneScale = stats.zoneScale * rarity.zoneScale,
+		cursorSpeed = ShearTimingData.CursorSpeed * stats.cursorSpeed * rarity.cursorSpeed,
+		attemptCounter = 0,
+		attempt = nil,
+		lastSweetSpot = nil,
+		random = Random.new(),
 		connections = {},
 	}
 	sessions[player] = session
@@ -415,57 +383,44 @@ local function onStartShearing(player: Player, penId: any)
 	print(`{player.Name} started shearing {sheep.Name}.`)
 	network.fireClient(network.RemoteEvents.ActivateShearing, player, sheepId, pen.sheepPosition, pen.playerPosition)
 
-	task.spawn(runWaves, session)
+	task.spawn(runAttempts, session)
 end
 
 local function onStopShearing(player: Player)
 	shearHandler.leavePen(player)
 end
 
-local function onShearHit(player: Player, waveId: any, pointId: any)
+-- The client pressed: `position` is where it says the cursor was (0..1) on attempt `attemptId`.
+local function onShearPress(player: Player, attemptId: any, position: any)
 	local session = sessions[player]
 	if not session or not session.active then
 		return
 	end
 
-	local wave = session.wave
-	if not wave or wave.resolved or typeof(waveId) ~= "number" or wave.id ~= waveId then
-		return
+	local attempt = session.attempt
+	if not attempt or attempt.resolved or typeof(attemptId) ~= "number" or attempt.id ~= attemptId then
+		return -- stale, duplicate or made-up attempt
 	end
-	if typeof(pointId) ~= "string" then
-		return
-	end
-
-	local point = wave.points[pointId]
-	if not point or point.hit then
+	if typeof(position) ~= "number" or position ~= position or position < 0 or position > 1 then
 		return
 	end
 
-	local now = os.clock()
-	if now - wave.sentAt > wave.lifetime + ShearData.HitGraceSeconds then
+	local elapsed = os.clock() - attempt.sentAt
+	if elapsed > attempt.lifetime + ShearTimingData.LatencyAllowance then
+		return -- too late; the attempt times out as a miss
+	end
+
+	local windowStart = elapsed - ShearTimingData.LatencyAllowance
+	local windowEnd = math.min(elapsed, attempt.lifetime)
+	if not ShearTiming.wasPositionReachable(attempt, position, windowStart, windowEnd) then
+		warn(`ShearHandler: rejected an impossible press from {player.Name}.`)
+		resolveAttempt(session, attempt, "MISS", 0)
 		return
 	end
 
-	point.hit = true
-	ShearShopHandler.registerSnip(player)
-	wave.hits += 1
-	wave.damage += point.damage
-	wave.firstHitAt = wave.firstHitAt or now
-
-	if changeHealth(session, -point.damage) then
-		return
-	end
-
-	-- Last circle of the wave popped: a fast enough clear is a critical.
-	if wave.hits >= wave.total then
-		wave.resolved = true
-
-		if now - wave.firstHitAt <= wave.critWindow then
-			local bonus = math.round(wave.damage * (ShearData.CritMultiplier - 1))
-			network.fireClient(network.RemoteEvents.ShearFeedback, player, "Crit", bonus)
-			changeHealth(session, -bonus)
-		end
-	end
+	local distance = math.abs(position - attempt.sweetSpot)
+	local tier = ShearTiming.classify(distance, attempt.zones)
+	resolveAttempt(session, attempt, tier, computeDamage(session, tier, distance, attempt.zones))
 end
 
 --// Public API ------------------------------------------------------------------------
@@ -477,7 +432,7 @@ end
 
 --[[
 	Leaves the pen station: ends the mini-game if one is running (the sheep keeps whatever
-	health it has left), moves the player out of the pen and tells the client to release the camera.
+	wool it has left), moves the player out of the pen and tells the client to release the camera.
 ]]--
 function shearHandler.leavePen(player: Player)
 	local session = sessions[player]
@@ -507,7 +462,7 @@ function shearHandler.Start()
 
 	network.connectEvent(network.RemoteEvents.StartShearing, onStartShearing)
 	network.connectEvent(network.RemoteEvents.StopShearing, onStopShearing)
-	network.connectEvent(network.RemoteEvents.ShearHit, onShearHit)
+	network.connectEvent(network.RemoteEvents.ShearPress, onShearPress)
 
 	players.PlayerRemoving:Connect(function(player: Player)
 		stationPens[player] = nil

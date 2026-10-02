@@ -13,9 +13,8 @@ export type EnumType = "ActivateShearing"
     | "DeactivateShearing"
     | "StartShearing"
     | "StopShearing"
-    | "ShearWave"
-    | "ShearHit"
-    | "ShearFeedback"
+    | "ShearAttempt"
+    | "ShearPress"
     | "OpenPenMenu"
     | "ClosePenMenu"
     | "UpgradePen"
@@ -26,15 +25,15 @@ export type EnumType = "ActivateShearing"
     | "ShearPurchaseResult"
     | "PenSkinAction"
     | "PenSkinResult"
+    | "ReplacePen"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	ActivateShearing = "ActivateShearing",
     DeactivateShearing = "DeactivateShearing",
     StartShearing = "StartShearing",
     StopShearing = "StopShearing",
-    ShearWave = "ShearWave",
-    ShearHit = "ShearHit",
-    ShearFeedback = "ShearFeedback",
+    ShearAttempt = "ShearAttempt",
+    ShearPress = "ShearPress",
     OpenPenMenu = "OpenPenMenu",
     ClosePenMenu = "ClosePenMenu",
     UpgradePen = "UpgradePen",
@@ -45,6 +44,7 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
     ShearPurchaseResult = "ShearPurchaseResult",
     PenSkinAction = "PenSkinAction",
     PenSkinResult = "PenSkinResult",
+    ReplacePen = "ReplacePen",
 }
 
 return RemoteEventName

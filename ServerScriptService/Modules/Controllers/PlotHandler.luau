@@ -69,6 +69,14 @@ local function releasePlots(player: Player)
 	end
 end
 
+--[[
+	Returns the plot Folder the player owns, or nil if they haven't been given one (yet).
+	Every plot-bound system (sheep, pens, buttons) should look the plot up through this.
+]]--
+function PlotHandler.getPlayerPlot(player: Player): Folder?
+	return getOwnedPlot(player)
+end
+
 function PlotHandler.Setup()
 	players.PlayerAdded:Connect(assignPlot)
 	players.PlayerRemoving:Connect(releasePlots)
