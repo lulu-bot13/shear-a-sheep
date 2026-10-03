@@ -16,6 +16,7 @@ local serverScriptService = game:GetService("ServerScriptService")
 local network = require(replicatedStorage.Shared.Utils.Network)
 local InventoryHandler = require(serverScriptService.Modules.Controllers.InventoryHandler)
 local EconomyData = require(serverScriptService.Modules.Constants.EconomyData)
+local RebirthData = require(serverScriptService.Modules.Constants.RebirthData)
 
 --// Variables
 local onCooldown: { [Player]: boolean } = {}
@@ -26,8 +27,10 @@ local WOOL_ITEM = "Wool"
 local BASE_AMOUNT = EconomyData.WOOL_SELL_PRICE
 local COOLDOWN_SECONDS = 3
 
-local function calculateCashReward(woolAmount: number): number
-	return math.floor(woolAmount * BASE_AMOUNT)
+local function calculateCashReward(player: Player, woolAmount: number): number
+	local rebirths = player:GetAttribute("Rebirths")
+	local multiplier = RebirthData.getWoolMultiplier(if type(rebirths) == "number" then rebirths else 0)
+	return math.floor(woolAmount * BASE_AMOUNT * multiplier)
 end
 
 -- Sells the player's whole wool stack; nothing is taken unless the money can be paid out.
@@ -52,7 +55,7 @@ local function sellWool(player: Player)
 		return
 	end
 
-	local cash = calculateCashReward(woolAmount)
+	local cash = calculateCashReward(player, woolAmount)
 	money.Value += cash
 	print(`{player.Name} sold {woolAmount} wool for {cash}.`)
 	network.fireClient(network.RemoteEvents.WoolSold, player, woolAmount, cash)

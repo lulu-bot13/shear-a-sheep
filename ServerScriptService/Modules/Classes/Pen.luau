@@ -17,6 +17,7 @@ local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local InventoryHandler = require(script.Parent.Parent.Controllers.InventoryHandler)
 local EconomyData = require(script.Parent.Parent.Constants.EconomyData)
+local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
 
 --// Animations
 local sheepWalkingAnimation = replicatedStorage.Assets.Animations.SheepWalking
@@ -71,6 +72,18 @@ Pen.DEFAULT_PEN_TYPE = "Base_Pen"
 export type Pen = typeof(setmetatable({} :: PenFields, Pen))
 
 local penBySheepId: { [number]: Pen } = {}
+
+--[[
+	Gets how many rebirths a player has completed.
+
+	@param player The player to look up
+
+	@return The rebirth count, 0 if they have none
+]]--
+local function getRebirths(player: Player): number
+	local count = player:GetAttribute("Rebirths")
+	return if type(count) == "number" then count else 0
+end
 
 -- Pathfinds between each waypoint in order and returns the turning points of the whole route.
 local function computeRoute(startPosition: Vector3, waypoints: { BasePart }): { Vector3 }
@@ -187,7 +200,8 @@ function Pen.getEstimatedMoneyPerMinute(self: Pen): number
 		return 0
 	end
 
-	return (expectedWool / expectedCycleSeconds) * 60 * EconomyData.WOOL_SELL_PRICE
+	local woolMultiplier = RebirthData.getWoolMultiplier(getRebirths(self.owner))
+	return (expectedWool / expectedCycleSeconds) * 60 * EconomyData.WOOL_SELL_PRICE * woolMultiplier
 end
 
 -- Adds the "Est. $X/min" label above a freshly hired worker.
@@ -291,9 +305,14 @@ end
 -- Shows/updates the sheep health bar while the pen has a worker and a sheep waiting; hides it otherwise.
 function Pen._updateHealthBillboard(self: Pen)
 	local sheep = if self.occupiedSheepId then SheepHandler.getSheep(self.occupiedSheepId) else nil
-	assert(sheep, `Sheep not found when trying to update health billboard.`)
+	if not sheep then
+		if self.healthBillboard then
+			self.healthBillboard.Enabled = false
+		end
+		return
+	end
 
-	local root = if sheep then sheep:FindFirstChild("HumanoidRootPart") else nil
+	local root = sheep:FindFirstChild("HumanoidRootPart")
 	local shouldShow = self.data.automated and self.seated and not self.destroyed and root ~= nil and root:IsA("BasePart")
 
 	if not shouldShow then
@@ -367,7 +386,7 @@ function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart 
 		return nil
 	end
 
-	return setmetatable({
+	local pen = setmetatable({
 		id = id,
 		owner = owner,
 		penModel = model,
@@ -390,6 +409,12 @@ function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart 
 		workerModel = nil,
 		data = { money = 0, automated = false },
 	}, Pen)
+
+	if getRebirths(owner) > 0 then
+		pen:refreshChances()
+	end
+
+	return pen
 end
 
 --[[
@@ -468,9 +493,40 @@ function Pen.upgrade(self: Pen): boolean
 	end
 
 	self.level += 1
-	self.data.chances = SheepData.buildChancesForLevel(self.level)
-	self:_refreshWorkerLabel()
+	self:refreshChances()
 	return true
+end
+
+--[[
+	Rebuilds the pen's spawn odds from its level and the owner's rebirth luck bonus.
+]]--
+function Pen.refreshChances(self: Pen)
+	local luck = RebirthData.getLuckBonus(getRebirths(self.owner))
+	self.data.chances = SheepData.buildChancesForLevel(self.level, luck)
+	self:_refreshWorkerLabel()
+end
+
+--[[
+	Puts the pen back to level 1 without a worker (used by rebirth); a sheep already waiting stays.
+]]--
+function Pen.reset(self: Pen)
+	self.level = 1
+	self.data.automated = false
+	self.data.money = 0
+
+	local worker = self.workerModel
+	if worker then
+		local index = table.find(self.extras, worker)
+		if index then
+			table.remove(self.extras, index)
+		end
+		worker:Destroy()
+		self.workerModel = nil
+	end
+	self.workerLabel = nil
+
+	self:refreshChances()
+	self:_updateHealthBillboard()
 end
 
 local R6_BODY_PARTS = { "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "HumanoidRootPart" }
