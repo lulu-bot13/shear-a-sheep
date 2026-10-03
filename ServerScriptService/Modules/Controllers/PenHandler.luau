@@ -302,6 +302,30 @@ function PenHandler.removePen(player: Player, pen: Pen.Pen): boolean
 end
 
 --[[
+	Takes a player's plot back to a single, level 1 base pen without a worker (used by rebirth).
+	Pens that were swapped to another type go back to the player's inventory so no pen is lost.
+]]--
+function PenHandler.resetPens(player: Player)
+	local ownedPens = playerPens[player]
+	if not ownedPens then
+		return
+	end
+
+	while #ownedPens > 1 do
+		local pen = ownedPens[#ownedPens]
+		if pen.penType ~= Pen.DEFAULT_PEN_TYPE then
+			InventoryHandler.addPen(player, pen.penType)
+		end
+		PenHandler.removePen(player, pen)
+	end
+
+	local basePen = ownedPens[1]
+	if basePen then
+		basePen:reset()
+	end
+end
+
+--[[
 	Replaces a pen's model with one of the pens in the player's inventory. The pen type the pen had
 	goes back into the inventory, so nothing is lost. Returns false if the swap isn't allowed.
 ]]

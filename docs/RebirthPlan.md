@@ -143,3 +143,9 @@ All checks run on the server; the client only displays.
 5. Multipliers in `SellWoolHandler` and the luck bonus.
 6. Client panel on the existing Rebirth button.
 7. Measure income and set `M0` (see "Tuning `M0`").
+
+## Implementation status
+
+Built (steps 2–6 of the build order): `RebirthData`, `Pen:reset` / `PenHandler.resetPens`, `RebirthHandler` with the `RebirthRequest` / `RebirthUpdate` remotes, the wool sell bonus in `SellWoolHandler`, the luck bonus in `SheepData.buildChancesForLevel` / `Pen:refreshChances`, and `RebirthClient`, which wires up the existing HUD button named `Rebirth`.
+
+Not built: persistence (step 1) and measuring income to set `RebirthData.M0` (step 7). `M0` is currently a placeholder.
