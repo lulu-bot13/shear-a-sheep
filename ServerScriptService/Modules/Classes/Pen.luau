@@ -8,7 +8,6 @@
 
 --// Services
 local pathfindingService = game:GetService("PathfindingService")
-local runService = game:GetService("RunService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -27,8 +26,6 @@ local RESPAWN_DELAY_SECONDS = 3
 local SHEEP_WALK_SPEED = 8
 local SHEEP_Y_OFFSET = 1.45 -- how far above the pen's SheepPos the sheep's root sits while waiting to be sheared (puts its hooves on the grass)
 local REACH_DISTANCE = 3
-local LOOKAHEAD_DISTANCE = 4
-local STEP_TIMEOUT_SECONDS = 6
 local AGENT_PARAMS = { AgentRadius = 3, AgentHeight = 4, AgentCanJump = false, WaypointSpacing = math.huge }
 local WORKER_SHEAR_INTERVAL_SECONDS = 1.5
 local ASSUMED_ARRIVAL_SECONDS = 6 -- starting guess for how long a sheep takes to walk into the pen
@@ -294,6 +291,8 @@ end
 -- Shows/updates the sheep health bar while the pen has a worker and a sheep waiting; hides it otherwise.
 function Pen._updateHealthBillboard(self: Pen)
 	local sheep = if self.occupiedSheepId then SheepHandler.getSheep(self.occupiedSheepId) else nil
+	assert(sheep, `Sheep not found when trying to update health billboard.`)
+
 	local root = if sheep then sheep:FindFirstChild("HumanoidRootPart") else nil
 	local shouldShow = self.data.automated and self.seated and not self.destroyed and root ~= nil and root:IsA("BasePart")
 
