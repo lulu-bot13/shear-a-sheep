@@ -94,7 +94,15 @@ local function findPlotParts(plot: Folder): PlotParts?
 	}
 end
 
--- Extends the route by cloning its first waypoint into the new pen's slot.
+--[[
+	Adds a waypoint for a new pen by cloning the route's first waypoint into the pen's slot.
+
+	@param folder The plot's Waypoints folder
+	@param waypoints The waypoints the route already has
+	@param offset The offset from the base pen to the new pen's slot
+
+	@return The new waypoint, or nil if the plot has no waypoints
+]]--
 local function createWaypoint(folder: Folder?, waypoints: { BasePart }, offset: Vector3): BasePart?
 	local first = waypoints[1]
 	if not folder or not first then
@@ -108,7 +116,15 @@ local function createWaypoint(folder: Folder?, waypoints: { BasePart }, offset: 
 	return waypoint
 end
 
--- Clones the first path piece into the new pen's slot, trimmed slightly so neighbours don't z-fight.
+--[[
+	Adds a piece of path for a new pen by cloning the first piece into the pen's slot.
+
+	@param paths The plot's Paths folder
+	@param penNumber The new pen's number
+	@param offset The offset from the base pen to the new pen's slot
+
+	@return The new path piece, or nil if the plot has no paths
+]]--
 local function createPathPiece(paths: Folder?, penNumber: number, offset: Vector3): BasePart?
 	local template = if paths then paths:FindFirstChildWhichIsA("BasePart") else nil
 	if not paths or not template then
@@ -203,10 +219,12 @@ local function onPlayerRemoving(player: Player)
 end
 
 --[[
-	Creates the player's next pen: clones Base_Pen into its predetermined slot (see PenLayout),
-	extends the waypoint route to it and adds a matching piece of path.
-	Returns the new pen, or nil if the player has no valid plot.
-]]
+	Creates the player's next pen in its predetermined slot, with its waypoint and path piece.
+
+	@param player The player buying the pen
+
+	@return The new pen, or nil if the player has no valid plot or no free slot
+]]--
 function PenHandler.createPen(player: Player): Pen.Pen?
 	local ownedPens = playerPens[player]
 	local plot = getPlot(player)
@@ -302,8 +320,10 @@ function PenHandler.removePen(player: Player, pen: Pen.Pen): boolean
 end
 
 --[[
-	Takes a player's plot back to a single, level 1 base pen without a worker (used by rebirth).
-	Pens that were swapped to another type go back to the player's inventory so no pen is lost.
+	Takes a player's plot back to one level 1 base pen without a worker (used by rebirth).
+	Pens swapped to another type go back to the player's inventory.
+
+	@param player The player whose pens are reset
 ]]--
 function PenHandler.resetPens(player: Player)
 	local ownedPens = playerPens[player]

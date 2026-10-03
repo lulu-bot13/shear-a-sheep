@@ -129,8 +129,14 @@ function sheepData.getTotalWeight(chances: { [string]: number }?): number
 	return total
 end
 
--- Builds a chances table (sheepName -> weight) for the given pen level, biasing rarer tiers upward.
--- `luckBonus` (from rebirths) makes Rare+ sheep that much more likely on top of the level's multipliers.
+--[[
+	Builds the spawn weights for a pen level, biasing rarer tiers upward.
+
+	@param level The pen's level
+	@param luckBonus Extra weight for Rare and better sheep from rebirths (0.1 = 10% more likely)
+
+	@return A table of sheepName -> weight, or nil to use the base table as-is
+]]--
 function sheepData.buildChancesForLevel(level: number, luckBonus: number?): { [string]: number }?
 	local multipliers = sheepData.UpgradeMultipliers[level]
 	local bonus = luckBonus or 0

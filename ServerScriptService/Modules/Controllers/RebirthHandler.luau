@@ -1,18 +1,11 @@
 --!strict
 
 --[[
-	Server side of rebirth (prestige). To rebirth a player needs, all at once:
-	  - a sheep of at least the required rarity seated in one of their pens (it is used up),
-	  - enough money,
-	  - enough wool in their inventory.
-	Rebirthing resets money, wool, pens and pen upgrades, and raises the "Rebirths" player attribute,
-	which drives the wool sell bonus (SellWoolHandler) and the Rare+ luck bonus (Pen).
+	Server side of rebirth. A rebirth needs a sheep of the required rarity seated in a pen (it is used up),
+	enough money and enough wool. It resets money, wool, pens and upgrades and raises the "Rebirths" player attribute.
 
-	The client only asks and displays: every requirement is checked here, and the check and the
-	reset happen without yielding so the state can't change in between.
-
-	Request actions (RebirthRequest): "Status" refreshes the panel, "Confirm" attempts the rebirth.
-	Replies come on RebirthUpdate as (status, result?) where result is "Success" or a failure reason.
+	Client requests (RebirthRequest): "Status" refreshes the screen, "Confirm" attempts the rebirth.
+	Replies come on RebirthUpdate as (status, result?), where result is "Success" or the reason it was refused.
 
 	Location: ServerScriptService.Modules.Controllers.RebirthHandler
 ]]--
@@ -34,34 +27,58 @@ local REBIRTHS_ATTRIBUTE = "Rebirths"
 local WOOL_ITEM = "Wool"
 local REQUEST_COOLDOWN_SECONDS = 0.3
 
-export type Status = {
-	rebirths: number,
-	maxed: boolean,
-	nextRebirth: number,
-	minRarity: string,
-	money: { have: number, need: number, met: boolean },
-	wool: { have: number, need: number, met: boolean },
-	sheep: { met: boolean, name: string? },
-	canRebirth: boolean,
+export type Requirement = {
+	id: string,
+	label: string,
+	current: number,
+	required: number,
+	met: boolean,
 }
 
---// State
-local rebirthing: { [Player]: boolean } = {}
+export type Status = {
+	rebirths: number,
+	nextRebirth: number,
+	maxed: boolean,
+	canRebirth: boolean,
+	money: { current: number, required: number, met: boolean },
+	requirements: { Requirement },
+}
 
 local RebirthHandler = {}
 
+--[[
+	Gets a player's Money stat.
+
+	@param player The player to look up
+
+	@return The Money IntValue, or nil if the player has none
+]]--
 local function getMoney(player: Player): IntValue?
 	local leaderstats = player:FindFirstChild("leaderstats")
 	local money = leaderstats and leaderstats:FindFirstChild("Money")
 	return if money and money:IsA("IntValue") then money else nil
 end
 
+--[[
+	Gets how many rebirths a player has completed.
+
+	@param player The player to look up
+
+	@return The rebirth count, 0 if they have none
+]]--
 function RebirthHandler.getRebirths(player: Player): number
 	local count = player:GetAttribute(REBIRTHS_ATTRIBUTE)
 	return if type(count) == "number" then count else 0
 end
 
--- Finds a pen whose seated sheep is good enough for rebirth n; returns the pen and the sheep.
+--[[
+	Finds a pen holding a seated sheep that is rare enough for a rebirth.
+
+	@param player The player whose pens are searched
+	@param n The rebirth being attempted
+
+	@return The pen and its sheep, or nil for both if none qualifies
+]]--
 local function findQualifyingSheep(player: Player, n: number): (any?, Model?)
 	for _, pen in PenHandler.getPens(player) do
 		local id = pen.occupiedSheepId
@@ -73,40 +90,55 @@ local function findQualifyingSheep(player: Player, n: number): (any?, Model?)
 	return nil, nil
 end
 
+--[[
+	Builds everything the rebirth screen shows: the money bar and one entry per item the player must have.
+
+	@param player The player the screen is for
+
+	@return The status table sent to the client
+]]--
 function RebirthHandler.getStatus(player: Player): Status
 	local rebirths = RebirthHandler.getRebirths(player)
 	local n = rebirths + 1
-	local requirements = RebirthData.getRequirements(n)
+	local needed = RebirthData.getRequirements(n)
 
 	local money = getMoney(player)
 	local moneyHave = if money then money.Value else 0
 	local woolHave = InventoryHandler.getItem(player, WOOL_ITEM)
 	local _, sheep = findQualifyingSheep(player, n)
 
-	local maxed = rebirths >= RebirthData.MAX_REBIRTHS
-	local moneyMet = moneyHave >= requirements.money
-	local woolMet = woolHave >= requirements.wool
+	local moneyMet = moneyHave >= needed.money
+	local woolMet = woolHave >= needed.wool
 	local sheepMet = sheep ~= nil
-
-	local sheepName = if sheep then sheep:GetAttribute("SheepName") else nil
+	local maxed = rebirths >= RebirthData.MAX_REBIRTHS
 
 	return {
 		rebirths = rebirths,
-		maxed = maxed,
 		nextRebirth = n,
-		minRarity = requirements.minRarity,
-		money = { have = moneyHave, need = requirements.money, met = moneyMet },
-		wool = { have = woolHave, need = requirements.wool, met = woolMet },
-		sheep = { met = sheepMet, name = if type(sheepName) == "string" then sheepName else nil },
+		maxed = maxed,
 		canRebirth = not maxed and moneyMet and woolMet and sheepMet,
+		money = { current = moneyHave, required = needed.money, met = moneyMet },
+		requirements = {
+			{
+				id = "Sheep",
+				label = `{needed.minRarity} or better sheep in a pen`,
+				current = if sheepMet then 1 else 0,
+				required = 1,
+				met = sheepMet,
+			},
+			{ id = "Wool", label = "Wool", current = woolHave, required = needed.wool, met = woolMet },
+		},
 	}
 end
 
--- Attempts a rebirth; returns "Success" or the reason it was refused.
+--[[
+	Checks every requirement and, if all are met, performs the rebirth.
+
+	@param player The player rebirthing
+
+	@return "Success", or the reason it was refused: "Shearing", "Maxed", "NoSheep", "NoMoney" or "NoWool"
+]]--
 function RebirthHandler.tryRebirth(player: Player): string
-	if rebirthing[player] then
-		return "Busy"
-	end
 	if ShearHandler.isShearing(player) then
 		return "Shearing"
 	end
@@ -119,25 +151,17 @@ function RebirthHandler.tryRebirth(player: Player): string
 	local n = status.nextRebirth
 	local pen, sheep = findQualifyingSheep(player, n)
 	local money = getMoney(player)
-	if not money then
-		return "NoMoney"
-	end
-	if not sheep or not pen then
+	if not pen or not sheep then
 		return "NoSheep"
 	end
-	if not status.money.met then
+	if not money or not status.money.met then
 		return "NoMoney"
 	end
-	if not status.wool.met then
+	if not InventoryHandler.hasItem(player, WOOL_ITEM, RebirthData.getRequirements(n).wool) then
 		return "NoWool"
 	end
 
-	-- Everything is checked: from here to the end nothing yields, so it all happens or none of it does.
-	rebirthing[player] = true
-
-	local requirements = RebirthData.getRequirements(n)
-	local sheepId = pen.occupiedSheepId :: number
-	SheepHandler.removeSheep(sheepId)
+	SheepHandler.removeSheep(pen.occupiedSheepId)
 	pen:releaseSheep()
 
 	InventoryHandler.removeItem(player, WOOL_ITEM, InventoryHandler.getItem(player, WOOL_ITEM))
@@ -145,20 +169,37 @@ function RebirthHandler.tryRebirth(player: Player): string
 	player:SetAttribute(REBIRTHS_ATTRIBUTE, n)
 	PenHandler.resetPens(player)
 
-	rebirthing[player] = nil
-	print(`{player.Name} rebirthed (#{n}, needed {requirements.money} money, {requirements.wool} wool, {requirements.minRarity}+ sheep).`)
+	print(`{player.Name} reached rebirth {n}.`)
 	return "Success"
 end
 
+--[[
+	Answers a client's rebirth request with the current status (and the result of a confirm).
+
+	@param player The player who sent the request
+	@param action "Status" or "Confirm"
+]]--
 local function onRebirthRequest(player: Player, action: any)
-	if action == "Status" then
-		network.fireClient(network.RemoteEvents.RebirthUpdate, player, RebirthHandler.getStatus(player), nil)
-	elseif action == "Confirm" then
-		local result = RebirthHandler.tryRebirth(player)
+	local result = if action == "Confirm" then RebirthHandler.tryRebirth(player) else nil
+	if action == "Status" or action == "Confirm" then
 		network.fireClient(network.RemoteEvents.RebirthUpdate, player, RebirthHandler.getStatus(player), result)
 	end
 end
 
+--[[
+	Gives a player a Rebirths attribute of 0 if they don't have one yet.
+
+	@param player The player to set up
+]]--
+local function setupPlayer(player: Player)
+	if player:GetAttribute(REBIRTHS_ATTRIBUTE) == nil then
+		player:SetAttribute(REBIRTHS_ATTRIBUTE, 0)
+	end
+end
+
+--[[
+	Starts listening for rebirth requests and sets up every player.
+]]--
 function RebirthHandler.Start()
 	network.waitUntilReadyAsync()
 
@@ -166,20 +207,10 @@ function RebirthHandler.Start()
 		network.Middleware.RateLimit(REQUEST_COOLDOWN_SECONDS),
 	})
 
-	players.PlayerAdded:Connect(function(player: Player)
-		if player:GetAttribute(REBIRTHS_ATTRIBUTE) == nil then
-			player:SetAttribute(REBIRTHS_ATTRIBUTE, 0)
-		end
-	end)
+	players.PlayerAdded:Connect(setupPlayer)
 	for _, player in players:GetPlayers() do
-		if player:GetAttribute(REBIRTHS_ATTRIBUTE) == nil then
-			player:SetAttribute(REBIRTHS_ATTRIBUTE, 0)
-		end
+		setupPlayer(player)
 	end
-
-	players.PlayerRemoving:Connect(function(player: Player)
-		rebirthing[player] = nil
-	end)
 end
 
 return RebirthHandler

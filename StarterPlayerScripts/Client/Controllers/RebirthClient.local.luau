@@ -1,7 +1,7 @@
 --[[
-	Rebirth panel. Opens from the HUD's "Rebirth" button and lists the three things a rebirth needs
-	(a sheep in a pen, money, wool) with a tick or cross each. The Rebirth button inside the panel
-	is only enabled when everything is met. The server (RebirthHandler) checks it all again.
+	Drives the RebirthScreen UI (StarterGui.RebirthScreen): the money bar, one row per required item
+	(cloned from Main.Requirements.Template), the requirement tip, and the Rebirth and Exit buttons.
+	The HUD's "Rebirth" button opens it. The server (RebirthHandler) decides everything.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.RebirthClient
 ]]--
@@ -15,222 +15,185 @@ local tweenService = game:GetService("TweenService")
 local network = require(replicatedStorage.Shared.Utils.Network)
 
 --// Instances
-local player = players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+local playerGui = players.LocalPlayer:WaitForChild("PlayerGui")
+local screen = playerGui:WaitForChild("RebirthScreen") :: ScreenGui
+local main = screen:WaitForChild("Main") :: Frame
+local moneyBar = main:WaitForChild("MoneyBar") :: Frame
+local progress = moneyBar:WaitForChild("Progress") :: Frame
+local moneyText = moneyBar:WaitForChild("MoneyText") :: TextLabel
+local tipText = main:WaitForChild("RequirementTip"):WaitForChild("RequirementText") :: TextLabel
+local requirementsFrame = main:WaitForChild("Requirements") :: Frame
+local template = requirementsFrame:WaitForChild("Template") :: Frame
+local exitButton = main:WaitForChild("Exit") :: GuiButton
+local rebirthButton = main:WaitForChild("Rebirth") :: GuiButton
 
 --// Configs
 local HUD_BUTTON_NAME = "Rebirth"
 local REFRESH_SECONDS = 1
 local FIND_BUTTON_SECONDS = 15
-local RESULT_SECONDS = 2.5
-local FONT = Enum.Font.SourceSansBold
-local PANEL_COLOR = Color3.fromRGB(16, 17, 24)
-local ROW_COLOR = Color3.fromRGB(30, 32, 44)
-local GOLD = Color3.fromRGB(255, 176, 32)
-local GREEN = Color3.fromRGB(110, 255, 130)
-local RED = Color3.fromRGB(255, 100, 100)
-local WHITE = Color3.new(1, 1, 1)
-local MUTED = Color3.fromRGB(200, 202, 212)
-local POP_IN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local TIP_SECONDS = 3
+local BAR_TWEEN = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
-local FAILURE_TEXT = {
-	NoSheep = "You need a good enough sheep in a pen",
+local RESULT_TEXT = {
+	Success = "Reborn!",
+	NoSheep = "You need a better sheep in a pen",
 	NoMoney = "Not enough money",
 	NoWool = "Not enough wool",
 	Shearing = "Finish shearing first",
-	Busy = "Please wait...",
 	Maxed = "You are at the maximum rebirth",
 }
 
-type Row = { icon: TextLabel, detail: TextLabel }
-
 --// State
+local rows: { [string]: Frame } = {}
 local isOpen = false
-local resultToken = 0
-local latest: any = nil
+local canRebirth = false
+local latestStatus: any = nil
+local tipLocked = false
+local tipToken = 0
 
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "RebirthGui"
-screenGui.ResetOnSpawn = false
-screenGui.DisplayOrder = 10
-screenGui.Parent = playerGui
+--[[
+	Formats a number with thousands separators.
 
+	@param amount The number to format
+
+	@return The formatted text, e.g. "32,000"
+]]--
 local function formatNumber(amount: number): string
 	local digits = tostring(math.floor(math.abs(amount)))
 	local grouped = digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
 	return grouped
 end
 
-local function addCorner(instance: Instance, radius: number)
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, radius)
-	corner.Parent = instance
+--[[
+	Gets the row for a requirement, cloning it from the template the first time.
+
+	@param id The requirement's id, e.g. "Sheep"
+	@param order Where the row sits in the list
+
+	@return The row Frame
+]]--
+local function getRow(id: string, order: number): Frame
+	local row = rows[id]
+	if row then
+		return row
+	end
+
+	row = template:Clone()
+	row.Name = id
+	row.LayoutOrder = order
+	row.Visible = true
+	row.Parent = requirementsFrame
+	rows[id] = row
+	return row
 end
 
-local function newLabel(parent: Instance, text: string, size: number, color: Color3): TextLabel
-	local label = Instance.new("TextLabel")
-	label.BackgroundTransparency = 1
-	label.Font = FONT
-	label.Text = text
-	label.TextSize = size
-	label.TextColor3 = color
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.Parent = parent
-	return label
+--[[
+	Fills a requirement row with its text and shows its Completed marker once it is met.
+
+	@param requirement The requirement from the server status
+	@param order Where the row sits in the list
+]]--
+local function updateRow(requirement: any, order: number)
+	local row = getRow(requirement.id, order)
+	local label = row:FindFirstChild("TextLabel") :: TextLabel
+	local completed = row:FindFirstChild("Completed") :: GuiObject
+
+	label.Text = if requirement.required > 1
+		then `{requirement.label}: {formatNumber(requirement.current)}/{formatNumber(requirement.required)}`
+		else requirement.label
+	completed.Visible = requirement.met
 end
 
---// Panel ---------------------------------------------------------------------------
+--[[
+	Works out what the requirement tip should say for a status.
 
-local panel = Instance.new("Frame")
-panel.Name = "Panel"
-panel.AnchorPoint = Vector2.new(0.5, 0.5)
-panel.Position = UDim2.fromScale(0.5, 0.5)
-panel.Size = UDim2.fromOffset(380, 330)
-panel.BackgroundColor3 = PANEL_COLOR
-panel.Visible = false
-panel.Parent = screenGui
-addCorner(panel, 14)
+	@param status The status from the server
 
-local panelStroke = Instance.new("UIStroke")
-panelStroke.Color = GOLD
-panelStroke.Thickness = 3
-panelStroke.Parent = panel
+	@return The tip text
+]]--
+local function getTip(status: any): string
+	if status.maxed then
+		return "Maximum rebirths reached"
+	end
+	if status.canRebirth then
+		return "Ready to rebirth!"
+	end
 
-local panelScale = Instance.new("UIScale")
-panelScale.Parent = panel
-
-local title = newLabel(panel, "Rebirth", 34, GOLD)
-title.Position = UDim2.fromOffset(16, 8)
-title.Size = UDim2.new(1, -60, 0, 40)
-
-local closeButton = Instance.new("TextButton")
-closeButton.Name = "Close"
-closeButton.AnchorPoint = Vector2.new(1, 0)
-closeButton.Position = UDim2.new(1, -10, 0, 10)
-closeButton.Size = UDim2.fromOffset(34, 34)
-closeButton.BackgroundColor3 = RED
-closeButton.Font = FONT
-closeButton.Text = "X"
-closeButton.TextSize = 22
-closeButton.TextColor3 = WHITE
-closeButton.Parent = panel
-addCorner(closeButton, 8)
-
-local subtitle = newLabel(panel, "", 20, MUTED)
-subtitle.Position = UDim2.fromOffset(16, 48)
-subtitle.Size = UDim2.new(1, -32, 0, 24)
-
-local function buildRow(name: string, order: number): Row
-	local frame = Instance.new("Frame")
-	frame.Name = name
-	frame.Position = UDim2.fromOffset(16, 82 + (order - 1) * 62)
-	frame.Size = UDim2.new(1, -32, 0, 54)
-	frame.BackgroundColor3 = ROW_COLOR
-	frame.Parent = panel
-	addCorner(frame, 10)
-
-	local icon = newLabel(frame, "", 30, RED)
-	icon.TextXAlignment = Enum.TextXAlignment.Center
-	icon.Position = UDim2.fromOffset(6, 0)
-	icon.Size = UDim2.fromOffset(40, 54)
-
-	local heading = newLabel(frame, name, 22, WHITE)
-	heading.Position = UDim2.fromOffset(52, 4)
-	heading.Size = UDim2.new(1, -60, 0, 24)
-
-	local detail = newLabel(frame, "", 18, MUTED)
-	detail.Position = UDim2.fromOffset(52, 28)
-	detail.Size = UDim2.new(1, -60, 0, 22)
-
-	return { icon = icon, detail = detail }
+	for _, requirement in status.requirements do
+		if not requirement.met then
+			return `Still needed: {requirement.label}`
+		end
+	end
+	return "Still needed: more money"
 end
 
-local sheepRow = buildRow("Sheep", 1)
-local moneyRow = buildRow("Money", 2)
-local woolRow = buildRow("Wool", 3)
+--[[
+	Shows a message in the requirement tip for a few seconds, then returns to the normal tip.
 
-local rebirthButton = Instance.new("TextButton")
-rebirthButton.Name = "Confirm"
-rebirthButton.AnchorPoint = Vector2.new(0.5, 1)
-rebirthButton.Position = UDim2.new(0.5, 0, 1, -34)
-rebirthButton.Size = UDim2.new(1, -32, 0, 44)
-rebirthButton.Font = FONT
-rebirthButton.Text = "Rebirth"
-rebirthButton.TextSize = 26
-rebirthButton.TextColor3 = WHITE
-rebirthButton.Parent = panel
-addCorner(rebirthButton, 10)
+	@param text The message to show
+]]--
+local function flashTip(text: string)
+	tipToken += 1
+	local token = tipToken
+	tipLocked = true
+	tipText.Text = text
 
-local message = newLabel(panel, "", 18, RED)
-message.AnchorPoint = Vector2.new(0.5, 1)
-message.Position = UDim2.new(0.5, 0, 1, -8)
-message.Size = UDim2.new(1, -32, 0, 22)
-message.TextXAlignment = Enum.TextXAlignment.Center
-
---// Behaviour -----------------------------------------------------------------------
-
-local function setRow(row: Row, met: boolean, detail: string)
-	row.icon.Text = if met then "✓" else "✗"
-	row.icon.TextColor3 = if met then GREEN else RED
-	row.detail.Text = detail
-end
-
-local function showMessage(text: string, color: Color3)
-	resultToken += 1
-	local token = resultToken
-	message.Text = text
-	message.TextColor3 = color
-
-	task.delay(RESULT_SECONDS, function()
-		if token == resultToken then
-			message.Text = ""
+	task.delay(TIP_SECONDS, function()
+		if token == tipToken then
+			tipLocked = false
+			tipText.Text = if latestStatus then getTip(latestStatus) else ""
 		end
 	end)
 end
 
-local function render(status: any)
-	latest = status
+--[[
+	Redraws the whole screen from a server status.
 
-	if status.maxed then
-		subtitle.Text = `Rebirths: {status.rebirths} (maximum)`
-	else
-		subtitle.Text = `Rebirths: {status.rebirths}  ·  Next: #{status.nextRebirth}`
+	@param status The status from the server
+]]--
+local function render(status: any)
+	latestStatus = status
+	canRebirth = status.canRebirth
+
+	local ratio = math.clamp(status.money.current / status.money.required, 0, 1)
+	local size = progress.Size
+	tweenService:Create(progress, BAR_TWEEN, { Size = UDim2.new(ratio, 0, size.Y.Scale, size.Y.Offset) }):Play()
+	moneyText.Text = `${formatNumber(status.money.current)}/${formatNumber(status.money.required)}`
+
+	for order, requirement in status.requirements do
+		updateRow(requirement, order)
 	end
 
-	local sheepDetail = if status.sheep.met
-		then `{status.sheep.name or "A sheep"} is ready in a pen`
-		else `Get a {status.minRarity} or better sheep into a pen`
-	setRow(sheepRow, status.sheep.met, sheepDetail)
-	setRow(moneyRow, status.money.met, `${formatNumber(status.money.have)} / ${formatNumber(status.money.need)}`)
-	setRow(woolRow, status.wool.met, `{formatNumber(status.wool.have)} / {formatNumber(status.wool.need)} (don't sell it)`)
-
-	rebirthButton.Active = status.canRebirth
-	rebirthButton.AutoButtonColor = status.canRebirth
-	rebirthButton.BackgroundColor3 = if status.canRebirth then Color3.fromRGB(46, 160, 67) else Color3.fromRGB(70, 72, 84)
+	rebirthButton.Interactable = canRebirth
+	if not tipLocked then
+		tipText.Text = getTip(status)
+	end
 end
 
+--[[
+	Asks the server for the latest status.
+]]--
 local function requestStatus()
 	network.fireServer(network.RemoteEvents.RebirthRequest, "Status")
 end
 
+--[[
+	Opens or closes the screen; while open it keeps refreshing the status.
+
+	@param open True to open, false to close
+]]--
 local function setOpen(open: boolean)
 	if open == isOpen then
 		return
 	end
-	isOpen = open
 
+	isOpen = open
+	screen.Enabled = open
 	if not open then
-		panel.Visible = false
 		return
 	end
 
-	message.Text = ""
-	panelScale.Scale = 0.7
-	panel.Visible = true
-	tweenService:Create(panelScale, POP_IN, { Scale = 1 }):Play()
 	requestStatus()
-
-	-- Keep the ticks live (money and wool change as sheep are sheared) while the panel is open.
 	task.spawn(function()
 		while isOpen do
 			task.wait(REFRESH_SECONDS)
@@ -241,46 +204,54 @@ local function setOpen(open: boolean)
 	end)
 end
 
-closeButton.Activated:Connect(function()
-	setOpen(false)
-end)
+--[[
+	Opens or closes the screen whenever the HUD's Rebirth button is pressed.
 
-rebirthButton.Activated:Connect(function()
-	if not latest or not latest.canRebirth then
-		return
-	end
-	network.fireServer(network.RemoteEvents.RebirthRequest, "Confirm")
-end)
-
--- The HUD's Rebirth button already exists in Studio; find it by name and wire it up.
+	@param button The HUD button
+]]--
 local function connectHudButton(button: GuiButton)
 	button.Activated:Connect(function()
 		setOpen(not isOpen)
 	end)
 end
 
-task.spawn(function()
+--[[
+	Finds the HUD's Rebirth button (outside RebirthScreen) and connects it.
+]]--
+local function findHudButton()
 	local deadline = os.clock() + FIND_BUTTON_SECONDS
 	while os.clock() < deadline do
 		for _, descendant in playerGui:GetDescendants() do
-			if descendant.Name == HUD_BUTTON_NAME and descendant:IsA("GuiButton") and not screenGui:IsAncestorOf(descendant) then
+			if descendant.Name == HUD_BUTTON_NAME and descendant:IsA("GuiButton") and not screen:IsAncestorOf(descendant) then
 				connectHudButton(descendant)
 				return
 			end
 		end
 		task.wait(0.5)
 	end
-	warn(`RebirthClient: no button named '{HUD_BUTTON_NAME}' found in PlayerGui.`)
+	warn(`RebirthClient: no HUD button named '{HUD_BUTTON_NAME}' found.`)
+end
+
+template.Visible = false
+screen.Enabled = false
+
+exitButton.Activated:Connect(function()
+	setOpen(false)
 end)
+
+rebirthButton.Activated:Connect(function()
+	if canRebirth then
+		network.fireServer(network.RemoteEvents.RebirthRequest, "Confirm")
+	end
+end)
+
+task.spawn(findHudButton)
 
 network.waitUntilReadyAsync()
 
 network.connectEvent(network.RemoteEvents.RebirthUpdate, function(status: any, result: any)
 	render(status)
-
-	if result == "Success" then
-		showMessage(`Reborn! Rebirth #{status.rebirths}`, GREEN)
-	elseif type(result) == "string" then
-		showMessage(FAILURE_TEXT[result] or "Can't rebirth right now", RED)
+	if type(result) == "string" then
+		flashTip(RESULT_TEXT[result] or "Can't rebirth right now")
 	end
 end)

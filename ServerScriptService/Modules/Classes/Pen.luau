@@ -73,6 +73,13 @@ export type Pen = typeof(setmetatable({} :: PenFields, Pen))
 
 local penBySheepId: { [number]: Pen } = {}
 
+--[[
+	Gets how many rebirths a player has completed.
+
+	@param player The player to look up
+
+	@return The rebirth count, 0 if they have none
+]]--
 local function getRebirths(player: Player): number
 	local count = player:GetAttribute("Rebirths")
 	return if type(count) == "number" then count else 0
@@ -403,7 +410,6 @@ function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart 
 		data = { money = 0, automated = false },
 	}, Pen)
 
-	-- A player who has already rebirthed starts every new pen with their luck bonus.
 	if getRebirths(owner) > 0 then
 		pen:refreshChances()
 	end
@@ -491,7 +497,9 @@ function Pen.upgrade(self: Pen): boolean
 	return true
 end
 
--- Rebuilds the spawn odds from the pen's level and the owner's rebirth luck bonus.
+--[[
+	Rebuilds the pen's spawn odds from its level and the owner's rebirth luck bonus.
+]]--
 function Pen.refreshChances(self: Pen)
 	local luck = RebirthData.getLuckBonus(getRebirths(self.owner))
 	self.data.chances = SheepData.buildChancesForLevel(self.level, luck)
@@ -499,8 +507,7 @@ function Pen.refreshChances(self: Pen)
 end
 
 --[[
-	Puts the pen back to how it starts a run: level 1, no worker. Any sheep already waiting stays.
-	Used by rebirth.
+	Puts the pen back to level 1 without a worker (used by rebirth); a sheep already waiting stays.
 ]]--
 function Pen.reset(self: Pen)
 	self.level = 1

@@ -34,10 +34,13 @@ PenLayout.Offsets = {
 PenLayout.SlotCount = #PenLayout.Offsets
 
 --[[
-	World-space offset from the Base_Pen to the slot for pen `penNumber`, or nil if the slot doesn't exist.
+	Gets the offset from the Base_Pen to a pen's slot.
 
 	@param plot The plot the pens belong to
+	@param penNumber The pen the slot is for
 	@param basePivot Pivot of the untouched Base_Pen
+
+	@return The world-space offset, or nil if the slot doesn't exist
 ]]--
 function PenLayout.getSlotOffset(plot: Instance, penNumber: number, basePivot: CFrame): Vector3?
 	local slots = plot:FindFirstChild(PenLayout.SlotsFolderName)
