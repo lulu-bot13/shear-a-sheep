@@ -12,6 +12,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
 local Pen = require(script.Parent.Parent.Classes.Pen)
+local PenLayout = require(script.Parent.Parent.Constants.PenLayout)
 local PlotHandler = require(script.Parent.PlotHandler)
 local InventoryHandler = require(script.Parent.InventoryHandler)
 local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
@@ -26,10 +27,6 @@ local BASE_PEN_NAME = "Base_Pen"
 local WAYPOINTS_FOLDER_NAME = "Waypoints"
 local PATHS_FOLDER_NAME = "Paths"
 local PLOT_NAME_ATTRIBUTE = "PlotName"
-local SPACING_ATTRIBUTE = "PenSpacing"
-local DIRECTION_ATTRIBUTE = "PenDirection"
-local DEFAULT_PEN_SPACING = 15.8
-local DEFAULT_PEN_DIRECTION = Vector3.new(0, 0, -1)
 local PATH_SEAM_GAP = 0.02
 
 type PlotParts = {
@@ -97,35 +94,22 @@ local function findPlotParts(plot: Folder): PlotParts?
 	}
 end
 
--- A plot can override how far apart its pens are and which way they grow.
-local function getLayout(plot: Folder): (number, Vector3)
-	local spacing = plot:GetAttribute(SPACING_ATTRIBUTE)
-	local direction = plot:GetAttribute(DIRECTION_ATTRIBUTE)
-
-	local penSpacing = if typeof(spacing) == "number" then spacing else DEFAULT_PEN_SPACING
-	local penDirection = if typeof(direction) == "Vector3" and direction.Magnitude > 0
-		then direction.Unit
-		else DEFAULT_PEN_DIRECTION.Unit
-
-	return penSpacing, penDirection
-end
-
--- Extends the route by cloning its last waypoint one pen further along.
-local function createWaypoint(folder: Folder?, waypoints: { BasePart }, step: Vector3): BasePart?
-	local last = waypoints[#waypoints]
-	if not folder or not last then
+-- Extends the route by cloning its first waypoint into the new pen's slot.
+local function createWaypoint(folder: Folder?, waypoints: { BasePart }, offset: Vector3): BasePart?
+	local first = waypoints[1]
+	if not folder or not first then
 		return nil
 	end
 
-	local waypoint = last:Clone()
+	local waypoint = first:Clone()
 	waypoint.Name = tostring(#waypoints + 1)
-	waypoint.Position = last.Position + step
+	waypoint.Position = first.Position + offset
 	waypoint.Parent = folder
 	return waypoint
 end
 
 -- Clones the first path piece into the new pen's slot, trimmed slightly so neighbours don't z-fight.
-local function createPathPiece(paths: Folder?, penNumber: number, direction: Vector3, offset: Vector3): BasePart?
+local function createPathPiece(paths: Folder?, penNumber: number, offset: Vector3): BasePart?
 	local template = if paths then paths:FindFirstChildWhichIsA("BasePart") else nil
 	if not paths or not template then
 		return nil
@@ -135,6 +119,7 @@ local function createPathPiece(paths: Folder?, penNumber: number, direction: Vec
 	piece.Name = `Part{penNumber}`
 	piece.CFrame = template.CFrame + offset
 
+	local direction = offset.Unit
 	local size = piece.Size
 	local cframe = piece.CFrame
 	if math.abs(cframe.RightVector:Dot(direction)) >= math.abs(cframe.LookVector:Dot(direction)) then
@@ -218,7 +203,7 @@ local function onPlayerRemoving(player: Player)
 end
 
 --[[
-	Creates the player's next pen: clones Base_Pen one slot further along the plot,
+	Creates the player's next pen: clones Base_Pen into its predetermined slot (see PenLayout),
 	extends the waypoint route to it and adds a matching piece of path.
 	Returns the new pen, or nil if the player has no valid plot.
 ]]
@@ -232,12 +217,15 @@ function PenHandler.createPen(player: Player): Pen.Pen?
 	end
 
 	local penNumber = #ownedPens + 1
-	local spacing, direction = getLayout(plotParts.plot)
-	local step = direction * spacing
-	local offset = step * (penNumber - 1)
+	local template = pristineBasePens[plotParts.pens] or plotParts.basePen
+	local offset = PenLayout.getSlotOffset(plotParts.plot, penNumber, template:GetPivot())
+	if not offset then
+		warn(`PenHandler: no pen slot {penNumber} for {player.Name}.`)
+		return nil
+	end
+
 	local extras: { Instance } = {}
 
-	local template = pristineBasePens[plotParts.pens] or plotParts.basePen
 	local model = template:Clone()
 	model.Name = `Pen_{penNumber}`
 	model:PivotTo(model:GetPivot() + offset)
@@ -245,13 +233,13 @@ function PenHandler.createPen(player: Player): Pen.Pen?
 	table.insert(extras, model)
 
 	local waypoints = getWaypointParts(plotParts.waypoints)
-	local waypoint = createWaypoint(plotParts.waypoints, waypoints, step)
+	local waypoint = createWaypoint(plotParts.waypoints, waypoints, offset)
 	if waypoint then
 		table.insert(waypoints, waypoint)
 		table.insert(extras, waypoint)
 	end
 
-	local pathPiece = createPathPiece(plotParts.paths, penNumber, direction, offset)
+	local pathPiece = createPathPiece(plotParts.paths, penNumber, offset)
 	if pathPiece then
 		table.insert(extras, pathPiece)
 	end
