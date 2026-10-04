@@ -70,8 +70,8 @@ shearTimingData.MinimumSweetSpotPosition = 0.15 -- the sweet spot's centre alway
 shearTimingData.MaximumSweetSpotPosition = 0.85
 shearTimingData.MinimumSweetSpotShift = 0.2 -- each new sweet spot lands at least this far from the previous one
 shearTimingData.TimeLimit = 2.5 -- seconds per attempt before it counts as a miss
-shearTimingData.CooldownBetweenAttempts = 0.15 -- pause after an attempt before the next sweet spot appears
-shearTimingData.FirstAttemptDelay = 0.8 -- lets the camera swing round to the sheep first
+shearTimingData.CooldownBetweenAttempts = 0.03 -- pause after an attempt before the next sweet spot appears
+shearTimingData.FirstAttemptDelay = 0.6 -- lets the camera swing round to the sheep first
 
 --// Server checks ------------------------------------------------------------------------
 
@@ -105,6 +105,9 @@ shearTimingData.TierColors = {
 
 -- Wool chunks that fly off the sheep for each tier.
 shearTimingData.WoolChunks = { PERFECT = 9, GREAT = 6, GOOD = 3, POOR = 1, MISS = 0 } :: { [Tier]: number }
+
+-- Image of one wool puff (an "rbxassetid://..." id) for the wool that flies to the wool counter. Empty = a plain white puff.
+shearTimingData.WoolIconImage = "rbxassetid://112199646421676"
 
 shearTimingData.ShearSoundId = ""
 shearTimingData.ShearSoundVolume = 0.6

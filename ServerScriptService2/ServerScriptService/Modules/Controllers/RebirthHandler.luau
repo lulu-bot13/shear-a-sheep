@@ -5,7 +5,7 @@
 	shown as a leaderstat), what the next rebirth needs, what it resets, and how much their wool sells
 	for because of it.
 
-	The tuning numbers live in ReplicatedStorage.Shared.Constants.RebirthData. RebirthServer is the
+	The tuning numbers live in ServerScriptService.Modules.Constants.RebirthData. RebirthServer is the
 	script that talks to the client; SellWoolHandler asks getMultiplier for the wool bonus.
 
 	Location: ServerScriptService.Modules.Controllers.RebirthHandler
@@ -13,10 +13,9 @@
 
 --// Services
 local players = game:GetService("Players")
-local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
-local RebirthData = require(replicatedStorage.Shared.Constants.RebirthData)
+local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
 local PenSlotUnlocks = require(script.Parent.Parent.Constants.PenSlotUnlocks)
 local InventoryHandler = require(script.Parent.InventoryHandler)
 local PenHandler = require(script.Parent.PenHandler)
@@ -25,6 +24,7 @@ local ShearHandler = require(script.Parent.ShearHandler)
 --// Configs
 local REBIRTHS_ATTRIBUTE = "Rebirths"
 local WOOL_ITEM = "Wool"
+local WORKERS_OWNED_ATTRIBUTE = "WorkersOwned" -- kept in step with WorkerHandler
 local LEADERSTATS_WAIT_SECONDS = 15
 
 export type Requirement = {
@@ -91,6 +91,7 @@ local function resetProgress(player: Player)
 	if basePen then
 		basePen:resetProgress()
 	end
+	player:SetAttribute(WORKERS_OWNED_ATTRIBUTE, 0) -- hired workers are lost with the farm
 
 	local money = getMoneyValue(player)
 	if money then
@@ -123,12 +124,10 @@ function RebirthHandler.getState(player: Player): State
 	local canRebirth = false
 
 	if moneyCost then
-		local woolHeld = InventoryHandler.getItem(player, WOOL_ITEM)
 		local slotLimit = PenSlotUnlocks.getSlotLimit(rebirths)
 		local pensRequired = math.min(RebirthData.getPensRequired(rebirths), slotLimit)
 		local workersRequired = math.min(RebirthData.getWorkersRequired(rebirths), slotLimit)
 
-		table.insert(requirements, makeRequirement("Wool", "Wool", woolHeld, RebirthData.getWoolRequired(rebirths)))
 		table.insert(requirements, makeRequirement("Pens", "Pens", #PenHandler.getPens(player), pensRequired))
 		table.insert(requirements, makeRequirement("Workers", "Workers", countWorkers(player), workersRequired))
 

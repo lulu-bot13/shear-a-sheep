@@ -15,11 +15,17 @@ export type EnumType = "ActivateShearing"
     | "StopShearing"
     | "ShearAttempt"
     | "ShearPress"
+    | "ShearDamage"
+    | "WorkerWoolGained"
     | "OpenPenMenu"
     | "ClosePenMenu"
     | "UpgradePen"
     | "SellPen"
     | "HireWorker"
+    | "RemoveWorker"
+    | "RequestHireWorkersState"
+    | "HireWorkersState"
+    | "HireWorkersHire"
     | "WoolSold"
     | "PurchaseShear"
     | "ShearPurchaseResult"
@@ -39,11 +45,17 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
     StopShearing = "StopShearing",
     ShearAttempt = "ShearAttempt",
     ShearPress = "ShearPress",
+    ShearDamage = "ShearDamage",
+    WorkerWoolGained = "WorkerWoolGained",
     OpenPenMenu = "OpenPenMenu",
     ClosePenMenu = "ClosePenMenu",
     UpgradePen = "UpgradePen",
     SellPen = "SellPen",
     HireWorker = "HireWorker",
+    RemoveWorker = "RemoveWorker",
+    RequestHireWorkersState = "RequestHireWorkersState",
+    HireWorkersState = "HireWorkersState",
+    HireWorkersHire = "HireWorkersHire",
     WoolSold = "WoolSold",
     PurchaseShear = "PurchaseShear",
     ShearPurchaseResult = "ShearPurchaseResult",

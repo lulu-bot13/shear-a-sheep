@@ -4,7 +4,7 @@
 	Drives the hand-built `Shearing` ScreenGui (StarterGui.Shearing). The names this script looks for:
 
 		Shearing [ScreenGui]
-		├─ PopupLayer [Frame]            floating PERFECT! / MISS! / "+N Wool" text is added here
+		├─ PopupLayer [Frame]            floating damage numbers are added here
 		├─ SheepHUD [Frame]
 		│  ├─ SheepName [TextLabel]
 		│  └─ HealthBar [Frame]
@@ -12,7 +12,7 @@
 		│     └─ HealthText [TextLabel]
 		├─ TimingBar [Frame]
 		│  ├─ Zones [Frame]              the track the cursor runs along
-		│  │  └─ Frame [Frame]           the PERFECT zone (wider GREAT / GOOD / POOR bands are cloned behind it)
+		│  │  └─ Frame [Frame]           the PERFECT zone (the only zone drawn)
 		│  ├─ Cursor [Frame]
 		│  └─ Hint [TextLabel]
 		└─ Exit [TextButton]
@@ -30,6 +30,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local collectionService = game:GetService("CollectionService")
 local contextActionService = game:GetService("ContextActionService")
 local debris = game:GetService("Debris")
+local guiService = game:GetService("GuiService")
 local runService = game:GetService("RunService")
 local tweenService = game:GetService("TweenService")
 local userInputService = game:GetService("UserInputService")
@@ -99,8 +100,6 @@ local DEFAULT_TIER_COLORS: { [string]: Color3 } = {
 	POOR = Color3.fromRGB(240, 150, 60),
 	MISS = Color3.fromRGB(190, 192, 202),
 }
-local BAND_ORDER = { "POOR", "GOOD", "GREAT" } -- widest first; the PERFECT zone (your Frame) sits on top
-local BAND_TRANSPARENCY: { [string]: number } = { POOR = 0.55, GOOD = 0.35, GREAT = 0.2 }
 
 local function getTierColor(tier: string): Color3
 	local colors = ShearTimingData.TierColors :: { [string]: Color3 }
@@ -112,6 +111,14 @@ local TRACK_LEFT = zoneTrack.Position.X.Scale -- the track's span inside TimingB
 local TRACK_WIDTH = zoneTrack.Size.X.Scale
 local CURSOR_Y = cursor.Position.Y
 local TIMING_HOME = timingBar.Position
+
+-- Tells WoolCollectClient to play the wool effect (origin: Vector3, woolAmount: number).
+local woolCollected = player:FindFirstChild("WoolCollected") :: BindableEvent?
+if not woolCollected then
+	woolCollected = Instance.new("BindableEvent")
+	woolCollected.Name = "WoolCollected"
+	woolCollected.Parent = player
+end
 
 --// Character
 local character: Model
@@ -126,6 +133,7 @@ local currentSheep: Model? = nil
 local shearTool: Tool? = nil
 local healthConnection: RBXScriptConnection? = nil
 local renderConnection: RBXScriptConnection? = nil
+local lastSheepPosition: Vector3? = nil
 local savedWalkSpeed = 16
 local savedFieldOfView = 70
 
@@ -175,19 +183,9 @@ timingScale.Parent = timingBar
 -- The cursor is positioned by its centre.
 cursor.AnchorPoint = Vector2.new(0.5, cursor.AnchorPoint.Y)
 
--- Your Frame is the PERFECT zone. The wider tiers are copies of it behind it, so they share its look.
-local bands: { [string]: Frame } = {}
-for index, tier in BAND_ORDER do
-	local band = perfectZone:Clone()
-	band.Name = `{tier}Zone`
-	band.BackgroundColor3 = getTierColor(tier)
-	band.BackgroundTransparency = BAND_TRANSPARENCY[tier]
-	band.ZIndex = index
-	band.Parent = zoneTrack
-	bands[tier] = band
-end
-perfectZone.ZIndex = #BAND_ORDER + 1
-cursor.ZIndex = #BAND_ORDER + 2
+-- Your Frame is the PERFECT zone and the only zone drawn: the wider tiers still score, but they aren't shown.
+perfectZone.ZIndex = 1
+cursor.ZIndex = 2
 
 -- Snip sound (only when a sound id is set in ShearTimingData).
 local shearSound: Sound? = nil
@@ -220,7 +218,7 @@ local function addStroke(instance: Instance, thickness: number): UIStroke
 end
 
 -- Floating text at a screen position that drifts upward and fades out.
-local function spawnPopup(text: string, screenPosition: Vector2, color: Color3, textSize: number, rise: number, duration: number)
+local function spawnPopup(text: string, screenPosition: Vector2, color: Color3, textSize: number, rise: number, duration: number): TextLabel
 	local position = screenPosition - popupLayer.AbsolutePosition
 
 	local label = Instance.new("TextLabel")
@@ -247,6 +245,8 @@ local function spawnPopup(text: string, screenPosition: Vector2, color: Color3, 
 	task.delay(duration, function()
 		label:Destroy()
 	end)
+
+	return label
 end
 
 local function updateHealthBar(current: number, maximum: number)
@@ -385,13 +385,6 @@ local function setCursor(position: number)
 	cursor.Position = UDim2.new(TRACK_LEFT + position * TRACK_WIDTH, 0, CURSOR_Y.Scale, CURSOR_Y.Offset)
 end
 
--- Screen point just above the track at a bar position (for the result popup).
-local function getBarPoint(position: number): Vector2
-	local trackPosition = zoneTrack.AbsolutePosition
-	local trackSize = zoneTrack.AbsoluteSize
-	return Vector2.new(trackPosition.X + trackSize.X * position, trackPosition.Y - 14)
-end
-
 -- Puts a zone frame over [centre - halfWidth, centre + halfWidth] of the track, kept inside it.
 local function placeZone(zone: Frame, center: number, halfWidth: number)
 	local left = math.max(center - halfWidth, 0)
@@ -402,9 +395,6 @@ end
 
 local function layoutAttempt(current: any)
 	placeZone(perfectZone, current.sweetSpot, current.zones.perfect)
-	placeZone(bands.GREAT, current.sweetSpot, current.zones.great)
-	placeZone(bands.GOOD, current.sweetSpot, current.zones.good)
-	placeZone(bands.POOR, current.sweetSpot, current.zones.poor)
 
 	cursor.BackgroundTransparency = 0
 	setCursor(ShearTiming.getCursorPosition(current.cursorStart, current.cursorSpeed, 0))
@@ -425,9 +415,40 @@ local function animateBar(tier: string)
 	end
 end
 
-local function showResult(tier: string, position: number)
+-- The damage number the server reports for a hit, popping up over the sheep (the tier only sets its colour and size).
+local function showDamage(tier: string, damage: number)
+	local camera = workspace.CurrentCamera
+	local sheepRoot = getSheepRoot()
+	if not camera or not sheepRoot then
+		return
+	end
+
+	local viewportPoint = camera:WorldToViewportPoint(sheepRoot.Position + Vector3.new(0, 1.6, 0))
+	local screenPoint = Vector2.new(viewportPoint.X, viewportPoint.Y)
+	if not shearingGui.IgnoreGuiInset then
+		screenPoint += guiService:GetGuiInset()
+	end
+	screenPoint += Vector2.new(math.random(-70, 70), math.random(-30, 20))
+
 	local big = tier == "PERFECT"
-	spawnPopup(`{tier}!`, getBarPoint(position), getTierColor(tier), if big then 40 else 30, 46, if big then 0.75 else 0.6)
+	local text = if damage > 0 then `-{damage}` else "MISS"
+	local size = if big then 54 else if tier == "MISS" then 30 else 38
+	local label = spawnPopup(text, screenPoint, getTierColor(tier), size, if big then 90 else 70, if big then 0.85 else 0.7)
+
+	-- Punch in: starts small and overshoots, so every hit lands with a thump.
+	local scale = Instance.new("UIScale")
+	scale.Scale = 0.3
+	scale.Parent = label
+	tweenService:Create(scale, TweenInfo.new(0.16, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = if big then 1.3 else 1 }):Play()
+	label.Rotation = math.random(-8, 8)
+end
+
+local function showResult(tier: string)
+	local big = tier == "PERFECT"
+	local sheepRoot = getSheepRoot()
+	if sheepRoot then
+		lastSheepPosition = sheepRoot.Position
+	end
 	animateBar(tier)
 	cursor.BackgroundTransparency = 0.4
 
@@ -464,7 +485,7 @@ local function press()
 	network.fireServer(network.RemoteEvents.ShearPress, current.id, position)
 
 	local tier = ShearTiming.classify(math.abs(position - current.sweetSpot), current.zones)
-	showResult(tier, position)
+	showResult(tier)
 end
 
 -- Every frame: move the cursor; an attempt that runs out of time is a miss (the server agrees).
@@ -479,7 +500,7 @@ local function updateTiming()
 		current.done = true
 		local position = ShearTiming.getCursorPosition(current.cursorStart, current.cursorSpeed, current.lifetime)
 		setCursor(position)
-		showResult("MISS", position)
+		showResult("MISS")
 		return
 	end
 
@@ -735,14 +756,23 @@ network.connectEvent(network.RemoteEvents.ActivateShearing, function(sheepId: nu
 end)
 
 network.connectEvent(network.RemoteEvents.DeactivateShearing, function(completed: boolean?, woolAmount: number?)
+	-- The sheep is already gone by now, so the wool leaves from where it was last seen.
+	local sheepRoot = getSheepRoot()
+	local origin = if sheepRoot then sheepRoot.Position else lastSheepPosition
 	endMinigame()
 
-	if completed and woolAmount then
-		local center = popupLayer.AbsolutePosition + popupLayer.AbsoluteSize * Vector2.new(0.5, 0.4)
-		spawnPopup(`+{woolAmount} Wool`, center, WHITE, 44, 70, 1.2)
+	if completed and woolAmount and origin then
+		woolCollected:Fire(origin, woolAmount)
 	end
 
 	exitStation()
+end)
+
+-- The server's verdict on each press: the damage that really came off the sheep.
+network.connectEvent(network.RemoteEvents.ShearDamage, function(tier: string, damage: number)
+	if shearing then
+		showDamage(tier, damage)
+	end
 end)
 
 network.connectEvent(network.RemoteEvents.ShearAttempt, onAttempt)

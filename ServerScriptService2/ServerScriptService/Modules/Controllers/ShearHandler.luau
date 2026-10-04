@@ -32,7 +32,7 @@ local ShearShopHandler = require(script.Parent.ShearShopHandler)
 --// Configs
 local LEAVE_DISTANCE = 9.5 -- how far outside the pen (from its PlayerPos) a player is moved when they leave
 local SHEEP_TURN_TWEEN = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local LOOP_STEP_SECONDS = 0.05
+local LOOP_STEP_SECONDS = 0.01 -- how often a waiting attempt checks whether it was pressed (the next one is sent right after)
 
 type Attempt = ShearTiming.Attempt & {
 	sentAt: number,
@@ -216,6 +216,8 @@ local function resolveAttempt(session: Session, attempt: Attempt, tier: ShearTim
 	if tier ~= "MISS" then
 		ShearShopHandler.registerSnip(session.player)
 	end
+	-- Sent before the damage is applied: a killing blow ends the session (and the sheep) right after.
+	network.fireClient(network.RemoteEvents.ShearDamage, session.player, tier, damage)
 	if damage > 0 then
 		applyDamage(session, damage)
 	end
@@ -327,7 +329,7 @@ local function onStartShearing(player: Player, penId: any)
 
 	-- Only the pen's owner gets their pens back from PenHandler, so nobody can shear someone else's sheep.
 	local pen = PenHandler.getPen(player, penId)
-	if not pen or pen.shearingPlayer or not pen.seated or not pen.occupiedSheepId then
+	if not pen or pen.shearingPlayer or pen.data.automated or not pen.seated or not pen.occupiedSheepId then
 		return
 	end
 

@@ -7,11 +7,13 @@
 ]]--
 
 --// Services
+local collectionService = game:GetService("CollectionService")
 local pathfindingService = game:GetService("PathfindingService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
+local network = require(replicatedStorage.Shared.Utils.Network)
 local SheepHandler = require(script.Parent.Parent.Controllers.SheepHandler)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
@@ -20,6 +22,8 @@ local EconomyData = require(script.Parent.Parent.Constants.EconomyData)
 
 --// Animations
 local sheepWalkingAnimation = replicatedStorage.Assets.Animations.SheepWalking
+local shearRigAnimation = replicatedStorage.Assets.Animations.ShearRig
+local shearToolAnimation = replicatedStorage.Assets.Animations.ShearTool
 
 --// Configurations
 local RESPAWN_DELAY_SECONDS = 3
@@ -28,6 +32,10 @@ local SHEEP_Y_OFFSET = 1.45 -- how far above the pen's SheepPos the sheep's root
 local REACH_DISTANCE = 3
 local AGENT_PARAMS = { AgentRadius = 3, AgentHeight = 4, AgentCanJump = false, WaypointSpacing = math.huge }
 local WORKER_SHEAR_INTERVAL_SECONDS = 1.5
+local WORKER_FORWARD_OFFSET = 2.5 -- studs the worker stands in front of PlayerPos, towards the sheep
+local DEFAULT_SHEAR_ID = "DefaultShear" -- the worker's shears when the owner's own can't be found
+local WORKER_FLOOR_RAY_HEIGHT = 6 -- ray starts this far above PlayerPos when looking for the ground under the worker
+local WORKER_FLOOR_RAY_LENGTH = 40
 local ASSUMED_ARRIVAL_SECONDS = 6 -- starting guess for how long a sheep takes to walk into the pen
 local LOW_HEALTH_COLOR = Color3.fromRGB(230, 70, 70)
 local FULL_HEALTH_COLOR = Color3.fromRGB(90, 210, 100)
@@ -60,6 +68,9 @@ type PenFields = {
 	workerLabel: TextLabel?,
 	level: number,
 	workerModel: Model?,
+	workerRigTrack: AnimationTrack?, -- the worker's swing; loaded once and replayed on every hit
+	workerToolTrack: AnimationTrack?,
+	workerToken: number, -- bumped on every hire and removal, so a stale shear loop or avatar load can tell it is out of date
 	data: PenData,
 }
 
@@ -395,6 +406,9 @@ function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart 
 		workerLabel = nil,
 		level = 1,
 		workerModel = nil,
+		workerRigTrack = nil,
+		workerToolTrack = nil,
+		workerToken = 0,
 		data = { money = 0, automated = false },
 	}, Pen)
 end
@@ -480,54 +494,21 @@ function Pen.upgrade(self: Pen): boolean
 	return true
 end
 
-local R6_BODY_PARTS = { "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "HumanoidRootPart" }
-
--- Builds an R6 rig that looks like the player (their avatar), complete with all six limbs. nil if it can't be
--- loaded (e.g. offline / no avatar) or came back missing a body part.
-local function createOwnerCharacter(owner: Player): Model?
-	local success, result = pcall(function()
-		local description = players:GetHumanoidDescriptionFromUserId(owner.UserId)
-		return players:CreateHumanoidModelFromDescription(description, Enum.HumanoidRigType.R6)
-	end)
-	if not success then
-		return nil
-	end
-
-	for _, partName in R6_BODY_PARTS do
-		if not result:FindFirstChild(partName) then
-			warn(`Pen: owner avatar is missing '{partName}', using the stock worker instead.`)
-			result:Destroy()
-			return nil
-		end
-	end
-
-	return result
-end
-
 --[[
-	Places the pen's worker: a copy of the owner's character standing on the pen's PlayerPos, facing the sheep.
-	It has no ProximityPrompt (the sell NPC keeps those); falls back to the stock Worker rig if the avatar
-	can't be loaded.
+	Places the pen's worker: a clone of ReplicatedStorage.Assets.Npcs.PlayerWorker dressed in the owner's avatar
+	(their HumanoidDescription), standing on the ground at PlayerPos and facing the sheep. `token` is the hire
+	this worker belongs to; if the worker was removed (or removed and hired again) while the avatar loaded,
+	nothing is placed.
 ]]--
-function Pen._spawnWorker(self: Pen)
-	local worker = createOwnerCharacter(self.owner)
-
-	if not worker then
-		local npcs = replicatedStorage.Assets:FindFirstChild("Npcs")
-		local template = npcs and npcs:FindFirstChild("Worker")
-		worker = if template then template:Clone() else nil
-	end
-
-	if not worker then
+function Pen._spawnWorker(self: Pen, token: number)
+	local npcs = replicatedStorage.Assets:FindFirstChild("Npcs")
+	local template = npcs and npcs:FindFirstChild("PlayerWorker")
+	if not template then
+		warn("Pen: ReplicatedStorage.Assets.Npcs.PlayerWorker is missing, no worker was placed.")
 		return
 	end
 
-	-- The pen may have been sold / the worker fired while the avatar was loading.
-	if self.destroyed or not self.data.automated or not self.penModel.Parent then
-		worker:Destroy()
-		return
-	end
-
+	local worker = template:Clone() :: Model
 	worker.Name = `Worker_{self.id}`
 
 	for _, descendant in worker:GetDescendants() do
@@ -548,26 +529,121 @@ function Pen._spawnWorker(self: Pen)
 		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 	end
 
+	-- A description can only be applied to a rig that is in the world, so it goes in (anchored) first.
+	worker.Parent = self.penModel
+
+	if humanoid then
+		local success, err = pcall(function()
+			local description = players:GetHumanoidDescriptionFromUserId(self.owner.UserId)
+			humanoid:ApplyDescription(description)
+		end)
+		if not success then
+			warn(`Pen: could not dress the worker as {self.owner.Name}: {err}`)
+		end
+	end
+
+	-- The pen may have been sold / the worker removed while the avatar was loading.
+	if self.destroyed or self.workerToken ~= token or not self.penModel.Parent then
+		worker:Destroy()
+		return
+	end
+
 	-- Stand on the ground under PlayerPos rather than at PlayerPos itself (that part floats above the grass).
-	local ignore = {}
+	local ignore: { Instance } = collectionService:GetTagged("Sheep")
+	table.insert(ignore, worker)
 	for _, name in { "SheepPos", "PlayerPos" } do
 		local marker = self.penModel:FindFirstChild(name)
 		if marker then
 			table.insert(ignore, marker)
 		end
 	end
+	for _, otherPlayer in players:GetPlayers() do
+		if otherPlayer.Character then
+			table.insert(ignore, otherPlayer.Character)
+		end
+	end
 	local rayParams = RaycastParams.new()
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
 	rayParams.FilterDescendantsInstances = ignore
+	rayParams.RespectCanCollide = true
 
-	local lookTarget = Vector3.new(self.sheepPosition.X, self.playerPosition.Y, self.sheepPosition.Z)
-	worker:PivotTo(CFrame.lookAt(self.playerPosition, lookTarget))
+	-- The worker stands a little in front of PlayerPos (towards the sheep), never more than halfway there.
+	local toSheep = Vector3.new(self.sheepPosition.X - self.playerPosition.X, 0, self.sheepPosition.Z - self.playerPosition.Z)
+	local forward = if toSheep.Magnitude > 0.01 then toSheep.Unit * math.min(WORKER_FORWARD_OFFSET, toSheep.Magnitude * 0.5) else Vector3.zero
+	local standPosition = self.playerPosition + forward
 
-	worker.Parent = self.penModel
+	local hit = workspace:Raycast(standPosition + Vector3.new(0, WORKER_FLOOR_RAY_HEIGHT, 0), Vector3.new(0, -WORKER_FLOOR_RAY_LENGTH, 0), rayParams)
+	local floorY = if hit then hit.Position.Y else self.playerPosition.Y
+
+	local lookTarget = Vector3.new(self.sheepPosition.X, floorY, self.sheepPosition.Z)
+	worker:PivotTo(CFrame.lookAt(Vector3.new(standPosition.X, floorY, standPosition.Z), lookTarget))
+
+	-- The pivot is the root part's centre (chest height), so lift the whole rig until its lowest point rests on the floor.
+	local boundsCFrame, boundsSize = worker:GetBoundingBox()
+	local lift = floorY - (boundsCFrame.Position.Y - boundsSize.Y / 2)
+	worker:PivotTo(worker:GetPivot() + Vector3.new(0, lift, 0))
 
 	table.insert(self.extras, worker)
 	self.workerModel = worker
 	self:_createWorkerLabel(worker)
+	self:_equipWorkerShears(worker)
+end
+
+-- Puts a copy of the owner's shears in the worker's hand (their Tool animation is what the swing plays on).
+function Pen._equipWorkerShears(self: Pen, worker: Model)
+	local humanoid = worker:FindFirstChildOfClass("Humanoid")
+	local shears = replicatedStorage.Assets:FindFirstChild("Shears")
+	if not humanoid or not shears or worker:FindFirstChildOfClass("Tool") then
+		return
+	end
+
+	local shearId = self.owner:GetAttribute("ShearId")
+	local template = (if type(shearId) == "string" then shears:FindFirstChild(shearId) else nil) or shears:FindFirstChild(DEFAULT_SHEAR_ID)
+	if template and template:IsA("Tool") then
+		humanoid:EquipTool(template:Clone())
+	end
+end
+
+-- Plays the shearing swing on the worker (and on their shears), like the player's own.
+function Pen._playWorkerSwing(self: Pen)
+	local worker = self.workerModel
+	local humanoid = if worker then worker:FindFirstChildOfClass("Humanoid") else nil
+	if not worker or not humanoid then
+		return
+	end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	local rigTrack = self.workerRigTrack
+	if not rigTrack then
+		rigTrack = animator:LoadAnimation(shearRigAnimation)
+		rigTrack.Priority = Enum.AnimationPriority.Action
+		rigTrack.Looped = false
+		self.workerRigTrack = rigTrack
+	end
+	if not rigTrack.IsPlaying then
+		rigTrack:Play()
+	end
+
+	local tool = worker:FindFirstChildOfClass("Tool")
+	local toolController = if tool then tool:FindFirstChild("AnimationController") else nil
+	local toolAnimator = if toolController then toolController:FindFirstChildOfClass("Animator") else nil
+	if toolAnimator then
+		local toolTrack = self.workerToolTrack
+		if not toolTrack then
+			toolTrack = toolAnimator:LoadAnimation(shearToolAnimation)
+			toolTrack.Priority = Enum.AnimationPriority.Action
+			toolTrack.Looped = false
+			self.workerToolTrack = toolTrack
+		end
+		if not toolTrack.IsPlaying then
+			toolTrack:Play()
+		end
+	end
 end
 
 -- Hires an auto-shearing worker for this pen; false if one is already hired.
@@ -577,24 +653,49 @@ function Pen.hireWorker(self: Pen): boolean
 	end
 
 	self.data.automated = true
+	self.workerToken += 1
+	local token = self.workerToken
 
 	-- Loading the avatar yields, so it happens off to the side while the pen starts automating.
 	task.spawn(function()
-		self:_spawnWorker()
+		self:_spawnWorker(token)
 	end)
 
 	self:_updateHealthBillboard()
 
 	task.spawn(function()
-		while self.data.automated and not self.destroyed do
+		while self.workerToken == token and self.data.automated and not self.destroyed do
 			task.wait(WORKER_SHEAR_INTERVAL_SECONDS)
-			if self.data.automated and not self.destroyed then
+			if self.workerToken == token and self.data.automated and not self.destroyed then
 				self:_workerShearTick()
 			end
 		end
 	end)
 
 	return true
+end
+
+-- Takes the worker off this pen: its shear loop ends, its model and income label go, the sheep health bar hides.
+function Pen.removeWorker(self: Pen)
+	self.data.automated = false
+	self.workerToken += 1
+
+	local worker = self.workerModel
+	if worker then
+		local index = table.find(self.extras, worker)
+		if index then
+			table.remove(self.extras, index)
+		end
+		worker:Destroy() -- takes the income label with it
+		self.workerModel = nil
+	end
+	self.workerRigTrack = nil
+	self.workerToolTrack = nil
+	self.workerLabel = nil
+
+	if self.healthBillboard then
+		self.healthBillboard.Enabled = false
+	end
 end
 
 --[[
@@ -608,22 +709,7 @@ function Pen.resetProgress(self: Pen)
 
 	self.level = 1
 	self.data.chances = nil
-	self.data.automated = false -- also ends the worker's shear loop
-
-	local worker = self.workerModel
-	if worker then
-		local index = table.find(self.extras, worker)
-		if index then
-			table.remove(self.extras, index)
-		end
-		worker:Destroy() -- takes the income label with it
-		self.workerModel = nil
-	end
-	self.workerLabel = nil
-
-	if self.healthBillboard then
-		self.healthBillboard.Enabled = false
-	end
+	self:removeWorker()
 end
 
 -- Applies one tick of automatic shearing to whatever sheep is currently seated in the pen.
@@ -648,6 +734,8 @@ function Pen._workerShearTick(self: Pen)
 		return
 	end
 
+	self:_playWorkerSwing()
+
 	local newHealth = math.max(current - ShearData.Default.damage, 0)
 	sheep:SetAttribute("ShearHealth", newHealth)
 
@@ -655,6 +743,8 @@ function Pen._workerShearTick(self: Pen)
 		local woolAmount = sheep:GetAttribute("WoolAmount") :: number
 		if self.owner and self.owner.Parent then
 			InventoryHandler.addItem(self.owner, "Wool", woolAmount)
+			-- The owner's screen shows "+N" rising from where the sheep stood.
+			network.fireClient(network.RemoteEvents.WorkerWoolGained, self.owner, self.sheepPosition + Vector3.new(0, 2.5, 0), woolAmount)
 		end
 		SheepHandler.removeSheep(id)
 		self:releaseSheep()

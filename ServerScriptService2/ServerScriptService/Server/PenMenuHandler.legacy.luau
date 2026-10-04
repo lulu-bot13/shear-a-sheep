@@ -19,12 +19,13 @@ local SheepHandler = require(serverScriptService.Modules.Controllers.SheepHandle
 local ShearHandler = require(serverScriptService.Modules.Controllers.ShearHandler)
 local SheepData = require(serverScriptService.Modules.Constants.SheepData)
 local EconomyData = require(serverScriptService.Modules.Constants.EconomyData)
+local WorkerHandler = require(serverScriptService.Modules.Controllers.WorkerHandler)
 
 --// Configs
-local ENTER_DISTANCE = 8 -- studs from the pen's PlayerPos before the menu pops up
-local EXIT_DISTANCE = 11 -- studs before it closes again (bigger, so it doesn't flicker at the edge)
-local ACTION_DISTANCE = 16 -- how far away a player may still press the menu's buttons
-local POLL_SECONDS = 0.2
+local ENTER_DISTANCE = 11 -- studs from the pen's PlayerPos before the menu pops up
+local EXIT_DISTANCE = 14 -- studs before it closes again (bigger, so it doesn't flicker at the edge)
+local ACTION_DISTANCE = 19 -- how far away a player may still press the menu's buttons
+local POLL_SECONDS = 0.05
 local REPLACE_COOLDOWN_SECONDS = 0.5
 
 type Zone = {
@@ -70,8 +71,9 @@ local function buildMenuData(player: Player, pen: any)
 	local upgradeCost = EconomyData.getPenUpgradeCost(level)
 	local multipliers = SheepData.UpgradeMultipliers[level] or SheepData.UpgradeMultipliers[1]
 	local money = getMoneyAmount(player)
+	local workers = WorkerHandler.getState(player)
 
-	local sheep = if pen.occupiedSheepId then SheepHandler.getSheep(pen.occupiedSheepId) else nil
+	local sheep =if pen.occupiedSheepId then SheepHandler.getSheep(pen.occupiedSheepId) else nil
 	local sheepReady = sheep ~= nil and pen.seated == true
 
 	local sheepType, sheepName, rarity, rarityColor, sheepDamaged
@@ -95,8 +97,7 @@ local function buildMenuData(player: Player, pen: any)
 		upgradeCost = upgradeCost,
 		canAffordUpgrade = upgradeCost ~= nil and money >= upgradeCost,
 		workerHired = pen.data.automated,
-		workerCost = EconomyData.WORKER_HIRE_COST,
-		canAffordWorker = money >= EconomyData.WORKER_HIRE_COST,
+		workersAvailable = workers.available,
 		canSell = canSell,
 		sellValue = if canSell then EconomyData.getPenSellValue(pen.id) else 0,
 		sheepReady = sheepReady,
@@ -117,7 +118,7 @@ local function getSignature(data: any): string
 		tostring(data.level),
 		tostring(data.canAffordUpgrade),
 		tostring(data.workerHired),
-		tostring(data.canAffordWorker),
+		tostring(data.workersAvailable),
 		tostring(data.canSell),
 		tostring(data.sheepReady),
 		tostring(data.sheepId),
@@ -212,19 +213,25 @@ end
 
 local function onHireWorker(player: Player, penId: any)
 	local pen = getActionPen(player, penId)
-	if not pen or pen.data.automated then
+	if not pen then
 		return
 	end
 
-	local money = getMoney(player)
-	if not money or money.Value < EconomyData.WORKER_HIRE_COST then
-		return
-	end
-
-	if pen:hireWorker() then
-		money.Value -= EconomyData.WORKER_HIRE_COST
+	-- Puts one of the player's unused workers on this pen (buying them is done in the Hire Workers screen).
+	if WorkerHandler.assign(player, pen) then
 		pushMenu(player, pen)
 	end
+end
+
+-- Takes the worker off the pen; it goes back to the player's unused workers.
+local function onRemoveWorker(player: Player, penId: any)
+	local pen = getActionPen(player, penId)
+	if not pen or not pen.data.automated then
+		return
+	end
+
+	pen:removeWorker()
+	pushMenu(player, pen)
 end
 
 -- Swaps the pen's model for a pen from the player's inventory (chosen in the pen manager).
@@ -306,6 +313,7 @@ network.waitUntilReadyAsync()
 network.connectEvent(network.RemoteEvents.UpgradePen, onUpgradePen)
 network.connectEvent(network.RemoteEvents.SellPen, onSellPen)
 network.connectEvent(network.RemoteEvents.HireWorker, onHireWorker)
+network.connectEvent(network.RemoteEvents.RemoveWorker, onRemoveWorker)
 network.connectEvent(network.RemoteEvents.ReplacePen, onReplacePen)
 
 players.PlayerRemoving:Connect(function(player: Player)

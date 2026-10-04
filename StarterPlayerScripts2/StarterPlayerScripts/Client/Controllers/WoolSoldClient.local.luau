@@ -11,6 +11,7 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 
 --// Instances
 local playerGui = players.LocalPlayer:WaitForChild("PlayerGui")
@@ -42,6 +43,11 @@ local function formatNumber(amount: number): string
 	local digits = tostring(math.floor(math.abs(amount)))
 	local grouped = digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
 	return grouped
+end
+
+-- Shortens a wool amount (e.g. 123200 -> "123.2k").
+local function formatWool(amount: number): string
+	return numberFormatter:Format(math.abs(amount), 1) or "0"
 end
 
 local function addTextStroke(label: TextLabel, thickness: number)
@@ -102,7 +108,7 @@ local function showPopup(woolAmount: number, cash: number)
 	soldLabel.Font = FONT
 	soldLabel.TextSize = 20
 	soldLabel.TextColor3 = SUBTEXT_COLOR
-	soldLabel.Text = `Sold {formatNumber(woolAmount)} wool`
+	soldLabel.Text = `Sold {formatWool(woolAmount)} wool`
 	soldLabel.Parent = card
 	addTextStroke(soldLabel, 2)
 

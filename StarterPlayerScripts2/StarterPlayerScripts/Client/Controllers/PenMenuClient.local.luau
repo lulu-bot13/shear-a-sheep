@@ -9,7 +9,7 @@
 		   ├─ Preview [ViewportFrame]    spinning 3D sheep (its own Camera child is used if there is one)
 		   └─ Buttons [Frame]            UIListLayout
 		      ├─ Upgrade [TextButton]    "Upgrade: 1k" / "Max Level"
-		      ├─ Hire [TextButton]       "Hire: 1k" / "Hired"
+		      ├─ Hire [TextButton]       "Hire (2)" = unused workers / red "Remove" when the pen has a worker
 		      └─ Shear [TextButton]      "[E] Shear" - E on the keyboard does the same
 
 	Manage (opens the pen manager, PenManageClient) and Sell (newest pen only) are not part of the Studio
@@ -50,10 +50,11 @@ penMenuGui.ResetOnSpawn = false
 local GOLD = Color3.fromRGB(255, 176, 32)
 local WHITE = Color3.new(1, 1, 1)
 local DISABLED_FILL = Color3.fromRGB(96, 99, 110)
-local SELL_FILL = Color3.fromRGB(232, 78, 88)
+local REMOVE_FILL = Color3.fromRGB(232, 78, 88)
+local SELL_FILL =Color3.fromRGB(232, 78, 88)
 local MANAGE_FILL = Color3.fromRGB(150, 110, 235)
-local SLIDE_IN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local SLIDE_OUT = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+local SLIDE_IN = TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local SLIDE_OUT = TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 local SHEAR_ACTION = "PenMenuShear"
 
 -- Where the menu rests (as built in Studio) and where it waits, off the right edge of the screen.
@@ -67,21 +68,11 @@ local hideToken = 0
 
 --// Helpers ------------------------------------------------------------------
 
--- 999 -> "999", 1500 -> "1.5k", 2000000 -> "2M"
+-- 1500 -> "$1,500"
 local function formatMoney(amount: number): string
-	local function trim(value: number, suffix: string): string
-		local text = string.format("%.1f", value)
-		return (string.gsub(text, "%.0$", "")) .. suffix
-	end
-
-	if amount >= 1e9 then
-		return trim(amount / 1e9, "B")
-	elseif amount >= 1e6 then
-		return trim(amount / 1e6, "M")
-	elseif amount >= 1e3 then
-		return trim(amount / 1e3, "k")
-	end
-	return tostring(math.floor(amount))
+	local text = tostring(math.floor(amount))
+	local formatted = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	return "$" .. formatted:gsub("^,", "")
 end
 
 --// Buttons ------------------------------------------------------------------
@@ -349,15 +340,19 @@ local function render(data: any)
 
 	-- Hire a worker (automation)
 	if data.workerHired then
-		hireButton.Text = "Hired"
-		setButtonState(hire, "disabled")
+		hireButton.Text = "Remove"
+		hireButton.BackgroundColor3 = REMOVE_FILL
 	else
-		hireButton.Text = `Hire: {formatMoney(data.workerCost)}`
-		setButtonState(hire, if data.canAffordWorker then "ready" else "poor")
+		-- With no unused worker the button still works: it opens the Hire Workers screen.
+		hireButton.Text = `Hire ({data.workersAvailable})`
+		setButtonState(hire, if data.workersAvailable > 0 then "ready" else "poor")
 	end
 
 	-- Start shearing
-	if data.sheepReady then
+	if data.workerHired then
+		shearButton.Text = "Worker is shearing"
+		setButtonState(shear, "disabled")
+	elseif data.sheepReady then
 		shearButton.Text = if data.sheepDamaged then "[E] Continue" else "[E] Shear"
 		setButtonState(shear, "ready")
 	else
@@ -385,7 +380,7 @@ local function pressShear()
 	if not data then
 		return
 	end
-	if not data.sheepReady then
+	if data.workerHired or not data.sheepReady then
 		shake(shearButton)
 		return
 	end
@@ -410,18 +405,6 @@ upgradeButton.MouseButton1Click:Connect(function()
 		return
 	end
 	network.fireServer(network.RemoteEvents.UpgradePen, data.penId)
-end)
-
-hireButton.MouseButton1Click:Connect(function()
-	local data = currentData
-	if not data or data.workerHired then
-		return
-	end
-	if not data.canAffordWorker then
-		shake(hireButton)
-		return
-	end
-	network.fireServer(network.RemoteEvents.HireWorker, data.penId)
 end)
 
 shearButton.MouseButton1Click:Connect(pressShear)
@@ -450,6 +433,26 @@ end
 
 local manageRequest = getBindable("ManagePenRequest")
 local manageClosed = getBindable("ManagePenClosed")
+local openHireWorkers = getBindable("OpenHireWorkers")
+local hireWorkersClosed = getBindable("HireWorkersClosed")
+
+hireButton.MouseButton1Click:Connect(function()
+	local data = currentData
+	if not data then
+		return
+	end
+	if data.workerHired then
+		network.fireServer(network.RemoteEvents.RemoveWorker, data.penId)
+		return
+	end
+	-- Nobody free to send to the pen: go and hire one.
+	if data.workersAvailable <= 0 then
+		penMenuGui.Enabled = false
+		openHireWorkers:Fire()
+		return
+	end
+	network.fireServer(network.RemoteEvents.HireWorker, data.penId)
+end)
 
 -- The manager takes over the screen, so the menu steps aside while it is open.
 manage.button.MouseButton1Click:Connect(function()
@@ -463,6 +466,12 @@ manage.button.MouseButton1Click:Connect(function()
 end)
 
 manageClosed.Event:Connect(function()
+	if visible then
+		penMenuGui.Enabled = true
+	end
+end)
+
+hireWorkersClosed.Event:Connect(function()
 	if visible then
 		penMenuGui.Enabled = true
 	end

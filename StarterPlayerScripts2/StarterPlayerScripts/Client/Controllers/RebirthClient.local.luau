@@ -30,7 +30,6 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
-local RebirthData = require(replicatedStorage.Shared.Constants.RebirthData)
 
 --// Instances
 local player = players.LocalPlayer
@@ -55,7 +54,7 @@ local rowTemplate = requirementsFrame:WaitForChild("Template") :: Frame
 -- Optional templates for one specific requirement (WoolTemplate, PensTemplate, WorkersTemplate).
 -- A requirement without its own template uses the generic Template.
 local specificTemplates: { [string]: Frame } = {}
-for _, id in { "Wool", "Pens", "Workers" } do
+for _, id in { "Pens", "Workers" } do
 	local template = requirementsFrame:FindFirstChild(id .. "Template")
 	if template and template:IsA("Frame") then
 		specificTemplates[id] = template
@@ -76,7 +75,6 @@ local BUTTON_COLORS = {
 
 -- What each requirement is called on its row (anything not listed uses the server's label).
 local REQUIREMENT_LABELS = {
-	Wool = "Wool held",
 	Pens = "Pens owned",
 	Workers = "Hire workers",
 }
@@ -284,8 +282,12 @@ end)
 
 network.connectEvent(network.RemoteEvents.RebirthResult, function(success: boolean, reason: string?, rebirths: number)
 	if success then
-		-- The result arrives just before the fresh state, so the multiplier is worked out from the new count.
-		flashMessage(`Rebirth {rebirths}! Wool now sells for {formatMultiplier(RebirthData.getMultiplier(rebirths))}.`)
+		-- The result arrives just before the fresh state, so the old state's next multiplier is the one just earned.
+		if state then
+			flashMessage(`Rebirth {rebirths}! Wool now sells for {formatMultiplier(state.nextMultiplier)}.`)
+		else
+			flashMessage(`Rebirth {rebirths}!`)
+		end
 	else
 		flashMessage(REASON_TEXT[reason or ""] or "Can't rebirth right now")
 	end

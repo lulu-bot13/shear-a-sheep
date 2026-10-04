@@ -35,7 +35,12 @@ end
 -- Money paid per wool when selling (also used for the worker's estimated income).
 ecomonyData.WOOL_SELL_PRICE = 0.5
 
--- One-time cost to hire an auto-shearing worker for a pen.
+-- Cost of the first auto-shearing worker; each worker already hired multiplies the next price by WORKER_COST_GROWTH.
 ecomonyData.WORKER_HIRE_COST = 750
+ecomonyData.WORKER_COST_GROWTH = 2
+
+function ecomonyData.getWorkerHireCost(workersHired: number): number
+	return math.floor(ecomonyData.WORKER_HIRE_COST * ecomonyData.WORKER_COST_GROWTH ^ workersHired)
+end
 
 return ecomonyData
