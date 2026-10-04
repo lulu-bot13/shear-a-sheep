@@ -26,6 +26,11 @@ export type EnumType = "ActivateShearing"
     | "PenSkinAction"
     | "PenSkinResult"
     | "ReplacePen"
+    | "RequestRebirth"
+    | "RequestRebirthState"
+    | "RebirthState"
+    | "RebirthResult"
+    | "Teleport"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	ActivateShearing = "ActivateShearing",
@@ -45,6 +50,11 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
     PenSkinAction = "PenSkinAction",
     PenSkinResult = "PenSkinResult",
     ReplacePen = "ReplacePen",
+    RequestRebirth = "RequestRebirth",
+    RequestRebirthState = "RequestRebirthState",
+    RebirthState = "RebirthState",
+    RebirthResult = "RebirthResult",
+    Teleport = "Teleport"
 }
 
 return RemoteEventName

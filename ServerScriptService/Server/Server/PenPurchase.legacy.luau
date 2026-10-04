@@ -13,7 +13,9 @@ local serverScriptService = game:GetService("ServerScriptService")
 
 --// Modules
 local PenHandler = require(serverScriptService.Modules.Controllers.PenHandler)
+local RebirthHandler = require(serverScriptService.Modules.Controllers.RebirthHandler)
 local EconomyData = require(serverScriptService.Modules.Constants.EconomyData)
+local PenSlotUnlocks = require(serverScriptService.Modules.Constants.PenSlotUnlocks)
 
 --// Instances
 local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
@@ -26,6 +28,7 @@ local MAX_PENS = EconomyData.MAX_PENS
 local DEBOUNCE_SECONDS = 1
 local OWNER_ATTRIBUTE = "Owner"
 local NO_OWNER = 0
+local REBIRTHS_ATTRIBUTE = "Rebirths"
 local EFFECT_HEIGHT = 4
 
 local function getOwnerId(plot: Instance): number
@@ -36,6 +39,10 @@ end
 local function getOwnedPenCount(ownerId: number): number
 	local owner = players:GetPlayerByUserId(ownerId)
 	return if owner then #PenHandler.getPens(owner) else 0
+end
+
+local function getPenLimit(owner: Player): number
+	return math.min(MAX_PENS, PenSlotUnlocks.getSlotLimit(RebirthHandler.getRebirths(owner)))
 end
 
 -- Price for pen N = BASE_PRICE * PRICE_MULTIPLIER^(N - 2).
@@ -63,16 +70,18 @@ local function refreshButtons()
 			continue
 		end
 
-		local ownerId = getOwnerId(plot)
-		if ownerId == NO_OWNER then
+		local owner = players:GetPlayerByUserId(getOwnerId(plot))
+		if not owner then
 			label.Text = "No owner"
 			prompt.Enabled = false
 			continue
 		end
 
-		local ownedCount = getOwnedPenCount(ownerId)
-		if ownedCount >= MAX_PENS then
-			label.Text = "MAX"
+		local ownedCount = #PenHandler.getPens(owner)
+		local limit = getPenLimit(owner)
+		if ownedCount >= limit then
+			local reachedMax = limit >= math.min(MAX_PENS, PenSlotUnlocks.getMaxSlots())
+			label.Text = if reachedMax then "MAX" else "Rebirth to unlock"
 			prompt.Enabled = false
 		else
 			label.Text = `Buy Pen: {getPrice(ownedCount + 1)}`
@@ -126,7 +135,7 @@ local function onTriggered(plot: Folder, player: Player)
 	lastPurchase[player] = now
 
 	local ownedCount = getOwnedPenCount(player.UserId)
-	if ownedCount >= MAX_PENS then
+	if ownedCount >= getPenLimit(player) then
 		return
 	end
 
@@ -182,5 +191,15 @@ players.PlayerRemoving:Connect(function(player)
 	lastPurchase[player] = nil
 end)
 
+local function watchRebirths(player: Player)
+	player:GetAttributeChangedSignal(REBIRTHS_ATTRIBUTE):Connect(refreshButtons)
+end
+
 PenHandler.PenAdded:Connect(refreshButtons)
+PenHandler.PenRemoved:Connect(refreshButtons)
+players.PlayerAdded:Connect(watchRebirths)
+for _, player in players:GetPlayers() do
+	watchRebirths(player)
+end
+
 refreshButtons()

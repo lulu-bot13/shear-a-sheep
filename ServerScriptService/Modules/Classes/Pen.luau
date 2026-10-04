@@ -291,7 +291,14 @@ end
 -- Shows/updates the sheep health bar while the pen has a worker and a sheep waiting; hides it otherwise.
 function Pen._updateHealthBillboard(self: Pen)
 	local sheep = if self.occupiedSheepId then SheepHandler.getSheep(self.occupiedSheepId) else nil
-	assert(sheep, `Sheep not found when trying to update health billboard.`)
+
+	-- No sheep in the pen (just released, or not arrived yet): nothing to show.
+	if not sheep then
+		if self.healthBillboard then
+			self.healthBillboard.Enabled = false
+		end
+		return
+	end
 
 	local root = if sheep then sheep:FindFirstChild("HumanoidRootPart") else nil
 	local shouldShow = self.data.automated and self.seated and not self.destroyed and root ~= nil and root:IsA("BasePart")
@@ -588,6 +595,35 @@ function Pen.hireWorker(self: Pen): boolean
 	end)
 
 	return true
+end
+
+--[[
+	Puts the pen back to a fresh level-1 pen with no worker (used by rebirth). The model, route and any
+	sheep already in the pen are kept; the next sheep simply spawns with the level-1 odds.
+]]--
+function Pen.resetProgress(self: Pen)
+	if self.destroyed then
+		return
+	end
+
+	self.level = 1
+	self.data.chances = nil
+	self.data.automated = false -- also ends the worker's shear loop
+
+	local worker = self.workerModel
+	if worker then
+		local index = table.find(self.extras, worker)
+		if index then
+			table.remove(self.extras, index)
+		end
+		worker:Destroy() -- takes the income label with it
+		self.workerModel = nil
+	end
+	self.workerLabel = nil
+
+	if self.healthBillboard then
+		self.healthBillboard.Enabled = false
+	end
 end
 
 -- Applies one tick of automatic shearing to whatever sheep is currently seated in the pen.

@@ -438,6 +438,7 @@ function shearHandler.leavePen(player: Player)
 	local session = sessions[player]
 	local pen = if session then session.pen else stationPens[player]
 	if not pen then
+		network.fireClient(network.RemoteEvents.DeactivateShearing, player, false)
 		return
 	end
 

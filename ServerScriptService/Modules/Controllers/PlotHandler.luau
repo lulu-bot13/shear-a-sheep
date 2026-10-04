@@ -58,6 +58,13 @@ local function assignPlot(player: Player)
 
 	plot:SetAttribute("Owner", player.UserId)
 	player:SetAttribute("PlotName", plot.Name)
+
+	-- Position player to plot
+	local character = player.Character or player.CharacterAdded:Wait()
+	local plotSpawnArea = plot and plot:FindFirstChild("SpawnArea") :: BasePart
+	if plotSpawnArea then
+		character:PivotTo(plotSpawnArea.CFrame * CFrame.new(0, 2, 0))
+	end
 end
 
 -- Frees the player's base plot and every pen they bought.

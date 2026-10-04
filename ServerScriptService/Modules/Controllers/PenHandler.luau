@@ -1,7 +1,8 @@
 --!strict
 
 --[[
-	Builds each player's pens from their plot and tracks them per player
+	Builds each player's pens on their plot's PenSlots and tracks them per player.
+	Pen N goes on PenSlotN: centred on it, resting on the floor and facing the way the slot faces.
 
 	Location: ServerScriptService.Modules.Controllers.PenHandler
 ]]--
@@ -24,30 +25,33 @@ local INITIAL_SPAWN_DELAY_SECONDS = 5
 local PENS_FOLDER_NAME = "Pens"
 local BASE_PEN_NAME = "Base_Pen"
 local WAYPOINTS_FOLDER_NAME = "Waypoints"
-local PATHS_FOLDER_NAME = "Paths"
+local SLOTS_FOLDER_NAME = "PenSlots"
+local SHEEPS_FOLDER_NAME = "Sheeps"
+local SLOT_NAME_PREFIX = "PenSlot"
+local SLOT_OCCUPIED_ATTRIBUTE = "HasPen"
 local PLOT_NAME_ATTRIBUTE = "PlotName"
-local SPACING_ATTRIBUTE = "PenSpacing"
-local DIRECTION_ATTRIBUTE = "PenDirection"
-local DEFAULT_PEN_SPACING = 15.8
-local DEFAULT_PEN_DIRECTION = Vector3.new(0, 0, -1)
-local PATH_SEAM_GAP = 0.02
+local ENTRANCE_DISTANCE = 12 -- studs from a slot's centre to where its sheep stop, just outside the fence
+local FLOOR_RAY_HEIGHT = 20
+local FLOOR_RAY_LENGTH = 80
 
 type PlotParts = {
 	plot: Folder,
 	pens: Folder,
 	basePen: Model,
 	waypoints: Folder?,
-	paths: Folder?,
 }
 
 --// Variables
 local playerPens: { [Player]: { Pen.Pen } } = {}
+local penSlots: { [Pen.Pen]: BasePart } = {}
 local started = false
 
 local pristineBasePens: { [Folder]: Model } = {}
+local basePenOffsetFromSlot: { [Folder]: CFrame } = {}
 
 local PenHandler = {}
 PenHandler.PenAdded = Signal.new() :: Signal.Signal<Player, Pen.Pen>
+PenHandler.PenRemoved = Signal.new() :: Signal.Signal<Player, Pen.Pen>
 
 -- Returns the parts named "1", "2", "3", ... in a folder, stopping at the first gap.
 local function getWaypointParts(folder: Folder?): { BasePart }
@@ -73,6 +77,48 @@ local function getPlot(player: Player): Folder?
 	return PlotHandler.getPlayerPlot(player)
 end
 
+local function getSlot(plot: Folder, penNumber: number): BasePart?
+	local slots = plot:FindFirstChild(SLOTS_FOLDER_NAME)
+	local slot = if slots then slots:FindFirstChild(`{SLOT_NAME_PREFIX}{penNumber}`) else nil
+	return if slot and slot:IsA("BasePart") then slot else nil
+end
+
+-- Height of the walkable ground under a position, ignoring pens, slots, waypoints, sheep and characters.
+local function getFloorY(plot: Folder, position: Vector3): number?
+	local ignored: { Instance } = {}
+	for _, name in { PENS_FOLDER_NAME, SLOTS_FOLDER_NAME, WAYPOINTS_FOLDER_NAME, SHEEPS_FOLDER_NAME } do
+		local folder = plot:FindFirstChild(name)
+		if folder then
+			table.insert(ignored, folder)
+		end
+	end
+	for _, player in players:GetPlayers() do
+		if player.Character then
+			table.insert(ignored, player.Character)
+		end
+	end
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = ignored
+	params.RespectCanCollide = true
+
+	local origin = position + Vector3.new(0, FLOOR_RAY_HEIGHT, 0)
+	local result = workspace:Raycast(origin, Vector3.new(0, -FLOOR_RAY_LENGTH, 0), params)
+	return if result then result.Position.Y else nil
+end
+
+-- The slot's spot on the floor, turned the way the slot faces.
+local function getFloorFrame(plot: Folder, slot: BasePart): CFrame?
+	local floorY = getFloorY(plot, slot.Position)
+	if not floorY then
+		return nil
+	end
+
+	local _, yaw = slot.CFrame:ToOrientation()
+	return CFrame.new(slot.Position.X, floorY, slot.Position.Z) * CFrame.Angles(0, yaw, 0)
+end
+
 -- Finds the folders a plot needs to hold pens; returns nil if the plot has no Pens/Base_Pen.
 local function findPlotParts(plot: Folder): PlotParts?
 	local pens = plot:FindFirstChild(PENS_FOLDER_NAME)
@@ -83,72 +129,70 @@ local function findPlotParts(plot: Folder): PlotParts?
 
 	if not pristineBasePens[pens] then
 		pristineBasePens[pens] = basePen:Clone()
+
+		local firstSlot = getSlot(plot, 1)
+		local firstFrame = if firstSlot then getFloorFrame(plot, firstSlot) else nil
+		if firstFrame then
+			basePenOffsetFromSlot[pens] = firstFrame:ToObjectSpace(basePen:GetPivot())
+		end
 	end
 
 	local waypoints = plot:FindFirstChild(WAYPOINTS_FOLDER_NAME)
-	local paths = plot:FindFirstChild(PATHS_FOLDER_NAME)
 
 	return {
 		plot = plot,
 		pens = pens,
 		basePen = basePen,
 		waypoints = if waypoints and waypoints:IsA("Folder") then waypoints else nil,
-		paths = if paths and paths:IsA("Folder") then paths else nil,
 	}
 end
 
--- A plot can override how far apart its pens are and which way they grow.
-local function getLayout(plot: Folder): (number, Vector3)
-	local spacing = plot:GetAttribute(SPACING_ATTRIBUTE)
-	local direction = plot:GetAttribute(DIRECTION_ATTRIBUTE)
-
-	local penSpacing = if typeof(spacing) == "number" then spacing else DEFAULT_PEN_SPACING
-	local penDirection = if typeof(direction) == "Vector3" and direction.Magnitude > 0
-		then direction.Unit
-		else DEFAULT_PEN_DIRECTION.Unit
-
-	return penSpacing, penDirection
+-- Where a new pen's pivot goes so it sits on the slot exactly like Base_Pen sits on PenSlot1.
+local function getPenPivot(parts: PlotParts, slot: BasePart): CFrame?
+	local offset = basePenOffsetFromSlot[parts.pens]
+	local frame = getFloorFrame(parts.plot, slot)
+	return if offset and frame then frame * offset else nil
 end
 
--- Extends the route by cloning its last waypoint one pen further along.
-local function createWaypoint(folder: Folder?, waypoints: { BasePart }, step: Vector3): BasePart?
-	local last = waypoints[#waypoints]
-	if not folder or not last then
+-- Marks the spot just outside a pen's entrance, on the floor, where its sheep finish their walk.
+local function createEntranceWaypoint(parts: PlotParts, slot: BasePart, penNumber: number): BasePart?
+	local template = getWaypointParts(parts.waypoints)[1]
+	if not parts.waypoints or not template then
 		return nil
 	end
 
-	local waypoint = last:Clone()
-	waypoint.Name = tostring(#waypoints + 1)
-	waypoint.Position = last.Position + step
-	waypoint.Parent = folder
-	return waypoint
-end
-
--- Clones the first path piece into the new pen's slot, trimmed slightly so neighbours don't z-fight.
-local function createPathPiece(paths: Folder?, penNumber: number, direction: Vector3, offset: Vector3): BasePart?
-	local template = if paths then paths:FindFirstChildWhichIsA("BasePart") else nil
-	if not paths or not template then
+	local target = slot.Position + slot.CFrame.LookVector * ENTRANCE_DISTANCE
+	local floorY = getFloorY(parts.plot, target)
+	if not floorY then
 		return nil
 	end
 
-	local piece = template:Clone()
-	piece.Name = `Part{penNumber}`
-	piece.CFrame = template.CFrame + offset
-
-	local size = piece.Size
-	local cframe = piece.CFrame
-	if math.abs(cframe.RightVector:Dot(direction)) >= math.abs(cframe.LookVector:Dot(direction)) then
-		piece.Size = Vector3.new(size.X - PATH_SEAM_GAP, size.Y, size.Z)
-	else
-		piece.Size = Vector3.new(size.X, size.Y, size.Z - PATH_SEAM_GAP)
-	end
-
-	piece.Parent = paths
-	return piece
+	local entrance = template:Clone()
+	entrance.Name = `Entrance{penNumber}`
+	entrance.Position = Vector3.new(target.X, floorY + template.Size.Y / 2, target.Z)
+	entrance.Parent = parts.waypoints
+	return entrance
 end
 
-local function registerPen(player: Player, pen: Pen.Pen)
+-- The plot's shared waypoints followed by this pen's entrance; the entrance is added to extras so it is cleaned up with the pen.
+local function buildRoute(parts: PlotParts, slot: BasePart?, penNumber: number, extras: { Instance }): { BasePart }
+	local route = getWaypointParts(parts.waypoints)
+	local entrance = if slot then createEntranceWaypoint(parts, slot, penNumber) else nil
+	if entrance then
+		table.insert(route, entrance)
+		table.insert(extras, entrance)
+	end
+
+	return route
+end
+
+local function registerPen(player: Player, pen: Pen.Pen, slot: BasePart?)
 	table.insert(playerPens[player], pen)
+
+	if slot then
+		slot:SetAttribute(SLOT_OCCUPIED_ATTRIBUTE, true)
+		penSlots[pen] = slot
+	end
 
 	if started then
 		pen:start()
@@ -157,7 +201,17 @@ local function registerPen(player: Player, pen: Pen.Pen)
 	PenHandler.PenAdded:Fire(player, pen)
 end
 
--- Gives a player their first pen, which is the Base_Pen already sitting in their plot.
+local function disposePen(pen: Pen.Pen)
+	local slot = penSlots[pen]
+	if slot then
+		slot:SetAttribute(SLOT_OCCUPIED_ATTRIBUTE, false)
+		penSlots[pen] = nil
+	end
+
+	pen:destroy()
+end
+
+-- Gives a player their first pen, which is the Base_Pen already sitting on PenSlot1 in their plot.
 local function setupPlayer(player: Player)
 	local plot = getPlot(player)
 	local parts = if plot then findPlotParts(plot) else nil
@@ -166,13 +220,20 @@ local function setupPlayer(player: Player)
 		return
 	end
 
-	local basePen = Pen.new(player, 1, parts.basePen, getWaypointParts(parts.waypoints), {})
+	local slot = getSlot(parts.plot, 1)
+	local extras: { Instance } = {}
+	local route = buildRoute(parts, slot, 1, extras)
+
+	local basePen = Pen.new(player, 1, parts.basePen, route, extras)
 	if not basePen then
+		for _, instance in extras do
+			instance:Destroy()
+		end
 		return
 	end
 
 	playerPens[player] = {}
-	registerPen(player, basePen)
+	registerPen(player, basePen, slot)
 end
 
 -- Plots are assigned by PlotHandler, which may run after the player joins.
@@ -208,7 +269,7 @@ local function onPlayerRemoving(player: Player)
 
 	playerPens[player] = nil
 	for _, pen in ownedPens do
-		pen:destroy()
+		disposePen(pen)
 	end
 
 	local basePen = ownedPens[1]
@@ -218,45 +279,39 @@ local function onPlayerRemoving(player: Player)
 end
 
 --[[
-	Creates the player's next pen: clones Base_Pen one slot further along the plot,
-	extends the waypoint route to it and adds a matching piece of path.
-	Returns the new pen, or nil if the player has no valid plot.
+	Creates the player's next pen on the next slot: a fresh Base_Pen set on the floor of PenSlotN,
+	facing the way the slot faces, with its own stop just outside the entrance for the sheep.
+	Returns the new pen, or nil if the player has no valid plot or that slot is missing.
 ]]
 function PenHandler.createPen(player: Player): Pen.Pen?
 	local ownedPens = playerPens[player]
 	local plot = getPlot(player)
-	local plotParts = if plot then findPlotParts(plot) :: PlotParts else nil
+	local plotParts = if plot then findPlotParts(plot) else nil
 	if not ownedPens or not plotParts then
 		warn(`PenHandler: cannot create a pen for {player.Name}.`)
 		return nil
 	end
 
 	local penNumber = #ownedPens + 1
-	local spacing, direction = getLayout(plotParts.plot)
-	local step = direction * spacing
-	local offset = step * (penNumber - 1)
+	local slot = getSlot(plotParts.plot, penNumber)
+	local pivot = if slot then getPenPivot(plotParts, slot) else nil
+	if not slot or not pivot then
+		warn(`PenHandler: {player.Name} has no usable {SLOT_NAME_PREFIX}{penNumber}.`)
+		return nil
+	end
+
 	local extras: { Instance } = {}
 
 	local template = pristineBasePens[plotParts.pens] or plotParts.basePen
 	local model = template:Clone()
 	model.Name = `Pen_{penNumber}`
-	model:PivotTo(model:GetPivot() + offset)
+	model:PivotTo(pivot)
 	model.Parent = plotParts.pens
 	table.insert(extras, model)
 
-	local waypoints = getWaypointParts(plotParts.waypoints)
-	local waypoint = createWaypoint(plotParts.waypoints, waypoints, step)
-	if waypoint then
-		table.insert(waypoints, waypoint)
-		table.insert(extras, waypoint)
-	end
+	local route = buildRoute(plotParts, slot, penNumber, extras)
 
-	local pathPiece = createPathPiece(plotParts.paths, penNumber, direction, offset)
-	if pathPiece then
-		table.insert(extras, pathPiece)
-	end
-
-	local pen = Pen.new(player, penNumber, model, waypoints, extras)
+	local pen = Pen.new(player, penNumber, model, route, extras)
 	if not pen then
 		for _, instance in extras do
 			instance:Destroy()
@@ -264,7 +319,7 @@ function PenHandler.createPen(player: Player): Pen.Pen?
 		return nil
 	end
 
-	registerPen(player, pen)
+	registerPen(player, pen, slot)
 	return pen
 end
 
@@ -292,8 +347,8 @@ end
 
 --[[
 	Removes a player's pen. Only the most-recently-bought pen (the highest
-	id, and never the base pen #1) can be sold -- pen numbering and spacing
-	assumes a contiguous, append-only list, so removing from the middle
+	id, and never the base pen #1) can be sold -- pen numbering and slots
+	assume a contiguous, append-only list, so removing from the middle
 	would require re-flowing every pen after it. Returns false if the pen
 	isn't sellable or isn't the player's.
 ]]
@@ -308,8 +363,9 @@ function PenHandler.removePen(player: Player, pen: Pen.Pen): boolean
 		return false
 	end
 
-	pen:destroy()
+	disposePen(pen)
 	table.remove(ownedPens, lastIndex)
+	PenHandler.PenRemoved:Fire(player, pen)
 	return true
 end
 
