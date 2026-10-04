@@ -65,6 +65,10 @@ players.PlayerRemoving:Connect(function(player: Player)
 	lastSignature[player] = nil
 end)
 
+players.PlayerAdded:Connect(function(player: Player)
+	pushState(player, false)
+end)
+
 task.spawn(function()
 	while true do
 		task.wait(POLL_SECONDS)

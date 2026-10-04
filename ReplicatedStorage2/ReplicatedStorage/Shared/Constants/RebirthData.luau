@@ -16,14 +16,14 @@
 
 local rebirthData = {}
 
-rebirthData.MAX_REBIRTHS = 5
+rebirthData.MAX_REBIRTHS = 20
 
 --// Money requirement: BASE * GROWTH ^ rebirths
-rebirthData.MONEY_COST_BASE = 300
+rebirthData.MONEY_COST_BASE = 50000
 rebirthData.MONEY_COST_GROWTH = 2.25
 
 --// Wool the player must be holding: BASE * GROWTH ^ rebirths
-rebirthData.WOOL_REQUIRED_BASE = 10
+rebirthData.WOOL_REQUIRED_BASE = 500
 rebirthData.WOOL_REQUIRED_GROWTH = 1.5
 
 --// Pens owned / workers hired: BASE + rebirths, never more than PENS_CAP
