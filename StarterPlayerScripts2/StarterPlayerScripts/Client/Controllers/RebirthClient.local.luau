@@ -36,6 +36,7 @@ local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local hudButtons = playerGui:WaitForChild("Main"):WaitForChild("Buttons")
 local openButton = hudButtons:WaitForChild("Rebirth") :: GuiButton
+local alertBadge = openButton:FindFirstChild("Alert", true) :: GuiObject? -- optional badge on the HUD button
 
 local rebirthGui = playerGui:WaitForChild("RebirthScreen") :: ScreenGui
 local mainFrame = rebirthGui:WaitForChild("Main") :: Frame
@@ -222,6 +223,19 @@ local function flashMessage(text: string)
 	end)
 end
 
+-- The HUD button's "Alert" badge shows an exclamation mark while a rebirth is ready.
+local function updateAlert()
+	if not alertBadge then
+		return
+	end
+
+	local ready = state ~= nil and state.canRebirth == true
+	alertBadge.Visible = ready
+	if ready and (alertBadge:IsA("TextLabel") or alertBadge:IsA("TextButton")) then
+		alertBadge.Text = "!"
+	end
+end
+
 --// Open / close -----------------------------------------------------------------------
 
 local function closeScreen()
@@ -248,6 +262,7 @@ for _, template in specificTemplates do
 	template.Visible = false
 end
 rebirthGui.Enabled = false
+updateAlert()
 
 openButton.MouseButton1Click:Connect(function()
 	if rebirthGui.Enabled then
@@ -275,6 +290,7 @@ network.waitUntilReadyAsync()
 
 network.connectEvent(network.RemoteEvents.RebirthState, function(newState: any)
 	state = newState
+	updateAlert()
 	if rebirthGui.Enabled then
 		render()
 	end

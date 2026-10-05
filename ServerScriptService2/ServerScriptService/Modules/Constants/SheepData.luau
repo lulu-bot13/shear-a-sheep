@@ -128,17 +128,22 @@ function sheepData.getTotalWeight(chances: { [string]: number }?): number
 	return total
 end
 
--- Builds a chances table (sheepName -> weight) for the given pen level, biasing rarer tiers upward.
-function sheepData.buildChancesForLevel(level: number): { [string]: number }?
+--[[
+	Builds a chances table (sheepName -> weight) for the given pen level, biasing rarer tiers upward.
+	`baseLuck` (1 = none; it grows with rebirths) boosts every tier above Common on top of the level's
+	multipliers.
+]]
+function sheepData.buildChancesForLevel(level: number, baseLuck: number?): { [string]: number }?
+	local luck = baseLuck or 1
 	local multipliers = sheepData.UpgradeMultipliers[level]
-	if not multipliers or level <= 1 then
+	if not multipliers or (level <= 1 and luck <= 1) then
 		return nil -- nil means "use the base table as-is"
 	end
 
 	local chances = {}
 	for sheepName, data in sheepData do
 		if type(data) == "table" and data.chance then
-			local multiplier = multipliers[data.rarity] or 1
+			local multiplier = (multipliers[data.rarity] or 1) * (if data.rarity == "Common" then 1 else luck)
 			chances[sheepName] = data.chance * multiplier
 		end
 	end

@@ -47,7 +47,8 @@ local WORKER_TEXT_SECONDS = 1.4
 
 local WOOL_COLOR = Color3.fromRGB(255, 250, 240)
 local WOOL_EDGE_COLOR = Color3.fromRGB(176, 214, 245)
-local GREEN = Color3.fromRGB(110, 255, 130)
+local WORKER_TEXT_COLOR = Color3.fromRGB(78, 80, 90) -- dark grey
+local WORKER_TEXT_STROKE = Color3.fromRGB(240, 240, 245) -- light outline, so the dark text reads against the grass
 local FONT = Enum.Font.SourceSansBold
 
 --// State
@@ -204,7 +205,7 @@ end
 --// Stage 1: puffs to the character ---------------------------------------------------------
 
 -- The counter is already holding back `amount` (set when the event arrived).
-local function collectWool(origin: Vector3, amount: number)
+local function collectWool(origin: Vector3, amount: number, color: Color3)
 	local camera = workspace.CurrentCamera
 	local rootPart = getCharacterRoot()
 	if not camera or not rootPart then
@@ -238,7 +239,7 @@ local function collectWool(origin: Vector3, amount: number)
 			puff.Name = "WoolPuff"
 			puff.Shape = Enum.PartType.Ball
 			puff.Size = Vector3.one * (0.5 + math.random() * 0.45)
-			puff.Color = WOOL_COLOR
+			puff.Color = color
 			puff.Material = Enum.Material.SmoothPlastic
 			puff.Anchored = true
 			puff.CanCollide = false
@@ -289,7 +290,7 @@ local function collectWool(origin: Vector3, amount: number)
 	end
 end
 
-woolCollected.Event:Connect(function(origin: Vector3, amount: number)
+woolCollected.Event:Connect(function(origin: Vector3, amount: number, color: Color3)
 	-- Hold the wool back straight away, before the counter shows it.
 	changeHeld(amount)
 	holdToken += 1
@@ -302,7 +303,7 @@ woolCollected.Event:Connect(function(origin: Vector3, amount: number)
 
 	-- Wait a frame: the HUD was only just switched back on and its labels need to be laid out.
 	task.wait()
-	collectWool(origin, amount)
+	collectWool(origin, amount, color)
 end)
 
 --// Worker wool ------------------------------------------------------------------------
@@ -333,12 +334,12 @@ local function showWorkerWool(position: Vector3, amount: number)
 	label.Size = UDim2.fromScale(1, 1)
 	label.Font = FONT
 	label.TextSize = 40
-	label.TextColor3 = GREEN
+	label.TextColor3 = WORKER_TEXT_COLOR
 	label.Text = `+{numberFormatter:Format(amount, 1) or amount} Wool`
 	label.Parent = billboard
 
 	local stroke = Instance.new("UIStroke")
-	stroke.Color = Color3.new(0, 0, 0)
+	stroke.Color = WORKER_TEXT_STROKE
 	stroke.Thickness = 3
 	stroke.Parent = label
 

@@ -48,6 +48,8 @@ local OPEN_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirecti
 --// State
 local openToken = 0
 local currentState: any = nil
+local pendingPenId: number? = nil -- the pen whose Hire button opened the screen
+local closeScreen: () -> ()
 local readyFill = hireButton.BackgroundColor3
 
 local openScale = Instance.new("UIScale")
@@ -115,11 +117,19 @@ local function render(state: any, reason: string?)
 	if reason then
 		shake(hireButton)
 	end
+
+	-- Opened from a pen's menu: the worker just bought goes onto that pen and the screen closes.
+	if pendingPenId and state.available > 0 and not reason then
+		local penId = pendingPenId
+		closeScreen()
+		network.fireServer(network.RemoteEvents.HireWorker, penId)
+	end
 end
 
 --// Open / close ---------------------------------------------------------------
 
-local function closeScreen()
+closeScreen = function()
+	pendingPenId = nil
 	local wasOpen = hireGui.Enabled
 	openToken += 1
 	hireGui.Enabled = false
@@ -188,8 +198,9 @@ loadHeadshot()
 
 exitButton.MouseButton1Click:Connect(closeScreen)
 
-openRequest.Event:Connect(function()
+openRequest.Event:Connect(function(penId: number?)
 	if not hireGui.Enabled then
+		pendingPenId = penId
 		openScreen(nil)
 	end
 end)

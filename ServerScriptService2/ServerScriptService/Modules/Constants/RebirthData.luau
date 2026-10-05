@@ -35,6 +35,17 @@ rebirthData.MAX_WORKERS_BASE = 2
 --// Reward: wool sells for (1 + MULTIPLIER_PER_REBIRTH * rebirths) times its normal price
 rebirthData.MULTIPLIER_PER_REBIRTH = 0.5
 
+--// Base luck: every pen's rare sheep odds are boosted by (1 + LUCK_PER_REBIRTH * rebirths), on top of upgrades
+rebirthData.LUCK_PER_REBIRTH = 0.25
+
+--// The look every pen gets after this many rebirths (a model in ReplicatedStorage.Assets.Models.Pens).
+--// The highest entry at or below the player's rebirth count applies, so 3+ rebirths keep Candy_Pen.
+rebirthData.PEN_TYPES = {
+	[0] = "Base_Pen",
+	[1] = "Stone_Pen",
+	[2] = "Candy_Pen",
+} :: { [number]: string }
+
 --// Money a player has right after a rebirth (same as a brand new player in PlayerSetup)
 rebirthData.STARTING_MONEY = 1000
 
@@ -57,6 +68,20 @@ end
 
 function rebirthData.getMaxWorkers(rebirths: number): number
 	return math.min(rebirthData.PENS_CAP, rebirthData.MAX_WORKERS_BASE + rebirths)
+end
+
+function rebirthData.getBaseLuck(rebirths: number): number
+	return 1 + rebirthData.LUCK_PER_REBIRTH * rebirths
+end
+
+function rebirthData.getPenType(rebirths: number): string
+	local best = 0
+	for threshold in rebirthData.PEN_TYPES do
+		if threshold <= rebirths and threshold > best then
+			best = threshold
+		end
+	end
+	return rebirthData.PEN_TYPES[best]
 end
 
 -- How much more a player's wool sells for after this many rebirths (1 = normal price).

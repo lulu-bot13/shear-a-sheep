@@ -26,7 +26,6 @@ local ENTER_DISTANCE = 11 -- studs from the pen's PlayerPos before the menu pops
 local EXIT_DISTANCE = 14 -- studs before it closes again (bigger, so it doesn't flicker at the edge)
 local ACTION_DISTANCE = 19 -- how far away a player may still press the menu's buttons
 local POLL_SECONDS = 0.05
-local REPLACE_COOLDOWN_SECONDS = 0.5
 
 type Zone = {
 	penId: number,
@@ -35,7 +34,6 @@ type Zone = {
 
 --// State
 local zones: { [Player]: Zone } = {}
-local lastReplace: { [Player]: number } = {}
 
 --// Helpers -------------------------------------------------------------------
 
@@ -70,6 +68,7 @@ local function buildMenuData(player: Player, pen: any)
 	local level = pen:getLevel()
 	local upgradeCost = EconomyData.getPenUpgradeCost(level)
 	local multipliers = SheepData.UpgradeMultipliers[level] or SheepData.UpgradeMultipliers[1]
+	local nextMultipliers = SheepData.UpgradeMultipliers[level + 1]
 	local money = getMoneyAmount(player)
 	local workers = WorkerHandler.getState(player)
 
@@ -93,7 +92,8 @@ local function buildMenuData(player: Player, pen: any)
 		penType = pen.penType,
 		level = level,
 		maxLevel = SheepData.MaxPenLevel,
-		luck = multipliers.Rare,
+		luck = multipliers.Rare * pen.baseLuck, -- how much likelier rare sheep are than at level 1 on a fresh farm
+		nextLuck = if nextMultipliers then nextMultipliers.Rare * pen.baseLuck else nil, -- what the next upgrade makes it
 		upgradeCost = upgradeCost,
 		canAffordUpgrade = upgradeCost ~= nil and money >= upgradeCost,
 		workerHired = pen.data.automated,
@@ -116,6 +116,7 @@ local function getSignature(data: any): string
 		tostring(data.penId),
 		tostring(data.penType),
 		tostring(data.level),
+		tostring(data.luck),
 		tostring(data.canAffordUpgrade),
 		tostring(data.workerHired),
 		tostring(data.workersAvailable),
@@ -234,28 +235,6 @@ local function onRemoveWorker(player: Player, penId: any)
 	pushMenu(player, pen)
 end
 
--- Swaps the pen's model for a pen from the player's inventory (chosen in the pen manager).
-local function onReplacePen(player: Player, penId: any, penType: any)
-	if typeof(penType) ~= "string" then
-		return
-	end
-
-	local now = os.clock()
-	if now - (lastReplace[player] or 0) < REPLACE_COOLDOWN_SECONDS then
-		return
-	end
-	lastReplace[player] = now
-
-	local pen = getActionPen(player, penId)
-	if not pen then
-		return
-	end
-
-	if PenHandler.replacePenModel(player, pen, penType) then
-		pushMenu(player, pen)
-	end
-end
-
 --// Walk-up detection -------------------------------------------------------------
 
 -- Opens/closes/refreshes the menu depending on where the player is standing.
@@ -314,11 +293,9 @@ network.connectEvent(network.RemoteEvents.UpgradePen, onUpgradePen)
 network.connectEvent(network.RemoteEvents.SellPen, onSellPen)
 network.connectEvent(network.RemoteEvents.HireWorker, onHireWorker)
 network.connectEvent(network.RemoteEvents.RemoveWorker, onRemoveWorker)
-network.connectEvent(network.RemoteEvents.ReplacePen, onReplacePen)
 
 players.PlayerRemoving:Connect(function(player: Player)
 	zones[player] = nil
-	lastReplace[player] = nil
 end)
 
 task.spawn(function()

@@ -58,7 +58,7 @@ shearTimingData.TimeoutDamage = 0 -- didn't press before TimeLimit ran out
 
 --// Zones (total width, fraction of the bar) -------------------------------------------
 
-shearTimingData.PerfectZoneSize = 0.10
+shearTimingData.PerfectZoneSize = 0.15
 shearTimingData.GreatZoneSize = 0.20
 shearTimingData.GoodZoneSize = 0.34
 shearTimingData.PoorZoneSize = 0.56

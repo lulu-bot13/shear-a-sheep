@@ -12,9 +12,9 @@
 		      ├─ Hire [TextButton]       "Hire (2)" = unused workers / red "Remove" when the pen has a worker
 		      └─ Shear [TextButton]      "[E] Shear" - E on the keyboard does the same
 
-	Manage (opens the pen manager, PenManageClient) and Sell (newest pen only) are not part of the Studio
-	layout. If Buttons has TextButtons named `Manage` and `Sell` they are used; otherwise a row with those
-	two is added under Shear, styled like Shear, and Main is made taller to fit it.
+	Sell (newest pen only) and a Luck line ("Luck: x1.25 > x2") are not part of the Studio layout. A
+	TextButton `Sell` and a TextLabel `Luck` in Buttons are used if present; otherwise they are added
+	(Sell under Shear, styled like it, Luck above Upgrade) and Main is made taller to fit them.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.PenMenuClient
 ]]--
@@ -51,8 +51,8 @@ local GOLD = Color3.fromRGB(255, 176, 32)
 local WHITE = Color3.new(1, 1, 1)
 local DISABLED_FILL = Color3.fromRGB(96, 99, 110)
 local REMOVE_FILL = Color3.fromRGB(232, 78, 88)
-local SELL_FILL =Color3.fromRGB(232, 78, 88)
-local MANAGE_FILL = Color3.fromRGB(150, 110, 235)
+local SELL_FILL = Color3.fromRGB(232, 78, 88)
+local LUCK_COLOR = "#7CFF8A" -- the luck an upgrade would give
 local SLIDE_IN = TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local SLIDE_OUT = TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 local SHEAR_ACTION = "PenMenuShear"
@@ -77,6 +77,11 @@ end
 
 --// Buttons ------------------------------------------------------------------
 
+-- 1.6 -> "x1.6", 2 -> "x2"
+local function formatLuck(luck: number): string
+	return "x" .. (string.format("%.2f", luck):gsub("%.?0+$", ""))
+end
+
 type ButtonInfo = {
 	button: TextButton,
 	fill: Color3, -- the colour the button has in Studio
@@ -98,6 +103,7 @@ local function makeInteractive(button: TextButton, fill: Color3?): ButtonInfo
 		tweenScale(1)
 	end)
 	button.MouseButton1Down:Connect(function()
+		print(`Pressing on {button.Name}`)
 		tweenScale(0.96)
 	end)
 	button.MouseButton1Up:Connect(function()
@@ -131,71 +137,85 @@ local upgrade = makeInteractive(upgradeButton)
 local hire = makeInteractive(hireButton)
 local shear = makeInteractive(shearButton)
 
---[[
-	Manage and Sell: use TextButtons of those names if the Buttons frame already has them, otherwise add a
-	row below Shear with a copy of the Shear button for each. A new row takes height, so Main and Buttons
-	grow by that much and everything above keeps its pixel position.
-]]--
-local function findOrCreateExtraButtons(): (ButtonInfo, ButtonInfo)
-	local existingManage = buttonsFrame:FindFirstChild("Manage")
-	local existingSell = buttonsFrame:FindFirstChild("Sell")
-	if existingManage and existingManage:IsA("TextButton") and existingSell and existingSell:IsA("TextButton") then
-		return makeInteractive(existingManage), makeInteractive(existingSell)
-	end
-
-	local layout = buttonsFrame:FindFirstChildOfClass("UIListLayout")
-	local row = Instance.new("Frame")
-	row.Name = "Extra"
-	row.BackgroundTransparency = 1
-	row.Size = shearButton.Size
-	row.LayoutOrder = 100
-	row.Parent = buttonsFrame
-
-	local rowLayout = Instance.new("UIListLayout")
-	rowLayout.FillDirection = Enum.FillDirection.Horizontal
-	rowLayout.SortOrder = Enum.SortOrder.LayoutOrder
-	rowLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-	rowLayout.Padding = UDim.new(0, 8)
-	rowLayout.Parent = row
-
-	local function copyOfShear(name: string, text: string, fill: Color3, order: number): TextButton
-		local copy = shearButton:Clone()
-		copy.Name = name
-		copy.Text = text
-		copy.BackgroundColor3 = fill
-		copy.LayoutOrder = order
-		copy.Size = UDim2.new(0.5, -4, 1, 0)
-		for _, child in copy:GetChildren() do
-			if child:IsA("UIScale") then
-				child:Destroy()
-			end
-		end
-		copy.Parent = row
-		return copy
-	end
-
-	local manageButton = copyOfShear("Manage", "Manage", MANAGE_FILL, 1)
-	local sellButton = copyOfShear("Sell", "Sell", SELL_FILL, 2)
-
-	-- Make room for the row (only possible when Main's height is a plain pixel size).
-	local oldHeight = main.Size.Y.Offset
-	if main.Size.Y.Scale == 0 and oldHeight > 0 then
-		local gap = if layout then layout.Padding.Offset + layout.Padding.Scale * buttonsFrame.Size.Y.Offset else 8
-		local growth = shearButton.Size.Y.Offset + gap
-		local newHeight = oldHeight + growth
-
-		for _, child in { titleLabel, preview, buttonsFrame } do
-			local position = child.Position
-			child.Position = UDim2.new(position.X.Scale, position.X.Offset, position.Y.Scale * oldHeight / newHeight, position.Y.Offset)
-		end
-		buttonsFrame.Size = UDim2.new(buttonsFrame.Size.X.Scale, buttonsFrame.Size.X.Offset, buttonsFrame.Size.Y.Scale, buttonsFrame.Size.Y.Offset + growth)
-		main.Size = UDim2.new(main.Size.X.Scale, main.Size.X.Offset, main.Size.Y.Scale, newHeight)
-	end
-
-	return makeInteractive(manageButton, MANAGE_FILL), makeInteractive(sellButton, SELL_FILL)
+local buttonsLayout = buttonsFrame:FindFirstChildOfClass("UIListLayout")
+if buttonsLayout then
+	buttonsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 end
 
-local manage, sell = findOrCreateExtraButtons()
+-- A new row takes height (only possible when Main's height is a plain pixel size): Main and Buttons grow by it.
+local function makeRoomForRow(rowHeight: number)
+	local oldHeight = main.Size.Y.Offset
+	if main.Size.Y.Scale ~= 0 or oldHeight <= 0 then
+		return
+	end
+
+	local gap = if buttonsLayout then buttonsLayout.Padding.Offset + buttonsLayout.Padding.Scale * buttonsFrame.Size.Y.Offset else 8
+	local growth = rowHeight + gap
+	local newHeight = oldHeight + growth
+
+	for _, child in { titleLabel, preview, buttonsFrame } do
+		local position = child.Position
+		child.Position = UDim2.new(position.X.Scale, position.X.Offset, position.Y.Scale * oldHeight / newHeight, position.Y.Offset)
+	end
+	buttonsFrame.Size = UDim2.new(buttonsFrame.Size.X.Scale, buttonsFrame.Size.X.Offset, buttonsFrame.Size.Y.Scale, buttonsFrame.Size.Y.Offset + growth)
+	main.Size = UDim2.new(main.Size.X.Scale, main.Size.X.Offset, main.Size.Y.Scale, newHeight)
+end
+
+--[[
+	Sell and the luck line are not part of the Studio layout. A TextButton named `Sell` and a TextLabel
+	named `Luck` in Buttons are used if they exist; otherwise Sell is added under Shear (a copy of Shear)
+	and Luck above Upgrade, and Main grows to fit them.
+]]--
+local function findOrCreateSell(): ButtonInfo
+	local existing = buttonsFrame:FindFirstChild("Sell")
+	if existing and existing:IsA("TextButton") then
+		return makeInteractive(existing)
+	end
+
+	local copy = shearButton:Clone()
+	copy.Name = "Sell"
+	copy.Text = "Sell"
+	copy.BackgroundColor3 = SELL_FILL
+	copy.LayoutOrder = 100
+	for _, child in copy:GetChildren() do
+		if child:IsA("UIScale") then
+			child:Destroy()
+		end
+	end
+	copy.Parent = buttonsFrame
+	makeRoomForRow(shearButton.Size.Y.Offset)
+
+	return makeInteractive(copy, SELL_FILL)
+end
+
+local function findOrCreateLuckLabel(): TextLabel
+	local existing = buttonsFrame:FindFirstChild("Luck")
+	if existing and existing:IsA("TextLabel") then
+		return existing
+	end
+
+	local label = Instance.new("TextLabel")
+	label.Name = "Luck"
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.new(1, 0, 0, 26)
+	label.LayoutOrder = -1
+	label.Font = shearButton.Font
+	label.TextSize = 20
+	label.TextColor3 = WHITE
+	label.RichText = true
+	label.Parent = buttonsFrame
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Thickness = 2
+	stroke.Color = Color3.new(0, 0, 0)
+	stroke.Parent = label
+
+	makeRoomForRow(26)
+	return label
+end
+
+local sell = findOrCreateSell()
+local luckLabel = findOrCreateLuckLabel()
 
 main.Position = HIDDEN_POSITION
 penMenuGui.Enabled = false
@@ -360,15 +380,17 @@ local function render(data: any)
 		setButtonState(shear, "disabled")
 	end
 
-	-- Sell is only offered for the newest pen; Manage takes the whole row when it isn't.
-	local canSell = data.canSell == true
-	sell.button.Visible = canSell
+	-- Sell is only offered for the newest pen.
+	sell.button.Visible = data.canSell == true
 	sell.button.Text = `Sell +{formatMoney(data.sellValue or 0)}`
 	setButtonState(sell, "ready")
-	if sell.button.Parent == manage.button.Parent and manage.button.Parent ~= buttonsFrame then
-		manage.button.Size = if canSell then UDim2.new(0.5, -4, 1, 0) else UDim2.new(1, 0, 1, 0)
+
+	-- Luck: what the pen has now, and what the next upgrade makes it.
+	if data.nextLuck then
+		luckLabel.Text = `Luck: {formatLuck(data.luck)} <font color="{LUCK_COLOR}">→ {formatLuck(data.nextLuck)}</font>`
+	else
+		luckLabel.Text = `Luck: {formatLuck(data.luck)} (max)`
 	end
-	setButtonState(manage, "ready")
 
 	show()
 end
@@ -417,7 +439,7 @@ sell.button.MouseButton1Click:Connect(function()
 	network.fireServer(network.RemoteEvents.SellPen, data.penId)
 end)
 
---// Pen manager (PenManageClient) -----------------------------------------------------
+--// Hire Workers screen (HireWorkersClient) --------------------------------------------
 
 local function getBindable(name: string): BindableEvent
 	local existing = player:FindFirstChild(name)
@@ -431,8 +453,6 @@ local function getBindable(name: string): BindableEvent
 	return event
 end
 
-local manageRequest = getBindable("ManagePenRequest")
-local manageClosed = getBindable("ManagePenClosed")
 local openHireWorkers = getBindable("OpenHireWorkers")
 local hireWorkersClosed = getBindable("HireWorkersClosed")
 
@@ -448,29 +468,13 @@ hireButton.MouseButton1Click:Connect(function()
 	-- Nobody free to send to the pen: go and hire one.
 	if data.workersAvailable <= 0 then
 		penMenuGui.Enabled = false
-		openHireWorkers:Fire()
+		openHireWorkers:Fire(data.penId) -- a worker bought there goes straight onto this pen
 		return
 	end
 	network.fireServer(network.RemoteEvents.HireWorker, data.penId)
 end)
 
--- The manager takes over the screen, so the menu steps aside while it is open.
-manage.button.MouseButton1Click:Connect(function()
-	local data = currentData
-	if not data then
-		return
-	end
-
-	penMenuGui.Enabled = false
-	manageRequest:Fire(data)
-end)
-
-manageClosed.Event:Connect(function()
-	if visible then
-		penMenuGui.Enabled = true
-	end
-end)
-
+-- The Hire Workers screen takes over while it is open, so the menu steps aside.
 hireWorkersClosed.Event:Connect(function()
 	if visible then
 		penMenuGui.Enabled = true

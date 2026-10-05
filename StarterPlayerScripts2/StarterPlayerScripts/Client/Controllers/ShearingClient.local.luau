@@ -91,6 +91,7 @@ local WOOL_CHUNK_LIFETIME = 1.4
 local POPUP_FONT = sheepNameLabel.Font -- popups match the font of the GUI
 local WHITE = Color3.new(1, 1, 1)
 local BLACK = Color3.new(0, 0, 0)
+local DAMAGE_COLOR = Color3.fromRGB(255, 150, 150) -- pale red damage numbers
 
 -- Tier colours come from ShearTimingData.TierColors; these are used for any tier it doesn't list.
 local DEFAULT_TIER_COLORS: { [string]: Color3 } = {
@@ -112,7 +113,7 @@ local TRACK_WIDTH = zoneTrack.Size.X.Scale
 local CURSOR_Y = cursor.Position.Y
 local TIMING_HOME = timingBar.Position
 
--- Tells WoolCollectClient to play the wool effect (origin: Vector3, woolAmount: number).
+-- Tells WoolCollectClient to play the wool effect (origin: Vector3, woolAmount: number, color: Color3).
 local woolCollected = player:FindFirstChild("WoolCollected") :: BindableEvent?
 if not woolCollected then
 	woolCollected = Instance.new("BindableEvent")
@@ -134,6 +135,7 @@ local shearTool: Tool? = nil
 local healthConnection: RBXScriptConnection? = nil
 local renderConnection: RBXScriptConnection? = nil
 local lastSheepPosition: Vector3? = nil
+local woolColor = WHITE -- the sheep's wool colour when its shearing began (the Torso fades as it is shorn)
 local savedWalkSpeed = 16
 local savedFieldOfView = 70
 
@@ -433,7 +435,7 @@ local function showDamage(tier: string, damage: number)
 	local big = tier == "PERFECT"
 	local text = if damage > 0 then `-{damage}` else "MISS"
 	local size = if big then 54 else if tier == "MISS" then 30 else 38
-	local label = spawnPopup(text, screenPoint, getTierColor(tier), size, if big then 90 else 70, if big then 0.85 else 0.7)
+	local label = spawnPopup(text, screenPoint, if damage > 0 then DAMAGE_COLOR else getTierColor(tier), size, if big then 90 else 70, if big then 0.85 else 0.7)
 
 	-- Punch in: starts small and overshoots, so every hit lands with a thump.
 	local scale = Instance.new("UIScale")
@@ -630,6 +632,9 @@ local function startMinigame(sheepModel: Model)
 	shearing = true
 	currentSheep = sheepModel
 	attempt = nil
+
+	local torso = sheepModel:FindFirstChild("Torso")
+	woolColor = if torso and torso:IsA("BasePart") then torso.Color else WHITE
 	setMainHudVisible(false)
 
 	updateHealthBar(sheepModel:GetAttribute("ShearHealth") :: number, sheepModel:GetAttribute("MaxShearHealth") :: number)
@@ -762,7 +767,7 @@ network.connectEvent(network.RemoteEvents.DeactivateShearing, function(completed
 	endMinigame()
 
 	if completed and woolAmount and origin then
-		woolCollected:Fire(origin, woolAmount)
+		woolCollected:Fire(origin, woolAmount, woolColor)
 	end
 
 	exitStation()

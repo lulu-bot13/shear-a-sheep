@@ -14,7 +14,6 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 --// Modules
 local Pen = require(script.Parent.Parent.Classes.Pen)
 local PlotHandler = require(script.Parent.PlotHandler)
-local InventoryHandler = require(script.Parent.InventoryHandler)
 local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
 
 --// Instances
@@ -369,28 +368,22 @@ function PenHandler.removePen(player: Player, pen: Pen.Pen): boolean
 	return true
 end
 
---[[
-	Replaces a pen's model with one of the pens in the player's inventory. The pen type the pen had
-	goes back into the inventory, so nothing is lost. Returns false if the swap isn't allowed.
-]]
-function PenHandler.replacePenModel(player: Player, pen: Pen.Pen, penType: string): boolean
-	if pen.owner ~= player or pen.destroyed or pen.penType == penType then
+-- Gives a pen the look of one of the pen templates (e.g. "Stone_Pen"). Returns false if there is no such template.
+function PenHandler.setPenType(pen: Pen.Pen, penType: string): boolean
+	if pen.destroyed then
 		return false
+	end
+	if pen.penType == penType then
+		return true
 	end
 
 	local template = penTemplates:FindFirstChild(penType)
-	if not template or not template:IsA("Model") or not InventoryHandler.hasPen(player, penType) then
+	if not template or not template:IsA("Model") then
+		warn(`PenHandler: no pen template named {penType}.`)
 		return false
 	end
 
-	local previousType = pen.penType
-	if not pen:replaceModel(template, penType) then
-		return false
-	end
-
-	InventoryHandler.removePen(player, penType)
-	InventoryHandler.addPen(player, previousType)
-	return true
+	return pen:replaceModel(template, penType)
 end
 
 -- Returns the pen a currently active sheep belongs to, or nil.

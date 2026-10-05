@@ -32,7 +32,7 @@ local SHEEP_Y_OFFSET = 1.45 -- how far above the pen's SheepPos the sheep's root
 local REACH_DISTANCE = 3
 local AGENT_PARAMS = { AgentRadius = 3, AgentHeight = 4, AgentCanJump = false, WaypointSpacing = math.huge }
 local WORKER_SHEAR_INTERVAL_SECONDS = 1.5
-local WORKER_FORWARD_OFFSET = 2.5 -- studs the worker stands in front of PlayerPos, towards the sheep
+local WORKER_FORWARD_OFFSET = 2 -- studs the worker stands in front of PlayerPos, towards the sheep
 local DEFAULT_SHEAR_ID = "DefaultShear" -- the worker's shears when the owner's own can't be found
 local WORKER_FLOOR_RAY_HEIGHT = 6 -- ray starts this far above PlayerPos when looking for the ground under the worker
 local WORKER_FLOOR_RAY_LENGTH = 40
@@ -67,6 +67,7 @@ type PenFields = {
 	healthConnection: RBXScriptConnection?,
 	workerLabel: TextLabel?,
 	level: number,
+	baseLuck: number, -- from rebirths (1 = none); boosts rare sheep on top of the upgrade level
 	workerModel: Model?,
 	workerRigTrack: AnimationTrack?, -- the worker's swing; loaded once and replayed on every hit
 	workerToolTrack: AnimationTrack?,
@@ -405,6 +406,7 @@ function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart 
 		healthConnection = nil,
 		workerLabel = nil,
 		level = 1,
+		baseLuck = 1,
 		workerModel = nil,
 		workerRigTrack = nil,
 		workerToolTrack = nil,
@@ -489,9 +491,16 @@ function Pen.upgrade(self: Pen): boolean
 	end
 
 	self.level += 1
-	self.data.chances = SheepData.buildChancesForLevel(self.level)
+	self.data.chances = SheepData.buildChancesForLevel(self.level, self.baseLuck)
 	self:_refreshWorkerLabel()
 	return true
+end
+
+-- Sets the rebirth luck and reworks the sheep odds with it (the next sheep to spawn uses them).
+function Pen.setBaseLuck(self: Pen, luck: number)
+	self.baseLuck = luck
+	self.data.chances = SheepData.buildChancesForLevel(self.level, luck)
+	self:_refreshWorkerLabel()
 end
 
 --[[
@@ -708,7 +717,7 @@ function Pen.resetProgress(self: Pen)
 	end
 
 	self.level = 1
-	self.data.chances = nil
+	self.data.chances = SheepData.buildChancesForLevel(1, self.baseLuck)
 	self:removeWorker()
 end
 

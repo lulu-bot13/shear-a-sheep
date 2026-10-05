@@ -29,9 +29,6 @@ export type EnumType = "ActivateShearing"
     | "WoolSold"
     | "PurchaseShear"
     | "ShearPurchaseResult"
-    | "PenSkinAction"
-    | "PenSkinResult"
-    | "ReplacePen"
     | "RequestRebirth"
     | "RequestRebirthState"
     | "RebirthState"
@@ -59,9 +56,6 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
     WoolSold = "WoolSold",
     PurchaseShear = "PurchaseShear",
     ShearPurchaseResult = "ShearPurchaseResult",
-    PenSkinAction = "PenSkinAction",
-    PenSkinResult = "PenSkinResult",
-    ReplacePen = "ReplacePen",
     RequestRebirth = "RequestRebirth",
     RequestRebirthState = "RequestRebirthState",
     RebirthState = "RebirthState",

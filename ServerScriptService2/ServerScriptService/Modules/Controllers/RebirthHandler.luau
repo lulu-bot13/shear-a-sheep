@@ -74,6 +74,13 @@ local function makeRequirement(id: string, label: string, current: number, requi
 	return { id = id, label = label, current = current, required = required, met = current >= required }
 end
 
+-- Gives a pen the base luck and the look (Stone, Candy...) that the player's rebirths have earned.
+local function applyRebirthLook(player: Player, pen: any)
+	local rebirths = RebirthHandler.getRebirths(player)
+	pen:setBaseLuck(RebirthData.getBaseLuck(rebirths))
+	PenHandler.setPenType(pen, RebirthData.getPenType(rebirths))
+end
+
 -- Puts the player's farm back to the start (see RebirthData for what is reset and what is kept).
 local function resetProgress(player: Player)
 	local wool = InventoryHandler.getItem(player, WOOL_ITEM)
@@ -90,6 +97,7 @@ local function resetProgress(player: Player)
 	local basePen = pens[1]
 	if basePen then
 		basePen:resetProgress()
+		applyRebirthLook(player, basePen)
 	end
 	player:SetAttribute(WORKERS_OWNED_ATTRIBUTE, 0) -- hired workers are lost with the farm
 
@@ -214,6 +222,9 @@ end
 
 function RebirthHandler.Setup()
 	players.PlayerAdded:Connect(onPlayerAdded)
+
+	-- Pens bought after a rebirth start as a plain pen; give them the rebirth look and luck too.
+	PenHandler.PenAdded:Connect(applyRebirthLook)
 	players.PlayerRemoving:Connect(function(player: Player)
 		rebirthing[player] = nil
 	end)
