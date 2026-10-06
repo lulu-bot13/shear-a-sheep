@@ -5,10 +5,6 @@ local physicsService = game:GetService("PhysicsService")
 --// Modules
 local InventoryHandler = require(game.ServerScriptService.Modules.Controllers.InventoryHandler)
 
--- Pens every player starts with in their inventory (template names in ReplicatedStorage.Assets.Models.Pens).
--- Placeholder until pens can be earned or bought; set to {} to start empty.
-local STARTER_PENS = { Oak_Pen = 2, Stone_Pen = 1 }
-
 -- Sheep stay collidable with the ground but not with players, so they never block or bump them.
 local function setupCollisionGroups()
 	pcall(function()
@@ -50,9 +46,6 @@ local function onPlayerAdded(player: Player)
 
     InventoryHandler.setupPlayer(player)
     InventoryHandler.addItem(player, "Wool", 0)
-    for penType, amount in STARTER_PENS do
-        InventoryHandler.addPen(player, penType, amount)
-    end
 
     local leaderstats = Instance.new("Folder")
     leaderstats.Name = "leaderstats"

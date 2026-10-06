@@ -103,7 +103,6 @@ local function makeInteractive(button: TextButton, fill: Color3?): ButtonInfo
 		tweenScale(1)
 	end)
 	button.MouseButton1Down:Connect(function()
-		print(`Pressing on {button.Name}`)
 		tweenScale(0.96)
 	end)
 	button.MouseButton1Up:Connect(function()

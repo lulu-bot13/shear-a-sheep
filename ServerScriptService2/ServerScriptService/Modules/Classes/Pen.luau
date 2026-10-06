@@ -342,6 +342,24 @@ function Pen._updateHealthBillboard(self: Pen)
 	billboard.Enabled = true
 end
 
+-- The sheep's spot facing the player, or turned flank-on (head to the camera's right) like when a player shears it.
+local function getSheepSeatCFrame(pen: Pen, sideOn: boolean): CFrame
+	local flat = Vector3.new(pen.playerPosition.X - pen.sheepPosition.X, 0, pen.playerPosition.Z - pen.sheepPosition.Z)
+	local towardPlayer = if flat.Magnitude > 0.01 then flat.Unit else Vector3.new(0, 0, 1)
+	local facing = if sideOn then towardPlayer:Cross(Vector3.yAxis) else towardPlayer
+	return CFrame.lookAt(pen.sheepPosition, pen.sheepPosition + facing)
+end
+
+-- Snaps the pen's seated sheep (no tween) to face the player or flank-on.
+local function turnSeatedSheep(pen: Pen, sideOn: boolean)
+	local id = pen.occupiedSheepId
+	local sheep = if id and pen.seated then SheepHandler.getSheep(id) else nil
+	local rootPart = if sheep then sheep:FindFirstChild("HumanoidRootPart") :: BasePart? else nil
+	if rootPart then
+		rootPart.CFrame = getSheepSeatCFrame(pen, sideOn) * CFrame.new(0, SHEEP_Y_OFFSET, 0)
+	end
+end
+
 -- Freezes the sheep on the pen's SheepPos facing the player, ready to be sheared from the pen menu.
 local function seatSheep(pen: Pen, sheepModel: Model, id: number)
 	local humanoid = sheepModel:FindFirstChildOfClass("Humanoid")
@@ -352,8 +370,7 @@ local function seatSheep(pen: Pen, sheepModel: Model, id: number)
 
 	local rootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if rootPart then
-		local lookTarget = Vector3.new(pen.playerPosition.X, pen.sheepPosition.Y, pen.playerPosition.Z)
-		rootPart.CFrame = CFrame.lookAt(pen.sheepPosition, lookTarget) * CFrame.new(0, SHEEP_Y_OFFSET, 0)
+		rootPart.CFrame = getSheepSeatCFrame(pen, pen.data.automated) * CFrame.new(0, SHEEP_Y_OFFSET, 0)
 		rootPart.Anchored = true
 	end
 
@@ -665,6 +682,8 @@ function Pen.hireWorker(self: Pen): boolean
 	self.workerToken += 1
 	local token = self.workerToken
 
+	turnSeatedSheep(self, true)
+
 	-- Loading the avatar yields, so it happens off to the side while the pen starts automating.
 	task.spawn(function()
 		self:_spawnWorker(token)
@@ -686,8 +705,13 @@ end
 
 -- Takes the worker off this pen: its shear loop ends, its model and income label go, the sheep health bar hides.
 function Pen.removeWorker(self: Pen)
+	local hadWorker = self.data.automated
 	self.data.automated = false
 	self.workerToken += 1
+
+	if hadWorker and not self.shearingPlayer then
+		turnSeatedSheep(self, false)
+	end
 
 	local worker = self.workerModel
 	if worker then
