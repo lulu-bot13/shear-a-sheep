@@ -1,8 +1,8 @@
 --!strict
 
 --[[
-	Dresses the rigs in each plot's HireWorkersShack.PlayerCharacters as the local player. Only the owner of
-	a plot sees its rigs: on every other plot the model is taken out of the world on this client.
+	Only the owner of a plot sees the rigs in its HireWorkersShack.PlayerCharacters: on every other plot the
+	model is taken out of the world on this client. (The server dresses them, see PlotHandler.)
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.PlotRigsClient
 ]]--
@@ -15,27 +15,7 @@ local player = players.LocalPlayer
 local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 
 --// State
-local description: HumanoidDescription? = nil
 local hiddenRigs: { [Instance]: Instance } = {} -- rig model -> the HireWorkersShack it belongs in
-
-local function dress(rigs: Instance)
-	if not description then
-		return
-	end
-
-	for _, humanoid in rigs:GetDescendants() do
-		if humanoid:IsA("Humanoid") then
-			task.spawn(function()
-				local success, err = pcall(function()
-					humanoid:ApplyDescription(description :: HumanoidDescription)
-				end)
-				if not success then
-					warn(`PlotRigsClient: could not dress {humanoid:GetFullName()}: {err}`)
-				end
-			end)
-		end
-	end
-end
 
 local function refreshPlot(plot: Instance)
 	local shack = plot:FindFirstChild("HireWorkersShack")
@@ -54,7 +34,6 @@ local function refreshPlot(plot: Instance)
 			rigs.Parent = shack
 			hiddenRigs[shack] = nil
 		end
-		dress(rigs)
 	elseif rigs.Parent == shack then
 		hiddenRigs[shack] = rigs
 		rigs.Parent = nil
@@ -78,15 +57,6 @@ for _, plot in plotsFolder:GetChildren() do
 		hiddenRigs[shack] = rigs
 		rigs.Parent = nil
 	end
-end
-
-local success, result = pcall(function()
-	return players:GetHumanoidDescriptionFromUserId(player.UserId)
-end)
-if success then
-	description = result
-else
-	warn(`PlotRigsClient: could not load {player.Name}'s avatar: {result}`)
 end
 
 for _, plot in plotsFolder:GetChildren() do

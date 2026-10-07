@@ -12,9 +12,11 @@
 		      ├─ Hire [TextButton]       "Hire (2)" = unused workers / red "Remove" when the pen has a worker
 		      └─ Shear [TextButton]      "[E] Shear" - E on the keyboard does the same
 
-	Sell (newest pen only) and a Luck line ("Luck: x1.25 > x2") are not part of the Studio layout. A
-	TextButton `Sell` and a TextLabel `Luck` in Buttons are used if present; otherwise they are added
-	(Sell under Shear, styled like it, Luck above Upgrade) and Main is made taller to fit them.
+	Main.Luck [TextLabel] shows the luck line ("Luck: x1.25 → x2"), and Hire.PlayerHeadshot [ImageLabel]
+	becomes the local player's headshot.
+
+	Sell (newest pen only) is not part of the Studio layout. A TextButton `Sell` in Buttons is used if
+	present; otherwise it is added under Shear, styled like it, and Main is made taller to fit it.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.PenMenuClient
 ]]--
@@ -42,6 +44,8 @@ local buttonsFrame = main:WaitForChild("Buttons") :: Frame
 local upgradeButton = buttonsFrame:WaitForChild("Upgrade") :: TextButton
 local hireButton = buttonsFrame:WaitForChild("Hire") :: TextButton
 local shearButton = buttonsFrame:WaitForChild("Shear") :: TextButton
+local luckLabel = main:WaitForChild("Luck") :: TextLabel
+local playerHeadshot = hireButton:WaitForChild("PlayerHeadshot") :: ImageLabel
 
 -- The script keeps references into this GUI for the whole session, so it must survive respawns.
 penMenuGui.ResetOnSpawn = false
@@ -84,6 +88,7 @@ end
 
 type ButtonInfo = {
 	button: TextButton,
+	label: TextLabel | TextButton, -- the TextLabel under the button that shows its text
 	fill: Color3, -- the colour the button has in Studio
 	scale: UIScale,
 }
@@ -109,7 +114,15 @@ local function makeInteractive(button: TextButton, fill: Color3?): ButtonInfo
 		tweenScale(1.04)
 	end)
 
-	return { button = button, fill = fill or button.BackgroundColor3, scale = scale }
+	-- Text goes in the TextLabel under the button; the button's own Text is blanked so it doesn't show twice.
+	local label: TextLabel | TextButton? = button:FindFirstChildWhichIsA("TextLabel", true)
+	if label then
+		button.Text = ""
+	else
+		warn(`PenMenuClient: {button.Name} has no TextLabel under it, using the button's own text`)
+	end
+
+	return { button = button, label = label or button, fill = fill or button.BackgroundColor3, scale = scale }
 end
 
 -- "ready" = its own colour, "poor" = can't afford (muted, still clickable so it can shake), "disabled" = greyed out.
@@ -161,9 +174,8 @@ local function makeRoomForRow(rowHeight: number)
 end
 
 --[[
-	Sell and the luck line are not part of the Studio layout. A TextButton named `Sell` and a TextLabel
-	named `Luck` in Buttons are used if they exist; otherwise Sell is added under Shear (a copy of Shear)
-	and Luck above Upgrade, and Main grows to fit them.
+	Sell is not part of the Studio layout. A TextButton named `Sell` in Buttons is used if it exists;
+	otherwise it is added under Shear (a copy of Shear) and Main grows to fit it.
 ]]--
 local function findOrCreateSell(): ButtonInfo
 	local existing = buttonsFrame:FindFirstChild("Sell")
@@ -173,7 +185,6 @@ local function findOrCreateSell(): ButtonInfo
 
 	local copy = shearButton:Clone()
 	copy.Name = "Sell"
-	copy.Text = "Sell"
 	copy.BackgroundColor3 = SELL_FILL
 	copy.LayoutOrder = 100
 	for _, child in copy:GetChildren() do
@@ -187,34 +198,20 @@ local function findOrCreateSell(): ButtonInfo
 	return makeInteractive(copy, SELL_FILL)
 end
 
-local function findOrCreateLuckLabel(): TextLabel
-	local existing = buttonsFrame:FindFirstChild("Luck")
-	if existing and existing:IsA("TextLabel") then
-		return existing
-	end
-
-	local label = Instance.new("TextLabel")
-	label.Name = "Luck"
-	label.BackgroundTransparency = 1
-	label.Size = UDim2.new(1, 0, 0, 26)
-	label.LayoutOrder = -1
-	label.Font = shearButton.Font
-	label.TextSize = 20
-	label.TextColor3 = WHITE
-	label.RichText = true
-	label.Parent = buttonsFrame
-
-	local stroke = Instance.new("UIStroke")
-	stroke.Thickness = 2
-	stroke.Color = Color3.new(0, 0, 0)
-	stroke.Parent = label
-
-	makeRoomForRow(26)
-	return label
-end
-
 local sell = findOrCreateSell()
-local luckLabel = findOrCreateLuckLabel()
+luckLabel.RichText = true
+
+-- The player's own headshot on the Hire button.
+task.spawn(function()
+	local success, content = pcall(function()
+		return players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+	end)
+	if success then
+		playerHeadshot.Image = content
+	else
+		warn(`PenMenuClient: could not load {player.Name}'s headshot: {content}`)
+	end
+end)
 
 main.Position = HIDDEN_POSITION
 penMenuGui.Enabled = false
@@ -350,38 +347,38 @@ local function render(data: any)
 
 	-- Upgrade
 	if data.upgradeCost then
-		upgradeButton.Text = `Upgrade: {formatMoney(data.upgradeCost)}`
+		upgrade.label.Text = `Upgrade: {formatMoney(data.upgradeCost)}`
 		setButtonState(upgrade, if data.canAffordUpgrade then "ready" else "poor")
 	else
-		upgradeButton.Text = "Max Level"
+		upgrade.label.Text = "Max Level"
 		setButtonState(upgrade, "disabled")
 	end
 
-	-- Hire a worker (automation)
+	-- Hire a worker (automation): the label is how many workers the player owns
 	if data.workerHired then
-		hireButton.Text = "Remove"
+		hire.label.Text = "Remove"
 		hireButton.BackgroundColor3 = REMOVE_FILL
 	else
 		-- With no unused worker the button still works: it opens the Hire Workers screen.
-		hireButton.Text = `Hire ({data.workersAvailable})`
+		hire.label.Text = tostring(data.workersOwned or 0)
 		setButtonState(hire, if data.workersAvailable > 0 then "ready" else "poor")
 	end
 
 	-- Start shearing
 	if data.workerHired then
-		shearButton.Text = "Worker is shearing"
+		shear.label.Text = "Worker is shearing"
 		setButtonState(shear, "disabled")
 	elseif data.sheepReady then
-		shearButton.Text = if data.sheepDamaged then "[E] Continue" else "[E] Shear"
+		shear.label.Text = if data.sheepDamaged then "[E] Continue" else "[E] Shear"
 		setButtonState(shear, "ready")
 	else
-		shearButton.Text = "Waiting for sheep..."
+		shear.label.Text = "Waiting for sheep..."
 		setButtonState(shear, "disabled")
 	end
 
 	-- Sell is only offered for the newest pen.
 	sell.button.Visible = data.canSell == true
-	sell.button.Text = `Sell +{formatMoney(data.sellValue or 0)}`
+	sell.label.Text = `Sell +{formatMoney(data.sellValue or 0)}`
 	setButtonState(sell, "ready")
 
 	-- Luck: what the pen has now, and what the next upgrade makes it.

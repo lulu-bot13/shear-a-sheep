@@ -83,6 +83,11 @@ end
 
 -- Shrinks the wool and fades it towards bare skin as the sheep's ShearHealth drops (seen by everyone).
 local function updateWoolVisual(sheep: Model)
+	-- A worker's pen keeps the wool as it is (nothing to resize/recolour on every swing).
+	if sheep:GetAttribute("WorkerShearing") then
+		return
+	end
+
 	local wool = getWoolPart(sheep)
 	local health = sheep:GetAttribute("ShearHealth")
 	local maxHealth = sheep:GetAttribute("MaxShearHealth")
@@ -108,6 +113,7 @@ end
 
 local function resetSheepForPool(sheep: Instance)
 	restoreWool(sheep)
+	sheep:SetAttribute("WorkerShearing", nil)
 	sheep:SetAttribute(OWNER_ATTRIBUTE, nil)
 
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")

@@ -45,6 +45,37 @@ local function getOwnedPlot(player: Player): Folder?
 	return nil
 end
 
+-- Dresses the plot's HireWorkersShack rigs as the owner. ApplyDescription only works on the server;
+-- PlotRigsClient hides the rigs from everyone but the owner.
+local function dressRigs(plot: Folder, player: Player)
+	local shack = plot:FindFirstChild("HireWorkersShack")
+	local rigs = shack and shack:FindFirstChild("PlayerCharacters")
+	if not rigs then
+		return
+	end
+
+	local success, description = pcall(function()
+		return players:GetHumanoidDescriptionFromUserId(player.UserId)
+	end)
+	if not success then
+		warn(`PlotHandler: could not load {player.Name}'s avatar: {description}`)
+		return
+	end
+
+	for _, humanoid in rigs:GetDescendants() do
+		if humanoid:IsA("Humanoid") then
+			task.spawn(function()
+				local applied, err = pcall(function()
+					humanoid:ApplyDescription(description)
+				end)
+				if not applied then
+					warn(`PlotHandler: could not dress {humanoid:GetFullName()}: {err}`)
+				end
+			end)
+		end
+	end
+end
+
 local function assignPlot(player: Player)
 	if getOwnedPlot(player) then
 		return
@@ -58,6 +89,7 @@ local function assignPlot(player: Player)
 
 	plot:SetAttribute("Owner", player.UserId)
 	player:SetAttribute("PlotName", plot.Name)
+	task.spawn(dressRigs, plot, player)
 
 	-- Position player to plot
 	local character = player.Character or player.CharacterAdded:Wait()

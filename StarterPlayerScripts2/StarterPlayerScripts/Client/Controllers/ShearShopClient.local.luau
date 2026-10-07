@@ -4,7 +4,8 @@
 	Pressing any ProximityPrompt tagged "ShearShop" opens the shop. Each shear in
 	ShearShopUIData gets a card cloned from the Template: name, speed / damage, a spinning
 	3D preview and a purchase button. Buying is validated by the server (ShearShopHandler);
-	the cards update from the player's "ShearId" attribute and Money.
+	the cards update from the player's "ShearId" / "OwnedShears" attributes and Money. A shear that is
+	owned but not equipped shows "Equip" and switches to it when pressed (EquipShear).
 
 	Performance: the previews are built once (on first open), and ONE render connection
 	exists only while the shop is open. It turns each preview by moving its ViewportFrame
@@ -47,6 +48,7 @@ local REASON_TEXT = {
 	TooFar = "Too far away",
 	Owned = "Already owned",
 	Busy = "Finish shearing first",
+	NotOwned = "Buy it first",
 }
 
 type Card = {
@@ -83,16 +85,24 @@ local function shake(button: GuiObject)
 	end)
 end
 
-local function getCurrentRank(): number
-	return UIData.getRank(player:GetAttribute("ShearId") or "DefaultShear")
+-- The shears in the player's temporary inventory (the server's "OwnedShears" attribute: "DefaultShear,SteelShears").
+local function isOwned(id: string): boolean
+	local owned = player:GetAttribute("OwnedShears")
+	if type(owned) ~= "string" then
+		return id == "DefaultShear"
+	end
+	for ownedId in string.gmatch(owned, "[^,]+") do
+		if ownedId == id then
+			return true
+		end
+	end
+	return false
 end
 
 local function getState(card: Card): string
-	local rank = UIData.getRank(card.info.id)
-	local currentRank = getCurrentRank()
-	if rank == currentRank then
+	if card.info.id == (player:GetAttribute("ShearId") or "DefaultShear") then
 		return "equipped"
-	elseif rank < currentRank then
+	elseif isOwned(card.info.id) then
 		return "owned"
 	elseif money.Value >= card.info.price then
 		return "ready"
@@ -108,7 +118,7 @@ local function refreshCard(card: Card)
 		card.purchase.Text = "Equipped"
 		card.purchase.BackgroundColor3 = colors.Equipped
 	elseif state == "owned" then
-		card.purchase.Text = "Owned"
+		card.purchase.Text = "Equip"
 		card.purchase.BackgroundColor3 = colors.Owned
 	else
 		card.purchase.Text = `Purchase - {UIData.formatMoney(card.info.price)}`
@@ -207,6 +217,8 @@ local function createCards()
 			local state = getState(card)
 			if state == "ready" then
 				network.fireServer(network.RemoteEvents.PurchaseShear, info.id)
+			elseif state == "owned" then
+				network.fireServer(network.RemoteEvents.EquipShear, info.id)
 			elseif state == "poor" then
 				flashMessage(card, REASON_TEXT.NoMoney)
 			else
@@ -404,11 +416,13 @@ money.Changed:Connect(function()
 	end
 end)
 
-player:GetAttributeChangedSignal("ShearId"):Connect(function()
-	if shopGui.Enabled then
-		refreshAll()
-	end
-end)
+for _, attribute in { "ShearId", "OwnedShears" } do
+	player:GetAttributeChangedSignal(attribute):Connect(function()
+		if shopGui.Enabled then
+			refreshAll()
+		end
+	end)
+end
 
 for _, instance in collectionService:GetTagged(SHOP_PROMPT_TAG) do
 	connectPrompt(instance)

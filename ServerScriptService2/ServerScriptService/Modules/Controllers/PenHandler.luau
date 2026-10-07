@@ -2,7 +2,7 @@
 
 --[[
 	Builds each player's pens on their plot's PenSlots and tracks them per player.
-	Pen N goes on PenSlotN: centred on it, resting on the floor and facing the way the slot faces.
+	Pen N goes on the PenSlots part named N: centred on it, resting on the floor and facing the way the slot faces.
 
 	Location: ServerScriptService.Modules.Controllers.PenHandler
 ]]--
@@ -24,9 +24,9 @@ local INITIAL_SPAWN_DELAY_SECONDS = 5
 local PENS_FOLDER_NAME = "Pens"
 local BASE_PEN_NAME = "Base_Pen"
 local WAYPOINTS_FOLDER_NAME = "Waypoints"
+local PLACEHOLDERS_FOLDER_NAME = "Placeholders"
 local SLOTS_FOLDER_NAME = "PenSlots"
 local SHEEPS_FOLDER_NAME = "Sheeps"
-local SLOT_NAME_PREFIX = "PenSlot"
 local SLOT_OCCUPIED_ATTRIBUTE = "HasPen"
 local PLOT_NAME_ATTRIBUTE = "PlotName"
 local ENTRANCE_DISTANCE = 12 -- studs from a slot's centre to where its sheep stop, just outside the fence
@@ -78,14 +78,14 @@ end
 
 local function getSlot(plot: Folder, penNumber: number): BasePart?
 	local slots = plot:FindFirstChild(SLOTS_FOLDER_NAME)
-	local slot = if slots then slots:FindFirstChild(`{SLOT_NAME_PREFIX}{penNumber}`) else nil
+	local slot = if slots then slots:FindFirstChild(tostring(penNumber)) else nil
 	return if slot and slot:IsA("BasePart") then slot else nil
 end
 
 -- Height of the walkable ground under a position, ignoring pens, slots, waypoints, sheep and characters.
 local function getFloorY(plot: Folder, position: Vector3): number?
 	local ignored: { Instance } = {}
-	for _, name in { PENS_FOLDER_NAME, SLOTS_FOLDER_NAME, WAYPOINTS_FOLDER_NAME, SHEEPS_FOLDER_NAME } do
+	for _, name in { PENS_FOLDER_NAME, SLOTS_FOLDER_NAME, WAYPOINTS_FOLDER_NAME, SHEEPS_FOLDER_NAME, PLACEHOLDERS_FOLDER_NAME } do
 		local folder = plot:FindFirstChild(name)
 		if folder then
 			table.insert(ignored, folder)
@@ -146,7 +146,7 @@ local function findPlotParts(plot: Folder): PlotParts?
 	}
 end
 
--- Where a new pen's pivot goes so it sits on the slot exactly like Base_Pen sits on PenSlot1.
+-- Where a new pen's pivot goes so it sits on the slot exactly like Base_Pen sits on slot 1.
 local function getPenPivot(parts: PlotParts, slot: BasePart): CFrame?
 	local offset = basePenOffsetFromSlot[parts.pens]
 	local frame = getFloorFrame(parts.plot, slot)
@@ -210,7 +210,7 @@ local function disposePen(pen: Pen.Pen)
 	pen:destroy()
 end
 
--- Gives a player their first pen, which is the Base_Pen already sitting on PenSlot1 in their plot.
+-- Gives a player their first pen, which is the Base_Pen already sitting on slot 1 in their plot.
 local function setupPlayer(player: Player)
 	local plot = getPlot(player)
 	local parts = if plot then findPlotParts(plot) else nil
@@ -278,7 +278,7 @@ local function onPlayerRemoving(player: Player)
 end
 
 --[[
-	Creates the player's next pen on the next slot: a fresh Base_Pen set on the floor of PenSlotN,
+	Creates the player's next pen on the next slot: a fresh Base_Pen set on the floor of slot N,
 	facing the way the slot faces, with its own stop just outside the entrance for the sheep.
 	Returns the new pen, or nil if the player has no valid plot or that slot is missing.
 ]]
@@ -295,7 +295,7 @@ function PenHandler.createPen(player: Player): Pen.Pen?
 	local slot = getSlot(plotParts.plot, penNumber)
 	local pivot = if slot then getPenPivot(plotParts, slot) else nil
 	if not slot or not pivot then
-		warn(`PenHandler: {player.Name} has no usable {SLOT_NAME_PREFIX}{penNumber}.`)
+		warn(`PenHandler: {player.Name} has no usable slot {penNumber}.`)
 		return nil
 	end
 
@@ -320,6 +320,13 @@ function PenHandler.createPen(player: Player): Pen.Pen?
 
 	registerPen(player, pen, slot)
 	return pen
+end
+
+-- Where a pen model authored like Base_Pen would be pivoted on this plot's slot; nil if the slot or plot is unusable.
+function PenHandler.getSlotPivot(plot: Folder, slotNumber: number): CFrame?
+	local parts = findPlotParts(plot)
+	local slot = getSlot(plot, slotNumber)
+	return if parts and slot then getPenPivot(parts, slot) else nil
 end
 
 -- Returns a copy of the player's pens, in the order they were created.

@@ -22,8 +22,7 @@ local EconomyData = require(serverScriptService.Modules.Constants.EconomyData)
 local WorkerHandler = require(serverScriptService.Modules.Controllers.WorkerHandler)
 
 --// Configs
-local ENTER_DISTANCE = 11 -- studs from the pen's PlayerPos before the menu pops up
-local EXIT_DISTANCE = 14 -- studs before it closes again (bigger, so it doesn't flicker at the edge)
+local ENTER_DISTANCE = 11 -- studs from the pen's PlayerPos within which the menu is open
 local ACTION_DISTANCE = 19 -- how far away a player may still press the menu's buttons
 local POLL_SECONDS = 0.05
 
@@ -98,6 +97,7 @@ local function buildMenuData(player: Player, pen: any)
 		canAffordUpgrade = upgradeCost ~= nil and money >= upgradeCost,
 		workerHired = pen.data.automated,
 		workersAvailable = workers.available,
+		workersOwned = workers.owned,
 		canSell = canSell,
 		sellValue = if canSell then EconomyData.getPenSellValue(pen.id) else 0,
 		sheepReady = sheepReady,
@@ -120,6 +120,7 @@ local function getSignature(data: any): string
 		tostring(data.canAffordUpgrade),
 		tostring(data.workerHired),
 		tostring(data.workersAvailable),
+		tostring(data.workersOwned),
 		tostring(data.canSell),
 		tostring(data.sheepReady),
 		tostring(data.sheepId),
@@ -244,27 +245,14 @@ local function updateZone(player: Player)
 		return
 	end
 
-	local zone = zones[player]
+	-- The closest pen the player is standing at, if any.
 	local target: any = nil
-
-	-- Stay on the current pen until the player is clearly out of range...
-	if zone then
-		local current = PenHandler.getPen(player, zone.penId)
-		local distance = if current then getDistanceToPen(player, current) else nil
-		if current and distance and distance <= EXIT_DISTANCE then
-			target = current
-		end
-	end
-
-	-- ...otherwise pick the closest pen they've walked up to.
-	if not target then
-		local nearestDistance = ENTER_DISTANCE
-		for _, pen in PenHandler.getPens(player) do
-			local distance = getDistanceToPen(player, pen)
-			if distance and distance <= nearestDistance then
-				nearestDistance = distance
-				target = pen
-			end
+	local nearestDistance = ENTER_DISTANCE
+	for _, pen in PenHandler.getPens(player) do
+		local distance = getDistanceToPen(player, pen)
+		if distance and distance <= nearestDistance then
+			nearestDistance = distance
+			target = pen
 		end
 	end
 

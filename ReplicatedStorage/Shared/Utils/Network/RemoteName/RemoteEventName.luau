@@ -22,6 +22,7 @@ export type EnumType = "ActivateShearing"
     | "HireWorker"
     | "WoolSold"
     | "PurchaseShear"
+    | "EquipShear"
     | "ShearPurchaseResult"
     | "PenSkinAction"
     | "PenSkinResult"
@@ -46,6 +47,7 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
     HireWorker = "HireWorker",
     WoolSold = "WoolSold",
     PurchaseShear = "PurchaseShear",
+    EquipShear = "EquipShear",
     ShearPurchaseResult = "ShearPurchaseResult",
     PenSkinAction = "PenSkinAction",
     PenSkinResult = "PenSkinResult",

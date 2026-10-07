@@ -87,6 +87,12 @@ local REASON_TEXT = {
 	NotReady = "You don't meet every requirement yet",
 }
 
+-- The bar and text as built in Studio, and their darker look once the money target is reached.
+local moneyBarColor = moneyProgress.BackgroundColor3
+local moneyBarReachedColor = moneyBarColor:Lerp(Color3.new(0, 0, 0), 0.4)
+local moneyTextColor = moneyText.TextColor3
+local moneyTextReachedColor = moneyTextColor:Lerp(Color3.new(0, 0, 0), 0.4)
+
 --// State
 local state: any = nil -- the last RebirthState from the server
 local rows: { [string]: Frame } = {}
@@ -153,7 +159,12 @@ local function renderMoney()
 	local size = moneyProgress.Size
 	tweenService:Create(moneyProgress, BAR_TWEEN, { Size = UDim2.new(ratio, 0, size.Y.Scale, size.Y.Offset) }):Play()
 
-	moneyText.Text = if state.maxed then "MAX" else `${formatNumber(state.money)}/${formatNumber(cost)}`
+	-- Reaching the target darkens the bar and the text reads e.g. $50,000/$50,000 (never above the target).
+	local reached = not state.maxed and state.money >= cost
+	tweenService:Create(moneyProgress, BAR_TWEEN, { BackgroundColor3 = if reached then moneyBarReachedColor else moneyBarColor }):Play()
+	tweenService:Create(moneyText, BAR_TWEEN, { TextColor3 = if reached then moneyTextReachedColor else moneyTextColor }):Play()
+
+	moneyText.Text = if state.maxed then "MAX" else `${formatNumber(math.min(state.money, cost))}/${formatNumber(cost)}`
 end
 
 local function renderRequirements()

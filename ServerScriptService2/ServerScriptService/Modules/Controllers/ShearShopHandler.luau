@@ -1,10 +1,11 @@
 --[[
 	Server side of the shear shop.
 
-	Every player has exactly one shear, stored as the player attribute "ShearId" (replicates to
-	the client) and mirrored by a Tool in their Backpack. Buying a shear validates everything on
-	the server (range, money, progression), charges the player, swaps the attribute, destroys the
-	old shear Tool and hands over the new one. The tool is re-synced on every respawn, since the
+	Every player has exactly one equipped shear, stored as the player attribute "ShearId" (replicates to
+	the client) and mirrored by a Tool in their Backpack. Bought shears stay in a temporary inventory
+	("OwnedShears") and can be switched between at the shop. Buying a shear validates everything on
+	the server (range, money), charges the player, equips it, destroys the old shear Tool and hands
+	over the new one. The tool is re-synced on every respawn, since the
 	StarterPack would otherwise hand back the default shear.
 
 	Location: ServerScriptService.Modules.Controllers.ShearShopHandler
@@ -25,6 +26,7 @@ local PURCHASE_COOLDOWN = 0.3
 
 --// State
 local lastPurchase: { [Player]: number } = {}
+local ownedShears: { [Player]: { [string]: boolean } } = {}
 
 local shearShopHandler = {}
 
@@ -43,6 +45,32 @@ end
 local function getShearId(player: Player): string
 	local id = player:GetAttribute("ShearId")
 	return if ShearShopData.get(id) then id :: string else ShearShopData.DefaultShearId
+end
+
+--[[
+	Temporary inventory: the shears each player has bought, kept in memory only (lost when they leave).
+	Mirrored to the player attribute "OwnedShears" ("DefaultShear,SteelShears") so the shop UI can read it.
+]]--
+local function isOwned(player: Player, id: string): boolean
+	local owned = ownedShears[player]
+	return owned ~= nil and owned[id] == true
+end
+
+local function addOwned(player: Player, id: string)
+	local owned = ownedShears[player]
+	if not owned then
+		owned = {}
+		ownedShears[player] = owned
+	end
+	owned[id] = true
+
+	local ids: { string } = {}
+	for _, info in ShearShopData.Shears do
+		if owned[info.id] then
+			table.insert(ids, info.id)
+		end
+	end
+	player:SetAttribute("OwnedShears", table.concat(ids, ","))
 end
 
 -- Distance from a character to the closest shop prompt; nil if there is none / no character.
@@ -126,6 +154,11 @@ local function setShear(player: Player, id: string)
 
 	player:SetAttribute("ShearId", id)
 	syncTools(player)
+
+	-- Required lazily: PenHandler -> Pen requires this module. Workers use the owner's shear too.
+	for _, pen in require(script.Parent.PenHandler).getPens(player) do
+		pen:refreshWorkerShears()
+	end
 end
 
 local function reply(player: Player, id: string, success: boolean, reason: string?)
@@ -158,7 +191,7 @@ local function onPurchaseShear(player: Player, id: any)
 		return
 	end
 
-	if ShearShopData.getRank(info.id) <= ShearShopData.getRank(getShearId(player)) then
+	if isOwned(player, info.id) then
 		reply(player, info.id, false, "Owned")
 		return
 	end
@@ -170,8 +203,36 @@ local function onPurchaseShear(player: Player, id: any)
 	end
 
 	money.Value -= info.price
+	addOwned(player, info.id)
 	setShear(player, info.id)
 	print(`{player.Name} bought {info.id} for {info.price}.`)
+	reply(player, info.id, true, nil)
+end
+
+-- Switches to a shear already in the player's (temporary) inventory.
+local function onEquipShear(player: Player, id: any)
+	local info = ShearShopData.get(id)
+	if not info then
+		return
+	end
+
+	local ShearHandler = require(script.Parent.ShearHandler)
+	if ShearHandler.isShearing(player) then
+		reply(player, info.id, false, "Busy")
+		return
+	end
+
+	if not isNearShop(player) then
+		reply(player, info.id, false, "TooFar")
+		return
+	end
+
+	if not isOwned(player, info.id) then
+		reply(player, info.id, false, "NotOwned")
+		return
+	end
+
+	setShear(player, info.id)
 	reply(player, info.id, true, nil)
 end
 
@@ -209,6 +270,7 @@ end
 --// Lifecycle ----------------------------------------------------------------------
 
 local function onPlayerAdded(player: Player)
+	addOwned(player, ShearShopData.DefaultShearId)
 	setShear(player, ShearShopData.DefaultShearId)
 
 	local function onCharacterAdded()
@@ -230,6 +292,7 @@ function shearShopHandler.Start()
 	network.waitUntilReadyAsync()
 
 	network.connectEvent(network.RemoteEvents.PurchaseShear, onPurchaseShear)
+	network.connectEvent(network.RemoteEvents.EquipShear, onEquipShear)
 
 	players.PlayerAdded:Connect(onPlayerAdded)
 	for _, player in players:GetPlayers() do
@@ -238,6 +301,7 @@ function shearShopHandler.Start()
 
 	players.PlayerRemoving:Connect(function(player: Player)
 		lastPurchase[player] = nil
+		ownedShears[player] = nil
 	end)
 end
 

@@ -17,6 +17,7 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 local SheepHandler = require(script.Parent.Parent.Controllers.SheepHandler)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
+local ShearShopHandler = require(script.Parent.Parent.Controllers.ShearShopHandler)
 local InventoryHandler = require(script.Parent.Parent.Controllers.InventoryHandler)
 local EconomyData = require(script.Parent.Parent.Constants.EconomyData)
 
@@ -175,6 +176,12 @@ local function formatMoney(amount: number): string
 	return "$" .. tostring(math.floor(amount + 0.5))
 end
 
+-- Damage one worker swing does: the basic worker damage scaled by the owner's current shear.
+local function getWorkerDamage(owner: Player): number
+	local multiplier = ShearShopHandler.getStats(owner).damageMultiplier
+	return math.max(1, math.round(ShearData.Default.damage * multiplier))
+end
+
 --[[
 	Estimated money per minute this pen's worker earns, from the sheep odds at the pen's
 	current level: expected wool per sheep divided by the expected time one sheep takes
@@ -184,11 +191,12 @@ function Pen.getEstimatedMoneyPerMinute(self: Pen): number
 	local chances = self.data.chances
 	local expectedWool = 0
 	local expectedCycleSeconds = 0
+	local workerDamage = getWorkerDamage(self.owner)
 
 	for sheepName, data in SheepData do
 		if type(data) == "table" and type(data.chance) == "number" then
 			local weight = (chances and chances[sheepName]) or data.chance
-			local shearSeconds = math.ceil(data.ShearHealth / ShearData.Default.damage) * WORKER_SHEAR_INTERVAL_SECONDS
+			local shearSeconds = math.ceil(data.ShearHealth / workerDamage) * WORKER_SHEAR_INTERVAL_SECONDS
 
 			expectedWool += weight * data.WoolAmount
 			expectedCycleSeconds += weight * (shearSeconds + RESPAWN_DELAY_SECONDS + self.arrivalSeconds)
@@ -630,6 +638,23 @@ function Pen._equipWorkerShears(self: Pen, worker: Model)
 	end
 end
 
+-- The owner bought better shears: the worker swaps to them and the income estimate follows the new damage.
+function Pen.refreshWorkerShears(self: Pen)
+	local worker = self.workerModel
+	if not worker or self.destroyed then
+		return
+	end
+
+	for _, child in worker:GetChildren() do
+		if child:IsA("Tool") then
+			child:Destroy()
+		end
+	end
+	self.workerToolTrack = nil
+	self:_equipWorkerShears(worker)
+	self:_refreshWorkerLabel()
+end
+
 -- Plays the shearing swing on the worker (and on their shears), like the player's own.
 function Pen._playWorkerSwing(self: Pen)
 	local worker = self.workerModel
@@ -768,8 +793,9 @@ function Pen._workerShearTick(self: Pen)
 	end
 
 	self:_playWorkerSwing()
+	sheep:SetAttribute("WorkerShearing", true) -- SheepHandler then skips the wool shrink for this sheep
 
-	local newHealth = math.max(current - ShearData.Default.damage, 0)
+	local newHealth = math.max(current - getWorkerDamage(self.owner), 0)
 	sheep:SetAttribute("ShearHealth", newHealth)
 
 	if newHealth <= 0 then
