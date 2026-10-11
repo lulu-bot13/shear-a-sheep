@@ -4,6 +4,7 @@ local physicsService = game:GetService("PhysicsService")
 
 --// Modules
 local InventoryHandler = require(game.ServerScriptService.Modules.Controllers.InventoryHandler)
+local RebirthData = require(game.ServerScriptService.Modules.Constants.RebirthData)
 
 -- Sheep stay collidable with the ground but not with players, so they never block or bump them.
 local function setupCollisionGroups()
@@ -53,7 +54,7 @@ local function onPlayerAdded(player: Player)
 
     local money = Instance.new("IntValue")
     money.Name = "Money"
-    money.Value = 1000
+    money.Value = RebirthData.getStartingMoney()
     money.Parent = leaderstats
 
     local currentSheepId = Instance.new("IntValue")

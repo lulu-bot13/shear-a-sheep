@@ -20,6 +20,7 @@ local ShearHandler = require(serverScriptService.Modules.Controllers.ShearHandle
 local SheepData = require(serverScriptService.Modules.Constants.SheepData)
 local EconomyData = require(serverScriptService.Modules.Constants.EconomyData)
 local WorkerHandler = require(serverScriptService.Modules.Controllers.WorkerHandler)
+local RebirthHandler = require(serverScriptService.Modules.Controllers.RebirthHandler)
 
 --// Configs
 local ENTER_DISTANCE = 11 -- studs from the pen's PlayerPos within which the menu is open
@@ -65,9 +66,7 @@ local function buildMenuData(player: Player, pen: any)
 	local ownedPens = PenHandler.getPens(player)
 	local canSell = pen.id == #ownedPens and pen.id > 1
 	local level = pen:getLevel()
-	local upgradeCost = EconomyData.getPenUpgradeCost(level)
-	local multipliers = SheepData.UpgradeMultipliers[level] or SheepData.UpgradeMultipliers[1]
-	local nextMultipliers = SheepData.UpgradeMultipliers[level + 1]
+	local upgradeCost = EconomyData.getPenUpgradeCost(level, RebirthHandler.getMultiplier(player))
 	local money = getMoneyAmount(player)
 	local workers = WorkerHandler.getState(player)
 
@@ -91,8 +90,8 @@ local function buildMenuData(player: Player, pen: any)
 		penType = pen.penType,
 		level = level,
 		maxLevel = SheepData.MaxPenLevel,
-		luck = multipliers.Rare * pen.baseLuck, -- how much likelier rare sheep are than at level 1 on a fresh farm
-		nextLuck = if nextMultipliers then nextMultipliers.Rare * pen.baseLuck else nil, -- what the next upgrade makes it
+		luck = pen:getLuck(),
+		nextLuck = if level < SheepData.MaxPenLevel then pen:getLuck(level + 1) else nil,
 		upgradeCost = upgradeCost,
 		canAffordUpgrade = upgradeCost ~= nil and money >= upgradeCost,
 		workerHired = pen.data.automated,
@@ -176,7 +175,7 @@ local function onUpgradePen(player: Player, penId: any)
 		return
 	end
 
-	local cost = EconomyData.getPenUpgradeCost(pen:getLevel())
+	local cost = EconomyData.getPenUpgradeCost(pen:getLevel(), RebirthHandler.getMultiplier(player))
 	if not cost then
 		return -- already at max level
 	end

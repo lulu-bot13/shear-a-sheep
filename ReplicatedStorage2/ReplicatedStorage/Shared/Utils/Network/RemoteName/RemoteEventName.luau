@@ -16,6 +16,7 @@ export type EnumType = "ActivateShearing"
     | "ShearAttempt"
     | "ShearPress"
     | "ShearDamage"
+    | "SheepBrokeOut"
     | "WorkerWoolGained"
     | "OpenPenMenu"
     | "ClosePenMenu"
@@ -44,6 +45,7 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
     ShearAttempt = "ShearAttempt",
     ShearPress = "ShearPress",
     ShearDamage = "ShearDamage",
+    SheepBrokeOut = "SheepBrokeOut",
     WorkerWoolGained = "WorkerWoolGained",
     OpenPenMenu = "OpenPenMenu",
     ClosePenMenu = "ClosePenMenu",

@@ -1,27 +1,4 @@
 --[[
-	Client side of the shearing timing mini-game.
-
-	Drives the hand-built `Shearing` ScreenGui (StarterGui.Shearing). The names this script looks for:
-
-		Shearing [ScreenGui]
-		├─ PopupLayer [Frame]            floating damage numbers are added here
-		├─ SheepHUD [Frame]
-		│  ├─ SheepName [TextLabel]
-		│  └─ HealthBar [Frame]
-		│     ├─ Fill [Frame]            its width follows the sheep's wool
-		│     └─ HealthText [TextLabel]
-		├─ TimingBar [Frame]
-		│  ├─ Zones [Frame]              the track the cursor runs along
-		│  │  └─ Frame [Frame]           the PERFECT zone (the only zone drawn)
-		│  ├─ Cursor [Frame]
-		│  └─ Hint [TextLabel]
-		└─ Exit [TextButton]
-
-	While a sheep is being sheared the camera sits behind it, the cursor bounces along the track and the
-	sweet spot moves after every attempt. Click, tap, Space or gamepad A to shear. The client only moves the
-	cursor and reports where it was when the player pressed; the server scores the press and takes the wool
-	off. The client predicts the result with the same maths (ShearTiming) so the feedback is instant.
-
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.ShearingClient
 ]]--
 
@@ -35,6 +12,7 @@ local runService = game:GetService("RunService")
 local tweenService = game:GetService("TweenService")
 local userInputService = game:GetService("UserInputService")
 local players = game:GetService("Players")
+local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
@@ -66,7 +44,11 @@ shearingGui.ResetOnSpawn = false
 local shearToolAnim = replicatedStorage.Assets.Animations.ShearTool
 local shearRigAnim = replicatedStorage.Assets.Animations.ShearRig
 
---// Camera tuning (studs / degrees). Tweak these to reframe the shot.
+--// Sound Effects
+local uiSounds = soundService:FindFirstChild("UISounds")
+local shearSound = uiSounds.Shear
+
+--// Camera Configurations
 local CAMERA_DISTANCE = 5.5
 local CAMERA_HEIGHT = 3.2
 local CAMERA_LOOK_AHEAD = 2.2
@@ -87,6 +69,20 @@ local PRESS_ACTION = "ShearTimingPress"
 local WOOL_BURST_COUNT = 18
 local WOOL_CHUNK_LIFETIME = 1.4
 
+--// Shear flash
+local FLASH_START_TRANSPARENCY = 0.7
+local FLASH_OUTLINE_START_TRANSPARENCY = 0.6
+local FLASH_TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+--// Break-out warning
+local BREAKOUT_MESSAGES = {
+	Misses = "The sheep broke out! You missed too many times.",
+	Afk = "The sheep broke out! You were away too long.",
+}
+local BREAKOUT_SHOW_SECONDS = 2.5
+local BREAKOUT_FADE_SECONDS = 0.6
+local BREAKOUT_COLOR = Color3.fromRGB(255, 90, 90)
+
 --// Style
 local POPUP_FONT = sheepNameLabel.Font -- popups match the font of the GUI
 local WHITE = Color3.new(1, 1, 1)
@@ -95,7 +91,7 @@ local DAMAGE_COLOR = Color3.fromRGB(255, 150, 150) -- pale red damage numbers
 
 -- Tier colours come from ShearTimingData.TierColors; these are used for any tier it doesn't list.
 local DEFAULT_TIER_COLORS: { [string]: Color3 } = {
-	PERFECT = Color3.fromRGB(72, 255, 69),
+	PERFECT = Color3.fromRGB(255, 69, 215),
 	GREAT = Color3.fromRGB(150, 235, 80),
 	GOOD = Color3.fromRGB(240, 205, 70),
 	POOR = Color3.fromRGB(240, 150, 60),
@@ -139,11 +135,9 @@ local woolColor = WHITE -- the sheep's wool colour when its shearing began (the 
 local savedWalkSpeed = 16
 local savedFieldOfView = 70
 
--- The live attempt, as sent by the server plus when it arrived and whether it's been used up.
 local attempt: any = nil
 
 --// Character handling ---------------------------------------------------------
-
 local endMinigame: () -> ()
 local exitStation: () -> ()
 
@@ -170,7 +164,6 @@ player.CharacterAdded:Connect(bindCharacter)
 
 --// GUI setup --------------------------------------------------------------------
 
--- Everything starts hidden; the station and the mini-game switch the pieces on.
 shearingGui.Enabled = false
 sheepHud.Visible = false
 timingBar.Visible = false
@@ -185,20 +178,8 @@ timingScale.Parent = timingBar
 -- The cursor is positioned by its centre.
 cursor.AnchorPoint = Vector2.new(0.5, cursor.AnchorPoint.Y)
 
--- Your Frame is the PERFECT zone and the only zone drawn: the wider tiers still score, but they aren't shown.
 perfectZone.ZIndex = 1
 cursor.ZIndex = 2
-
--- Snip sound (only when a sound id is set in ShearTimingData).
-local shearSound: Sound? = nil
-if ShearTimingData.ShearSoundId ~= "" then
-	local sound = Instance.new("Sound")
-	sound.Name = "ShearSnip"
-	sound.SoundId = ShearTimingData.ShearSoundId
-	sound.Volume = ShearTimingData.ShearSoundVolume
-	sound.Parent = shearingGui
-	shearSound = sound
-end
 
 --// Small helpers -----------------------------------------------------------------
 
@@ -380,6 +361,49 @@ local function playShearAnimation()
 	end
 end
 
+-- Sits on the sheep invisibly and flashes white after every shear.
+local flashHighlight = Instance.new("Highlight")
+flashHighlight.Name = "ShearFlash"
+flashHighlight.FillColor = WHITE
+flashHighlight.OutlineColor = WHITE
+flashHighlight.FillTransparency = 1
+flashHighlight.OutlineTransparency = 1
+flashHighlight.DepthMode = Enum.HighlightDepthMode.Occluded
+flashHighlight.Parent = workspace
+
+local function flashSheep(sheepModel: Model)
+	flashHighlight.Adornee = sheepModel
+	flashHighlight.FillTransparency = FLASH_START_TRANSPARENCY
+	flashHighlight.OutlineTransparency = FLASH_OUTLINE_START_TRANSPARENCY
+	tweenService:Create(flashHighlight, FLASH_TWEEN, { FillTransparency = 1, OutlineTransparency = 1 }):Play()
+end
+
+local shakeToken = 0
+
+local function shakeSheep(strength: number)
+	local sheepModel = currentSheep
+	if not sheepModel then
+		return
+	end
+
+	shakeToken += 1
+	local token = shakeToken
+	local home = sheepModel:GetPivot()
+
+	task.spawn(function()
+		for _, offset in { 1, -0.8, 0.5, -0.3 } do
+			if token ~= shakeToken or not sheepModel.Parent then
+				return
+			end
+			sheepModel:PivotTo(home * CFrame.new(offset * strength, 0, 0) * CFrame.Angles(0, 0, math.rad(offset * 4)))
+			task.wait(0.035)
+		end
+		if token == shakeToken and sheepModel.Parent then
+			sheepModel:PivotTo(home)
+		end
+	end)
+end
+
 --// Timing bar ------------------------------------------------------------------------
 
 -- Moves the cursor to a bar position (0..1) along the zone track.
@@ -454,14 +478,14 @@ local function showResult(tier: string)
 	animateBar(tier)
 	cursor.BackgroundTransparency = 0.4
 
-	if shearSound and tier ~= "MISS" then
-		shearSound.PlaybackSpeed = ShearTimingData.TierPitch[tier]
-		shearSound:Play()
-	end
-
 	if tier ~= "MISS" then
+		shearSound:Play()
 		playShearAnimation()
 		flyWool(ShearTimingData.WoolChunks[tier], if big then 1.4 else 1)
+		shakeSheep(if big then 0.35 else 0.2)
+		if currentSheep then
+			flashSheep(currentSheep)
+		end
 		if (big or tier == "GREAT") and currentSheep then
 			emitWoolBurst(currentSheep)
 		end
@@ -681,6 +705,7 @@ endMinigame = function()
 		renderConnection = nil
 	end
 
+	flashHighlight.Adornee = nil
 	timingBar.Visible = false
 	timingBar.Position = TIMING_HOME
 	sheepHud.Visible = false
@@ -781,3 +806,53 @@ network.connectEvent(network.RemoteEvents.ShearDamage, function(tier: string, da
 end)
 
 network.connectEvent(network.RemoteEvents.ShearAttempt, onAttempt)
+
+-- Own ScreenGui, because the shearing GUI switches off right after the station ends.
+local breakoutGui: ScreenGui? = nil
+local breakoutToken = 0
+
+network.connectEvent(network.RemoteEvents.SheepBrokeOut, function(reason: string)
+	local gui = breakoutGui
+	if not gui then
+		gui = Instance.new("ScreenGui")
+		gui.Name = "SheepBreakout"
+		gui.ResetOnSpawn = false
+		gui.IgnoreGuiInset = true
+		gui.DisplayOrder = 20
+		gui.Parent = playerGui
+		breakoutGui = gui
+	end
+
+	local label = gui:FindFirstChild("Warning") :: TextLabel?
+	if not label then
+		label = Instance.new("TextLabel")
+		label.Name = "Warning"
+		label.AnchorPoint = Vector2.new(0.5, 0.5)
+		label.Position = UDim2.fromScale(0.5, 0.25)
+		label.Size = UDim2.fromOffset(0, 0)
+		label.AutomaticSize = Enum.AutomaticSize.XY
+		label.BackgroundTransparency = 1
+		label.Font = POPUP_FONT
+		label.TextSize = 44
+		label.TextColor3 = BREAKOUT_COLOR
+		label.Parent = gui
+		addStroke(label, 3)
+	end
+
+	breakoutToken += 1
+	local token = breakoutToken
+	label.Text = BREAKOUT_MESSAGES[reason] or "The sheep broke out!"
+	label.TextTransparency = 0
+	label.Visible = true
+	local stroke = label:FindFirstChildOfClass("UIStroke") :: UIStroke
+	stroke.Transparency = 0
+
+	task.delay(BREAKOUT_SHOW_SECONDS, function()
+		if token ~= breakoutToken then
+			return
+		end
+		local fade = TweenInfo.new(BREAKOUT_FADE_SECONDS)
+		tweenService:Create(label, fade, { TextTransparency = 1 }):Play()
+		tweenService:Create(stroke, fade, { Transparency = 1 }):Play()
+	end)
+end)

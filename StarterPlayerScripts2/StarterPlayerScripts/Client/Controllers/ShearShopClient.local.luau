@@ -54,7 +54,8 @@ local REASON_TEXT = {
 type Card = {
 	info: any,
 	frame: Frame,
-	purchase: TextButton,
+	purchase: GuiButton,
+	purchaseLabel: TextLabel,
 	viewport: ViewportFrame?,
 	camera: Camera?,
 	center: Vector3,
@@ -115,13 +116,13 @@ local function refreshCard(card: Card)
 	local colors = UIData.ButtonColors
 
 	if state == "equipped" then
-		card.purchase.Text = "Equipped"
+		card.purchaseLabel.Text = "Equipped"
 		card.purchase.BackgroundColor3 = colors.Equipped
 	elseif state == "owned" then
-		card.purchase.Text = "Equip"
+		card.purchaseLabel.Text = "Equip"
 		card.purchase.BackgroundColor3 = colors.Owned
 	else
-		card.purchase.Text = `Purchase - {UIData.formatMoney(card.info.price)}`
+		card.purchaseLabel.Text = `Purchase - {UIData.formatMoney(card.info.price)}`
 		card.purchase.BackgroundColor3 = if state == "ready" then colors.Ready else colors.Poor
 	end
 
@@ -139,7 +140,7 @@ end
 local function flashMessage(card: Card, text: string)
 	card.messageToken += 1
 	local token = card.messageToken
-	card.purchase.Text = text
+	card.purchaseLabel.Text = text
 	shake(card.purchase)
 
 	task.delay(MESSAGE_SECONDS, function()
@@ -194,16 +195,21 @@ local function createCards()
 
 		local nameLabel = frame:WaitForChild("ShearName") :: TextLabel
 		local buffsLabel = frame:WaitForChild("Buffs") :: TextLabel
-		local purchase = frame:WaitForChild("Purchase") :: TextButton
+		local purchase = frame:WaitForChild("Purchase") :: GuiButton
+		local purchaseLabel = purchase:WaitForChild("TextLabel") :: TextLabel
 
 		nameLabel.Text = info.displayName
 		buffsLabel.Text = `Damage: x{string.format("%.2f", info.damageMultiplier)}\nSweet spot: x{string.format("%.2f", info.zoneScale)}`
 		purchase.AutoButtonColor = true
+		if purchase:IsA("TextButton") then
+			purchase.Text = ""
+		end
 
 		local card: Card = {
 			info = info,
 			frame = frame,
 			purchase = purchase,
+			purchaseLabel = purchaseLabel,
 			viewport = nil,
 			camera = nil,
 			center = Vector3.zero,

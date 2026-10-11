@@ -1,17 +1,8 @@
 --!strict
 
 --[[
-	Every tuning value of the shearing timing mini-game, in one place.
-
-	The timing bar runs from 0 (left end) to 1 (right end). A cursor bounces along it and the player
-	presses while it moves; how close it is to the sweet spot decides the accuracy tier and the damage
-	done to the sheep's wool. The sweet spot moves to a new random spot after every attempt.
-
-	Zone sizes are total widths as a fraction of the bar, centred on the sweet spot, and each zone
-	contains the ones inside it (the GOOD zone includes GREAT and PERFECT).
-
-	This lives in ReplicatedStorage so the client draws exactly the zones the server scores against.
-	The server is still the only side that applies damage and pays out wool.
+	Every tuning value of the shearing timing mini-game, shared so the client draws what the server scores.
+	Zone sizes are total widths as a fraction of the bar, centred on the sweet spot; each zone contains the ones inside it.
 
 	Location: ReplicatedStorage.Shared.Constants.ShearTimingData
 ]]--
@@ -73,6 +64,11 @@ shearTimingData.TimeLimit = 2.5 -- seconds per attempt before it counts as a mis
 shearTimingData.CooldownBetweenAttempts = 0.03 -- pause after an attempt before the next sweet spot appears
 shearTimingData.FirstAttemptDelay = 0.6 -- lets the camera swing round to the sheep first
 
+--// Break-out: the sheep escapes (and is lost) when the player is sloppy or away -----------
+
+shearTimingData.MaxMisses = 5 -- presses outside every zone, per sheep, before it breaks out
+shearTimingData.AfkSeconds = 15 -- seconds without any press before it breaks out
+
 --// Server checks ------------------------------------------------------------------------
 
 shearTimingData.MaxShearingDistance = 14 -- studs from the pen's PlayerPos to start or keep shearing
@@ -90,16 +86,13 @@ shearTimingData.RarityModifiers = {
 	Mythic = { cursorSpeed = 1.36, zoneScale = 0.75 },
 } :: { [string]: RarityModifier }
 
--- Used when a shear has no stats of its own (per-shear stats live in ShearShopData).
+-- Used when a shear has no stats of its own (per-shear stats live in ShearData).
 shearTimingData.DefaultShearStats = { damageMultiplier = 1, zoneScale = 1, cursorSpeed = 1 } :: ShearStats
 
 --// Feedback (client) ----------------------------------------------------------------------
 
 shearTimingData.TierColors = {
 	PERFECT = Color3.fromRGB(255, 214, 64),
-	-- GREAT = Color3.fromRGB(90, 230, 120),
-	-- GOOD = Color3.fromRGB(70, 175, 95),
-	-- POOR = Color3.fromRGB(240, 150, 60),
 	MISS = Color3.fromRGB(190, 192, 202),
 } :: { [Tier]: Color3 }
 
@@ -108,10 +101,6 @@ shearTimingData.WoolChunks = { PERFECT = 9, GREAT = 6, GOOD = 3, POOR = 1, MISS 
 
 -- Image of one wool puff (an "rbxassetid://..." id) for the wool that flies to the wool counter. Empty = a plain white puff.
 shearTimingData.WoolIconImage = "rbxassetid://112199646421676"
-
-shearTimingData.ShearSoundId = ""
-shearTimingData.ShearSoundVolume = 0.6
-shearTimingData.TierPitch = { PERFECT = 1.25, GREAT = 1.12, GOOD = 1.0, POOR = 0.9, MISS = 0.75 } :: { [Tier]: number }
 
 --// Wool look on the sheep (server; the sheep's Torso mesh is its wool) -------------------
 

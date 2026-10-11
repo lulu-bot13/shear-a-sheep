@@ -1,15 +1,8 @@
 --!strict
 
 --[[
-	Shows a placeholder pen on each plot's next pen slot (the owner's pen count + 1) and lets the owner buy it.
-
-	The placeholder is a clone of ServerStorage.Assets.Placeholder_Pen, moved to the next slot as pens are added.
-	Its UnlockRequirement GUI has two frames, only one of which is visible at a time:
-		Requirements - the next slot is blocked by a rebirth; shows the rebirths needed.
-		Price        - the next slot is unlocked; shows what it costs.
-	The prompt tagged "PurchaseSlot" is only enabled in the Price state, and the purchase is handled on the server.
-
-	The rebirth requirement comes from PenSlotUnlocks and the price from EconomyData, so new rows need no change here.
+	Shows a placeholder pen (ServerStorage.Assets.Placeholder_Pen) on each plot's next pen slot and lets the owner buy it.
+	It shows either the rebirths needed (RebirthData) or the price (EconomyData) for that slot.
 
 	Location: ServerScriptService.Modules.Controllers.PenPlaceholderHandler
 ]]--
@@ -21,7 +14,7 @@ local serverStorage = game:GetService("ServerStorage")
 
 --// Modules
 local EconomyData = require(script.Parent.Parent.Constants.EconomyData)
-local PenSlotUnlocks = require(script.Parent.Parent.Constants.PenSlotUnlocks)
+local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
 local PenHandler = require(script.Parent.PenHandler)
 local PlotHandler = require(script.Parent.PlotHandler)
 local RebirthHandler = require(script.Parent.RebirthHandler)
@@ -129,7 +122,7 @@ local function onPurchase(plot: Folder, player: Player)
 	if not slotNumber or slotNumber ~= placeholder.slot then
 		return
 	end
-	if slotNumber > PenSlotUnlocks.getSlotLimit(RebirthHandler.getRebirths(player)) then
+	if slotNumber > RebirthData.getSlotLimit(RebirthHandler.getRebirths(player)) then
 		return -- still blocked by a rebirth
 	end
 
@@ -202,15 +195,16 @@ end
 local function refreshPlot(plot: Folder)
 	local owner = getPlotOwner(plot)
 	local slotNumber = if owner then getNextSlot(owner) else nil
-	local pivot = if slotNumber then PenHandler.getSlotPivot(plot, slotNumber) else nil
+	local source = getTemplate()
+	local pivot = if slotNumber and source then PenHandler.getSlotPivot(plot, slotNumber, source) else nil
 	if not owner or not slotNumber or not pivot then
 		hide(plot)
 		return
 	end
 
 	-- A slot beyond the owner's limit is locked behind a rebirth; with no rebirth that unlocks it there is nothing to show.
-	local locked = slotNumber > PenSlotUnlocks.getSlotLimit(RebirthHandler.getRebirths(owner))
-	local required = PenSlotUnlocks.getUnlockRebirth(slotNumber)
+	local locked = slotNumber > RebirthData.getSlotLimit(RebirthHandler.getRebirths(owner))
+	local required = RebirthData.getUnlockRebirth(slotNumber)
 	if locked and not required then
 		hide(plot)
 		return

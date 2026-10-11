@@ -14,12 +14,15 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
 local SheepHandler = require(script.Parent.Parent.Controllers.SheepHandler)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local ShearShopHandler = require(script.Parent.Parent.Controllers.ShearShopHandler)
 local InventoryHandler = require(script.Parent.Parent.Controllers.InventoryHandler)
 local EconomyData = require(script.Parent.Parent.Constants.EconomyData)
+local PenRoutes = require(script.Parent.Parent.Constants.PenRoutes)
+local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
 
 --// Animations
 local sheepWalkingAnimation = replicatedStorage.Assets.Animations.SheepWalking
@@ -29,14 +32,17 @@ local shearToolAnimation = replicatedStorage.Assets.Animations.ShearTool
 --// Configurations
 local RESPAWN_DELAY_SECONDS = 3
 local SHEEP_WALK_SPEED = 8
-local SHEEP_Y_OFFSET = 1.45 -- how far above the pen's SheepPos the sheep's root sits while waiting to be sheared (puts its hooves on the grass)
+local SHEEP_FLOOR_RAY_HEIGHT = 1 -- ray starts this far above SheepPos when looking for the pen floor under the sheep
 local REACH_DISTANCE = 3
+local SPAWN_RETRY_SECONDS = 1
+local REBIRTHS_ATTRIBUTE = "Rebirths"
+local SPAWN_CLEAR_DISTANCE = 6 -- a spawn is open again once the sheep that spawned there has walked this far (studs) from it
 local AGENT_PARAMS = { AgentRadius = 3, AgentHeight = 4, AgentCanJump = false, WaypointSpacing = math.huge }
 local WORKER_SHEAR_INTERVAL_SECONDS = 1.5
 local WORKER_FORWARD_OFFSET = 2 -- studs the worker stands in front of PlayerPos, towards the sheep
 local DEFAULT_SHEAR_ID = "DefaultShear" -- the worker's shears when the owner's own can't be found
 local WORKER_FLOOR_RAY_HEIGHT = 6 -- ray starts this far above PlayerPos when looking for the ground under the worker
-local WORKER_FLOOR_RAY_LENGTH = 40
+local FLOOR_RAY_LENGTH = 40
 local ASSUMED_ARRIVAL_SECONDS = 6 -- starting guess for how long a sheep takes to walk into the pen
 local LOW_HEALTH_COLOR = Color3.fromRGB(230, 70, 70)
 local FULL_HEALTH_COLOR = Color3.fromRGB(90, 210, 100)
@@ -53,7 +59,8 @@ type PenFields = {
 	owner: Player,
 	penModel: Model, -- the pen's model in the plot; swapped out by replaceModel
 	penType: string, -- template name (ReplicatedStorage.Assets.Models.Pens) that penModel was built from
-	waypoints: { BasePart },
+	waypoints: { BasePart }, -- every waypoint on the plot plus this pen's Entrance; PenRoutes picks which ones the sheep visit
+	spawnPoints: { BasePart }, -- SpawnWaypoint1, 2, ...; the sheep appears at an open one the owner has unlocked
 	extras: { Instance },
 	sheepPosition: Vector3,
 	playerPosition: Vector3,
@@ -78,12 +85,62 @@ type PenFields = {
 
 local Pen = {}
 Pen.__index = Pen
-
-Pen.DEFAULT_PEN_TYPE = "Base_Pen"
+Pen.LevelChanged = Signal.new() :: Signal.Signal<any>
 
 export type Pen = typeof(setmetatable({} :: PenFields, Pen))
 
 local penBySheepId: { [number]: Pen } = {}
+local spawnClaims: { [BasePart]: Model } = {} -- the sheep that last spawned at each spawn waypoint
+
+local function isSpawnOpen(spawnPoint: BasePart): boolean
+	local sheep = spawnClaims[spawnPoint]
+	local root = if sheep and sheep.Parent then sheep:FindFirstChild("HumanoidRootPart") else nil
+	if not root or not root:IsA("BasePart") then
+		return true
+	end
+
+	local offset = root.Position - spawnPoint.Position
+	return Vector3.new(offset.X, 0, offset.Z).Magnitude > SPAWN_CLEAR_DISTANCE
+end
+
+-- The first spawn waypoint the owner has unlocked and no other sheep is standing on; if both are open, either may be picked.
+local function pickSpawnPoint(pen: Pen): BasePart?
+	local rebirths = pen.owner:GetAttribute(REBIRTHS_ATTRIBUTE)
+	local unlocked = RebirthData.getTier(if typeof(rebirths) == "number" then rebirths else 0).spawnPoints
+	local open: { BasePart } = {}
+	for index, spawnPoint in pen.spawnPoints do
+		if index <= unlocked and isSpawnOpen(spawnPoint) then
+			table.insert(open, spawnPoint)
+		end
+	end
+
+	return open[math.random(1, math.max(#open, 1))]
+end
+
+-- The waypoints this pen's sheep walk to, exactly as PenRoutes lists them for the pen, the owner's rebirths and the spawn.
+local function getRouteParts(pen: Pen, spawnIndex: number?): { BasePart }
+	local rebirths = pen.owner:GetAttribute(REBIRTHS_ATTRIBUTE)
+	local names = PenRoutes.getWaypointNames(pen.id, if typeof(rebirths) == "number" then rebirths else 0, spawnIndex)
+
+	local route: { BasePart } = {}
+	for _, name in names do
+		local found: BasePart? = nil
+		for _, waypoint in pen.waypoints do
+			if waypoint.Name == name then
+				found = waypoint
+				break
+			end
+		end
+
+		if found then
+			table.insert(route, found)
+		else
+			warn(`Pen {pen.id}: no waypoint named '{name}' in the plot's Waypoints.`)
+		end
+	end
+
+	return route
+end
 
 -- Pathfinds between each waypoint in order and returns the turning points of the whole route.
 local function computeRoute(startPosition: Vector3, waypoints: { BasePart }): { Vector3 }
@@ -127,7 +184,7 @@ end
 
 	@return Sheep has arrived properly
 ]]
-local function walkSheep(pen: Pen, sheepModel: Model): boolean
+local function walkSheep(pen: Pen, sheepModel: Model, routeParts: { BasePart }): boolean
 	local humanoid = sheepModel:FindFirstChildOfClass("Humanoid") :: Humanoid
 	local rootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not humanoid or not rootPart then
@@ -139,7 +196,7 @@ local function walkSheep(pen: Pen, sheepModel: Model): boolean
 
 	humanoid.WalkSpeed = SHEEP_WALK_SPEED
 
-	local route = computeRoute(rootPart.Position, pen.waypoints)
+	local route = computeRoute(rootPart.Position, routeParts)
 
 	for _, point in ipairs(route) do
 		if not sheepModel.Parent or pen.destroyed then
@@ -358,13 +415,48 @@ local function getSheepSeatCFrame(pen: Pen, sideOn: boolean): CFrame
 	return CFrame.lookAt(pen.sheepPosition, pen.sheepPosition + facing)
 end
 
+-- Height of the walkable ground under a spot in the pen, ignoring sheep, characters, the pen's markers and its worker.
+local function getFloorY(pen: Pen, position: Vector3, rayHeight: number): number?
+	local ignore: { Instance } = collectionService:GetTagged("Sheep")
+	if pen.workerModel then
+		table.insert(ignore, pen.workerModel)
+	end
+	for _, name in { "SheepPos", "PlayerPos" } do
+		local marker = pen.penModel:FindFirstChild(name)
+		if marker then
+			table.insert(ignore, marker)
+		end
+	end
+	for _, otherPlayer in players:GetPlayers() do
+		if otherPlayer.Character then
+			table.insert(ignore, otherPlayer.Character)
+		end
+	end
+
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = ignore
+	rayParams.RespectCanCollide = true
+
+	local hit = workspace:Raycast(position + Vector3.new(0, rayHeight, 0), Vector3.new(0, -FLOOR_RAY_LENGTH, 0), rayParams)
+	return if hit then hit.Position.Y else nil
+end
+
+-- Puts the sheep on its seat with its lowest point resting on the pen floor under SheepPos.
+local function placeSheep(pen: Pen, sheepModel: Model, rootPart: BasePart, sideOn: boolean)
+	local box, size = sheepModel:GetBoundingBox()
+	local rootHeight = rootPart.Position.Y - (box.Position.Y - size.Y / 2)
+	local floorY = getFloorY(pen, pen.sheepPosition, SHEEP_FLOOR_RAY_HEIGHT) or pen.sheepPosition.Y
+	rootPart.CFrame = getSheepSeatCFrame(pen, sideOn) + Vector3.new(0, floorY - pen.sheepPosition.Y + rootHeight, 0)
+end
+
 -- Snaps the pen's seated sheep (no tween) to face the player or flank-on.
 local function turnSeatedSheep(pen: Pen, sideOn: boolean)
 	local id = pen.occupiedSheepId
 	local sheep = if id and pen.seated then SheepHandler.getSheep(id) else nil
 	local rootPart = if sheep then sheep:FindFirstChild("HumanoidRootPart") :: BasePart? else nil
-	if rootPart then
-		rootPart.CFrame = getSheepSeatCFrame(pen, sideOn) * CFrame.new(0, SHEEP_Y_OFFSET, 0)
+	if sheep and rootPart then
+		placeSheep(pen, sheep, rootPart, sideOn)
 	end
 end
 
@@ -378,8 +470,8 @@ local function seatSheep(pen: Pen, sheepModel: Model, id: number)
 
 	local rootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if rootPart then
-		rootPart.CFrame = getSheepSeatCFrame(pen, pen.data.automated) * CFrame.new(0, SHEEP_Y_OFFSET, 0)
 		rootPart.Anchored = true
+		placeSheep(pen, sheepModel, rootPart, pen.data.automated)
 	end
 
 	pen.seated = true
@@ -402,8 +494,8 @@ function Pen.getBySheepId(id: number): Pen?
 	return penBySheepId[id]
 end
 
--- Builds a pen from its model; returns nil if the model has no SheepPos/PlayerPos. penType defaults to the base pen.
-function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart }, extras: { Instance }, penType: string?): Pen?
+-- Builds a pen from its model; returns nil if the model has no SheepPos/PlayerPos.
+function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart }, spawnPoints: { BasePart }, extras: { Instance }, penType: string): Pen?
 	local sheepPos = model:FindFirstChild("SheepPos") :: BasePart?
 	local playerPos = model:FindFirstChild("PlayerPos") :: BasePart?
 	if not sheepPos or not playerPos then
@@ -415,8 +507,9 @@ function Pen.new(owner: Player, id: number, model: Model, waypoints: { BasePart 
 		id = id,
 		owner = owner,
 		penModel = model,
-		penType = penType or Pen.DEFAULT_PEN_TYPE,
+		penType = penType,
 		waypoints = waypoints,
+		spawnPoints = spawnPoints,
 		extras = extras,
 		sheepPosition = sheepPos.Position,
 		playerPosition = playerPos.Position,
@@ -442,11 +535,11 @@ end
 
 --[[
 	Swaps the pen's model for a clone of `template` (an entry of ReplicatedStorage.Assets.Models.Pens).
-	The new model takes the old one's name and place, and whatever the pen attached to the old model
+	The new model takes the old one's name and is placed at `pivot`, and whatever the pen attached to the old model
 	(worker, health bar) moves across before the old one is destroyed. Returns false, leaving the pen
 	untouched, if the template can't be used.
 ]]--
-function Pen.replaceModel(self: Pen, template: Model, penType: string): boolean
+function Pen.replaceModel(self: Pen, template: Model, penType: string, pivot: CFrame): boolean
 	if self.destroyed then
 		return false
 	end
@@ -462,9 +555,9 @@ function Pen.replaceModel(self: Pen, template: Model, penType: string): boolean
 	end
 
 	newModel.Name = oldModel.Name
-	newModel:PivotTo(oldModel:GetPivot())
+	newModel:PivotTo(pivot)
 
-	-- Templates share one layout, so these are normally zero; they keep the sheep and worker on their spots if not.
+	-- Keeps the sheep and worker on their spots when the new template's layout differs.
 	local sheepShift = newSheepPos.Position - self.sheepPosition
 	local playerShift = newPlayerPos.Position - self.playerPosition
 
@@ -474,7 +567,6 @@ function Pen.replaceModel(self: Pen, template: Model, penType: string): boolean
 		end
 	end
 
-	-- Pens bought later own their model (it is destroyed with them); the base pen's model is not in extras.
 	local extraIndex = table.find(self.extras, oldModel)
 	if extraIndex then
 		self.extras[extraIndex] = newModel
@@ -501,12 +593,46 @@ function Pen.replaceModel(self: Pen, template: Model, penType: string): boolean
 		worker:PivotTo(worker:GetPivot() + playerShift)
 	end
 
+	self:_refreshLuckLabel()
 	return true
+end
+
+-- Writes the pen's luck onto its Center.Luck.TextLabel, coloured by how rare that luck is.
+function Pen._refreshLuckLabel(self: Pen)
+	local center = self.penModel:FindFirstChild("Center", true)
+	local luck = center and center:FindFirstChild("Luck", true)
+	local label = luck and (luck:FindFirstChild("TextLabel", true) or luck:FindFirstChildWhichIsA("TextLabel", true))
+	if not luck or not label or not label:IsA("TextLabel") then
+		warn(`Pen: {self.penType} has no Center.Luck.TextLabel for the luck text.`)
+		return
+	end
+
+	if luck:IsA("LayerCollector") then
+		luck.Enabled = true
+	end
+	local total = self:getLuck()
+	label.Visible = true
+	label.Text = `x{math.round(total * 100) / 100} Luck`
+	label.TextColor3 = RebirthData.getLuckColor(total)
+end
+
+-- Rebirth luck times the upgrade level's boost to rare sheep (1 = a fresh level-1 pen with no rebirths).
+function Pen.getLuck(self: Pen, level: number?): number
+	local multipliers = SheepData.UpgradeMultipliers[level or self.level] or SheepData.UpgradeMultipliers[1]
+	return self.baseLuck * multipliers.Rare
 end
 
 -- Current upgrade level (1..SheepData.MaxPenLevel). Higher levels bias spawns toward rarer sheep.
 function Pen.getLevel(self: Pen): number
 	return self.level
+end
+
+function Pen._setLevel(self: Pen, level: number)
+	self.level = level
+	self.data.chances = SheepData.buildChancesForLevel(level, self.baseLuck)
+	self:_refreshWorkerLabel()
+	self:_refreshLuckLabel()
+	Pen.LevelChanged:Fire(self)
 end
 
 -- Bumps the pen to the next level and rebiases its spawn chances; false if already maxed.
@@ -515,9 +641,7 @@ function Pen.upgrade(self: Pen): boolean
 		return false
 	end
 
-	self.level += 1
-	self.data.chances = SheepData.buildChancesForLevel(self.level, self.baseLuck)
-	self:_refreshWorkerLabel()
+	self:_setLevel(self.level + 1)
 	return true
 end
 
@@ -526,6 +650,7 @@ function Pen.setBaseLuck(self: Pen, luck: number)
 	self.baseLuck = luck
 	self.data.chances = SheepData.buildChancesForLevel(self.level, luck)
 	self:_refreshWorkerLabel()
+	self:_refreshLuckLabel()
 end
 
 --[[
@@ -582,32 +707,14 @@ function Pen._spawnWorker(self: Pen, token: number)
 		return
 	end
 
-	-- Stand on the ground under PlayerPos rather than at PlayerPos itself (that part floats above the grass).
-	local ignore: { Instance } = collectionService:GetTagged("Sheep")
-	table.insert(ignore, worker)
-	for _, name in { "SheepPos", "PlayerPos" } do
-		local marker = self.penModel:FindFirstChild(name)
-		if marker then
-			table.insert(ignore, marker)
-		end
-	end
-	for _, otherPlayer in players:GetPlayers() do
-		if otherPlayer.Character then
-			table.insert(ignore, otherPlayer.Character)
-		end
-	end
-	local rayParams = RaycastParams.new()
-	rayParams.FilterType = Enum.RaycastFilterType.Exclude
-	rayParams.FilterDescendantsInstances = ignore
-	rayParams.RespectCanCollide = true
+	self.workerModel = worker
 
 	-- The worker stands a little in front of PlayerPos (towards the sheep), never more than halfway there.
 	local toSheep = Vector3.new(self.sheepPosition.X - self.playerPosition.X, 0, self.sheepPosition.Z - self.playerPosition.Z)
 	local forward = if toSheep.Magnitude > 0.01 then toSheep.Unit * math.min(WORKER_FORWARD_OFFSET, toSheep.Magnitude * 0.5) else Vector3.zero
 	local standPosition = self.playerPosition + forward
 
-	local hit = workspace:Raycast(standPosition + Vector3.new(0, WORKER_FLOOR_RAY_HEIGHT, 0), Vector3.new(0, -WORKER_FLOOR_RAY_LENGTH, 0), rayParams)
-	local floorY = if hit then hit.Position.Y else self.playerPosition.Y
+	local floorY = getFloorY(self, standPosition, WORKER_FLOOR_RAY_HEIGHT) or self.playerPosition.Y
 
 	local lookTarget = Vector3.new(self.sheepPosition.X, floorY, self.sheepPosition.Z)
 	worker:PivotTo(CFrame.lookAt(Vector3.new(standPosition.X, floorY, standPosition.Z), lookTarget))
@@ -618,7 +725,6 @@ function Pen._spawnWorker(self: Pen, token: number)
 	worker:PivotTo(worker:GetPivot() + Vector3.new(0, lift, 0))
 
 	table.insert(self.extras, worker)
-	self.workerModel = worker
 	self:_createWorkerLabel(worker)
 	self:_equipWorkerShears(worker)
 end
@@ -765,9 +871,8 @@ function Pen.resetProgress(self: Pen)
 		return
 	end
 
-	self.level = 1
-	self.data.chances = SheepData.buildChancesForLevel(1, self.baseLuck)
 	self:removeWorker()
+	self:_setLevel(1)
 end
 
 -- Applies one tick of automatic shearing to whatever sheep is currently seated in the pen.
@@ -816,8 +921,16 @@ function Pen.spawnSheep(self: Pen)
 		return
 	end
 
-	local firstWaypoint = self.waypoints[1]
-	local startPosition = if firstWaypoint then firstWaypoint.Position else self.sheepPosition
+	local spawnPoint = pickSpawnPoint(self)
+	if #self.spawnPoints > 0 and not spawnPoint then
+		-- Every unlocked spawn still has a sheep on it; try again shortly.
+		task.delay(SPAWN_RETRY_SECONDS, function()
+			self:spawnSheep()
+		end)
+		return
+	end
+
+	local startPosition = if spawnPoint then spawnPoint.Position else self.sheepPosition
 	local sheepModel, id = SheepHandler.spawnSheep(self.owner, startPosition, self.data.chances)
 	if not sheepModel or not id then
 		task.delay(RESPAWN_DELAY_SECONDS, function()
@@ -825,6 +938,11 @@ function Pen.spawnSheep(self: Pen)
 		end)
 		return
 	end
+
+	if spawnPoint then
+		spawnClaims[spawnPoint] = sheepModel
+	end
+	local routeParts = getRouteParts(self, if spawnPoint then table.find(self.spawnPoints, spawnPoint) else nil)
 
 	local rootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
 	rootPart.Anchored = false
@@ -835,7 +953,7 @@ function Pen.spawnSheep(self: Pen)
 	penBySheepId[id] = self
 
 	task.spawn(function()
-		if walkSheep(self, sheepModel) then
+		if walkSheep(self, sheepModel, routeParts) then
 			seatSheep(self, sheepModel, id)
 		end
 	end)

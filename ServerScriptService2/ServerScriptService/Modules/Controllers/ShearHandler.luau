@@ -1,16 +1,6 @@
 --[[
-	Server side of the shearing timing mini-game.
-
-	When a player presses START SHEARING in a pen's menu, the sheep is turned side-on, the player is
-	snapped to the pen and a run of timing attempts starts. For each attempt the server picks a new
-	sweet spot on the timing bar and how the cursor moves, and sends both to the client. The client
-	only reports where the cursor was when the player pressed; the server checks the cursor really
-	could have been there, scores the press itself (PERFECT / GREAT / GOOD / POOR / MISS), takes the
-	wool off the sheep and pays the wool out once, when the sheep is bare. An attempt nobody presses
-	in time is a MISS, and shearing just carries on with the next one.
-
-	Tuning: ReplicatedStorage.Shared.Constants.ShearTimingData
-	Maths shared with the client: ReplicatedStorage.Shared.Utils.ShearTiming
+	Server side of the shearing timing mini-game: scores each press, takes wool off the sheep and pays it out.
+	A sheep breaks out (is lost) if the player misses too often or goes AFK.
 
 	Location: ServerScriptService.Modules.Controllers.ShearHandler
 ]]--
@@ -50,6 +40,8 @@ type Session = {
 	zoneScale: number, -- shear * sheep rarity
 	cursorSpeed: number, -- bar widths per second
 	attemptCounter: number,
+	misses: number, -- presses outside every zone so far
+	lastPressAt: number, -- os.clock() of the last press (the session start before the first)
 	attempt: Attempt?,
 	lastSweetSpot: number?,
 	random: Random,
@@ -164,6 +156,8 @@ local function endSession(session: Session)
 	if currentSheepId then
 		currentSheepId.Value = 0
 	end
+
+	SheepHandler.setHudVisible(session.sheep, true)
 end
 
 -- The sheep is bare: pay out the wool (once - the session is ended first), free the pen and tell the client.
@@ -181,6 +175,36 @@ local function finishSheep(session: Session)
 	SheepHandler.removeSheep(sheepId)
 	network.fireClient(network.RemoteEvents.DeactivateShearing, player, true, woolAmount)
 	PenHandler.onSheepRemoved(sheepId)
+end
+
+-- The sheep escapes: it is lost (no wool), the pen is freed and the client is told why.
+local function breakOut(session: Session, reason: string)
+	if not session.active then
+		return
+	end
+
+	local player = session.player
+	local sheepId = session.sheepId
+
+	endSession(session)
+	stationPens[player] = nil
+
+	SheepHandler.removeSheep(sheepId)
+	network.fireClient(network.RemoteEvents.SheepBrokeOut, player, reason)
+	network.fireClient(network.RemoteEvents.DeactivateShearing, player, false)
+	PenHandler.onSheepRemoved(sheepId)
+end
+
+-- Counts a press that missed; too many and the sheep breaks out.
+local function registerMiss(session: Session)
+	if not session.active then
+		return
+	end
+
+	session.misses += 1
+	if session.misses >= ShearTimingData.MaxMisses then
+		breakOut(session, "Misses")
+	end
 end
 
 -- Takes `damage` wool off the sheep (never below 0). Returns true if that sheared it bare.
@@ -296,6 +320,10 @@ local function runAttempts(session: Session)
 		-- Presses may arrive up to LatencyAllowance after the client's timer ran out.
 		local deadline = attempt.sentAt + attempt.lifetime + ShearTimingData.LatencyAllowance
 		while session.active and not attempt.resolved and os.clock() < deadline do
+			if os.clock() - session.lastPressAt >= ShearTimingData.AfkSeconds then
+				breakOut(session, "Afk")
+				return
+			end
 			task.wait(LOOP_STEP_SECONDS)
 		end
 
@@ -365,6 +393,8 @@ local function onStartShearing(player: Player, penId: any)
 		zoneScale = stats.zoneScale * rarity.zoneScale,
 		cursorSpeed = ShearTimingData.CursorSpeed * stats.cursorSpeed * rarity.cursorSpeed,
 		attemptCounter = 0,
+		misses = 0,
+		lastPressAt = os.clock(),
 		attempt = nil,
 		lastSweetSpot = nil,
 		random = Random.new(),
@@ -381,6 +411,7 @@ local function onStartShearing(player: Player, penId: any)
 
 	snapPlayerToPen(player, pen)
 	turnSheepSideOn(pen, sheep)
+	SheepHandler.setHudVisible(sheep, false)
 
 	print(`{player.Name} started shearing {sheep.Name}.`)
 	network.fireClient(network.RemoteEvents.ActivateShearing, player, sheepId, pen.sheepPosition, pen.playerPosition)
@@ -412,17 +443,23 @@ local function onShearPress(player: Player, attemptId: any, position: any)
 		return -- too late; the attempt times out as a miss
 	end
 
+	session.lastPressAt = os.clock()
+
 	local windowStart = elapsed - ShearTimingData.LatencyAllowance
 	local windowEnd = math.min(elapsed, attempt.lifetime)
 	if not ShearTiming.wasPositionReachable(attempt, position, windowStart, windowEnd) then
 		warn(`ShearHandler: rejected an impossible press from {player.Name}.`)
 		resolveAttempt(session, attempt, "MISS", 0)
+		registerMiss(session)
 		return
 	end
 
 	local distance = math.abs(position - attempt.sweetSpot)
 	local tier = ShearTiming.classify(distance, attempt.zones)
 	resolveAttempt(session, attempt, tier, computeDamage(session, tier, distance, attempt.zones))
+	if tier == "MISS" then
+		registerMiss(session)
+	end
 end
 
 --// Public API ------------------------------------------------------------------------

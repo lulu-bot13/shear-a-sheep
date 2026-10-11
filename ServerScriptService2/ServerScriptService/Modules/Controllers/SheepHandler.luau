@@ -64,6 +64,15 @@ function SheepHandler.getOwnerId(sheep: Model): number?
 	return if type(ownerId) == "number" then ownerId else nil
 end
 
+-- Shows or hides the name / rarity / odds billboard floating over the sheep.
+function SheepHandler.setHudVisible(sheep: Model, visible: boolean)
+	local root = sheep:FindFirstChild("HumanoidRootPart")
+	local hud = if root then root:FindFirstChild("SheepHUD") else nil
+	if hud and hud:IsA("BillboardGui") then
+		hud.Enabled = visible
+	end
+end
+
 local function getWoolPart(sheep: Instance): BasePart?
 	local part = sheep:FindFirstChild(WOOL_PART_NAME)
 	return if part and part:IsA("BasePart") then part else nil
@@ -226,6 +235,7 @@ local function attachHud(humanoidRootPart: BasePart, data, oddsText: string)
 	end
 
 	hud.Name = "SheepHUD"
+	hud.Enabled = true -- a pooled HUD may have been hidden during a shearing session
 	hud.Adornee = humanoidRootPart
 	hud.Parent = humanoidRootPart
 end

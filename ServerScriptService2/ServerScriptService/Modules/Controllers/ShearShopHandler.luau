@@ -18,7 +18,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
-local ShearShopData = require(script.Parent.Parent.Constants.ShearShopData)
+local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local ShearTimingData = require(replicatedStorage.Shared.Constants.ShearTimingData)
 
 --// Configs
@@ -44,7 +44,7 @@ end
 
 local function getShearId(player: Player): string
 	local id = player:GetAttribute("ShearId")
-	return if ShearShopData.get(id) then id :: string else ShearShopData.DefaultShearId
+	return if ShearData.get(id) then id :: string else ShearData.DefaultShearId
 end
 
 --[[
@@ -65,7 +65,7 @@ local function addOwned(player: Player, id: string)
 	owned[id] = true
 
 	local ids: { string } = {}
-	for _, info in ShearShopData.Shears do
+	for _, info in ShearData.Shears do
 		if owned[info.id] then
 			table.insert(ids, info.id)
 		end
@@ -81,7 +81,7 @@ local function isNearShop(player: Player): boolean
 		return false
 	end
 
-	for _, prompt in collectionService:GetTagged(ShearShopData.ShopPromptTag) do
+	for _, prompt in collectionService:GetTagged(ShearData.ShopPromptTag) do
 		local holder = prompt.Parent
 		local position: Vector3? = nil
 		if holder and holder:IsA("BasePart") then
@@ -90,7 +90,7 @@ local function isNearShop(player: Player): boolean
 			position = holder.WorldPosition
 		end
 
-		if position and (rootPart.Position - position).Magnitude <= ShearShopData.PurchaseRange then
+		if position and (rootPart.Position - position).Magnitude <= ShearData.PurchaseRange then
 			return true
 		end
 	end
@@ -104,7 +104,7 @@ local function getShearTools(player: Player): { Tool }
 	for _, container in { player:FindFirstChildOfClass("Backpack"), player.Character } do
 		if container then
 			for _, child in container:GetChildren() do
-				if child:IsA("Tool") and ShearShopData.get(child.Name) then
+				if child:IsA("Tool") and ShearData.get(child.Name) then
 					table.insert(found, child)
 				end
 			end
@@ -147,7 +147,7 @@ local function syncTools(player: Player)
 end
 
 local function setShear(player: Player, id: string)
-	local info = ShearShopData.get(id)
+	local info = ShearData.get(id)
 	if not info then
 		return
 	end
@@ -168,7 +168,7 @@ end
 --// Purchase ------------------------------------------------------------------
 
 local function onPurchaseShear(player: Player, id: any)
-	local info = ShearShopData.get(id)
+	local info = ShearData.get(id)
 	if not info then
 		return
 	end
@@ -211,7 +211,7 @@ end
 
 -- Switches to a shear already in the player's (temporary) inventory.
 local function onEquipShear(player: Player, id: any)
-	local info = ShearShopData.get(id)
+	local info = ShearData.get(id)
 	if not info then
 		return
 	end
@@ -244,7 +244,7 @@ end
 
 -- The player's shear stats for the shearing mini-game (multipliers; 1 = the basic shear).
 function shearShopHandler.getStats(player: Player): ShearTimingData.ShearStats
-	local info = ShearShopData.get(getShearId(player))
+	local info = ShearData.get(getShearId(player))
 	if not info then
 		return table.clone(ShearTimingData.DefaultShearStats)
 	end
@@ -270,8 +270,8 @@ end
 --// Lifecycle ----------------------------------------------------------------------
 
 local function onPlayerAdded(player: Player)
-	addOwned(player, ShearShopData.DefaultShearId)
-	setShear(player, ShearShopData.DefaultShearId)
+	addOwned(player, ShearData.DefaultShearId)
+	setShear(player, ShearData.DefaultShearId)
 
 	local function onCharacterAdded()
 		-- The StarterPack fills the Backpack around spawn; sync once it has settled.

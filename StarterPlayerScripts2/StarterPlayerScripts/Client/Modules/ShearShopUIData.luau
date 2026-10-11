@@ -2,7 +2,7 @@
 
 --[[
 	Client-side display data for the shear shop UI: names, stats and prices as shown on the cards.
-	The server (ServerScriptService.Modules.Constants.ShearShopData) is the authority - it decides
+	The server (ServerScriptService.Modules.Constants.ShearData) is the authority - it decides
 	what a purchase costs and what a shear does - so keep the damage / sweet spot / price numbers here
 	in sync with it when tuning.
 
@@ -13,7 +13,7 @@ export type ShearUI = {
 	id: string, -- Tool name in ReplicatedStorage.Assets.Shears
 	displayName: string,
 	price: number,
-	damageMultiplier: number, -- matches ShearShopData
+	damageMultiplier: number, -- matches ShearData
 	zoneScale: number,
 }
 

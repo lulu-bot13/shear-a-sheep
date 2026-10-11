@@ -7,6 +7,8 @@
 	Location: ServerScriptService.Modules.Constants.EconomyData
 ]]--
 
+local SheepData = require(script.Parent.SheepData)
+
 local ecomonyData = {}
 
 ecomonyData.PEN_BASE_PRICE = 100
@@ -18,11 +20,18 @@ function ecomonyData.getPenPrice(penNumber: number): number
 	return math.round(ecomonyData.PEN_BASE_PRICE * ecomonyData.PEN_PRICE_MULTIPLIER ^ (penNumber - 2))
 end
 
--- Cost to upgrade a pen FROM the given level to level+1; nil once already at max level.
-ecomonyData.PEN_UPGRADE_COSTS = { [1] = 500, [2] = 2000, [3] = 8000, [4] = 32000 }
+-- First upgrade costs what UPGRADE_START_SHEEP basic sheep sell for; each level after adds START * LOG_SCALE * ln(level).
+ecomonyData.UPGRADE_START_SHEEP = 2
+ecomonyData.UPGRADE_LOG_SCALE = 4
 
-function ecomonyData.getPenUpgradeCost(currentLevel: number): number?
-	return ecomonyData.PEN_UPGRADE_COSTS[currentLevel]
+-- Cost to upgrade a pen FROM the given level to level+1 (scaled by the owner's sell multiplier); nil once at max level.
+function ecomonyData.getPenUpgradeCost(currentLevel: number, sellMultiplier: number?): number?
+	if currentLevel >= SheepData.MaxPenLevel then
+		return nil
+	end
+
+	local startCost = ecomonyData.UPGRADE_START_SHEEP * SheepData.Basic.WoolAmount * ecomonyData.WOOL_SELL_PRICE * (sellMultiplier or 1)
+	return math.round(startCost * (1 + ecomonyData.UPGRADE_LOG_SCALE * math.log(currentLevel)))
 end
 
 -- Selling a pen refunds a fraction of what it originally cost to buy.

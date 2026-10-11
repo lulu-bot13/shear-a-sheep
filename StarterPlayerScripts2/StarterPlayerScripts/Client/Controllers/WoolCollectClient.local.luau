@@ -1,17 +1,4 @@
 --[[
-	The wool payoff effects.
-
-	Finishing a sheep by hand (ShearingClient fires the player's "WoolCollected" bindable with where the
-	sheep stood and how much wool it gave):
-		1. wool puffs splash out of the sheep, then curve in to the player's character
-		2. wool icons burst out of the character's spot on the screen and curve to the wool counter,
-		   which pops and counts up as each one lands (ClientStart shows the wool minus WoolLabelHold)
-
-	A worker finishing a sheep (the server's WorkerWoolGained): a "+N" billboard appears where the sheep
-	stood, floats up and fades away.
-
-	The icon is ShearTimingData.WoolIconImage; without one a plain white puff is drawn.
-
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.WoolCollectClient
 ]]--
 
@@ -21,6 +8,7 @@ local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
 local tweenService = game:GetService("TweenService")
+local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
@@ -30,7 +18,13 @@ local ShearTimingData = require(replicatedStorage.Shared.Constants.ShearTimingDa
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+
+--// Bindable Events
 local woolCollected = player:WaitForChild("WoolCollected") :: BindableEvent
+
+--// Sound Effects
+local uiSounds = soundService:WaitForChild("UISounds")
+local popSfx = uiSounds:FindFirstChild("Pop")
 
 --// Configs
 local PUFF_COUNT = 16
@@ -41,6 +35,10 @@ local ICON_COUNT = 12
 local ICON_BURST_SECONDS = 0.22
 local ICON_FLIGHT_SECONDS = 0.55
 local ICON_STAGGER_SECONDS = 0.045
+local PUFF_POP_GAP_SECONDS = 0.05 -- minimum spacing between pops as puffs land on the character
+local ICON_POP_GAP_SECONDS = 0.06 -- ...and as icons land on the counter
+local POP_PITCH_STEP = 0.04 -- each pop in a run is slightly higher
+local POP_MAX_STEPS = 10
 local HOLD_TIMEOUT_SECONDS = 5 -- the counter is never held back longer than this, whatever happens
 local WORKER_TEXT_RISE_STUDS = 4
 local WORKER_TEXT_SECONDS = 1.4
@@ -81,6 +79,32 @@ end
 
 local function easeIn(t: number): number
 	return t * t
+end
+
+-- Plays a fresh copy of the pop so overlapping pops don't cut each other off.
+local function playPop(speed: number)
+	if not popSfx or not popSfx:IsA("Sound") then
+		return
+	end
+	local sound = popSfx:Clone()
+	sound.PlaybackSpeed = popSfx.PlaybackSpeed * speed
+	sound.Parent = uiSounds
+	sound:Play()
+	debris:AddItem(sound, math.max(sound.TimeLength, 1) + 0.5)
+end
+
+-- Returns a function that plays one pop per call, spaced at least `gap` apart and rising in pitch.
+local function newPopSequence(gap: number): () -> ()
+	local nextTime = 0
+	local count = 0
+	return function()
+		local now = os.clock()
+		local playAt = math.max(now, nextTime)
+		nextTime = playAt + gap
+		local speed = 1 + math.min(count, POP_MAX_STEPS) * POP_PITCH_STEP
+		count += 1
+		task.delay(playAt - now, playPop, speed)
+	end
 end
 
 local function getCharacterRoot(): BasePart?
@@ -163,6 +187,7 @@ local function flyIcons(start: Vector2, distance: number, amount: number)
 
 	local remaining = amount
 	local share = amount / ICON_COUNT
+	local popIcon = newPopSequence(ICON_POP_GAP_SECONDS)
 
 	for index = 1, ICON_COUNT do
 		task.delay((index - 1) * ICON_STAGGER_SECONDS, function()
@@ -187,6 +212,7 @@ local function flyIcons(start: Vector2, distance: number, amount: number)
 					position = bezier2(burstPoint, control, target, easeIn(t))
 					icon.Size = UDim2.fromOffset(iconSize * (1 - 0.45 * t), iconSize * (1 - 0.45 * t))
 					if t >= 1 then
+						popIcon()
 						connection:Disconnect()
 						icon:Destroy()
 						punchCounter(counter)
@@ -215,6 +241,7 @@ local function collectWool(origin: Vector3, amount: number, color: Color3)
 
 	local landed = 0
 	local startedIcons = false
+	local popPuff = newPopSequence(PUFF_POP_GAP_SECONDS)
 
 	local function startIcons()
 		startedIcons = true
@@ -277,9 +304,11 @@ local function collectWool(origin: Vector3, amount: number, color: Color3)
 				puff.Position = bezier(burstPoint, control, target, easeIn(t))
 				puff.Size = Vector3.one * math.max(puff.Size.X * (1 - 0.04 * t), 0.2)
 
+				-- Complete
 				if t >= 1 then
 					connection:Disconnect()
 					puff:Destroy()
+					popPuff()
 					landed += 1
 					if landed >= PUFF_COUNT * 0.6 and not startedIcons then
 						startIcons()
@@ -301,7 +330,6 @@ woolCollected.Event:Connect(function(origin: Vector3, amount: number, color: Col
 		end
 	end)
 
-	-- Wait a frame: the HUD was only just switched back on and its labels need to be laid out.
 	task.wait()
 	collectWool(origin, amount, color)
 end)
