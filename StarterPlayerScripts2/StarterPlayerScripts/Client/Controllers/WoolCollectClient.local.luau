@@ -1,4 +1,6 @@
 --[[
+	Plays the wool collect effect after a sheep is sheared: puffs fly into the character, then icons fly to the wool counter.
+
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.WoolCollectClient
 ]]--
 
@@ -12,15 +14,11 @@ local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
-local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
-local ShearTimingData = require(replicatedStorage.Shared.Constants.ShearTimingData)
+local WoolData = require(replicatedStorage.Shared.Constants.WoolData)
 
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-
---// Bindable Events
-local woolCollected = player:WaitForChild("WoolCollected") :: BindableEvent
 
 --// Sound Effects
 local uiSounds = soundService:WaitForChild("UISounds")
@@ -40,14 +38,14 @@ local ICON_POP_GAP_SECONDS = 0.06 -- ...and as icons land on the counter
 local POP_PITCH_STEP = 0.04 -- each pop in a run is slightly higher
 local POP_MAX_STEPS = 10
 local HOLD_TIMEOUT_SECONDS = 5 -- the counter is never held back longer than this, whatever happens
-local WORKER_TEXT_RISE_STUDS = 4
-local WORKER_TEXT_SECONDS = 1.4
+
+local SHARE_LABEL_WIDTH = 2.2 -- the "+N" label's size, relative to its icon
+local SHARE_LABEL_HEIGHT = 0.9
+local SHARE_TEXT_COLOR = Color3.fromRGB(255, 255, 255)
+local SHARE_STROKE_COLOR = Color3.fromRGB(40, 70, 110)
 
 local WOOL_COLOR = Color3.fromRGB(255, 250, 240)
 local WOOL_EDGE_COLOR = Color3.fromRGB(176, 214, 245)
-local WORKER_TEXT_COLOR = Color3.fromRGB(78, 80, 90) -- dark grey
-local WORKER_TEXT_STROKE = Color3.fromRGB(240, 240, 245) -- light outline, so the dark text reads against the grass
-local FONT = Enum.Font.SourceSansBold
 
 --// State
 local holdToken = 0
@@ -132,10 +130,10 @@ end
 
 local function makeIcon(size: number): GuiObject
 	local icon: GuiObject
-	if ShearTimingData.WoolIconImage ~= "" then
+	if WoolData.WoolIconImage ~= "" then
 		local image = Instance.new("ImageLabel")
 		image.BackgroundTransparency = 1
-		image.Image = ShearTimingData.WoolIconImage
+		image.Image = WoolData.WoolIconImage
 		icon = image
 	else
 		local puff = Instance.new("Frame")
@@ -169,13 +167,36 @@ local function punchCounter(label: GuiObject)
 	tweenService:Create(scale, TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 end
 
+-- The "+N" riding on an icon, so the player sees how the wool they just earned adds up.
+local function addShareLabel(icon: GuiObject, share: number)
+	local label = Instance.new("TextLabel")
+	label.Name = "Share"
+	label.BackgroundTransparency = 1
+	label.AnchorPoint = Vector2.new(0.5, 1)
+	label.Position = UDim2.fromScale(0.5, 0)
+	label.Size = UDim2.fromScale(SHARE_LABEL_WIDTH, SHARE_LABEL_HEIGHT)
+	label.Font = Enum.Font.GothamBlack
+	label.TextScaled = true
+	label.TextColor3 = SHARE_TEXT_COLOR
+	label.Text = `+{share}`
+	label.ZIndex = icon.ZIndex + 1
+	label.Parent = icon
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = SHARE_STROKE_COLOR
+	stroke.Thickness = 2
+	stroke.Parent = label
+end
+
 --[[
-	Icons burst out around `start` (a screen point) and curve to the wool counter. Each one releases an equal
-	share of the held wool when it lands; the last releases whatever is left.
+	Icons burst out around `start` (a screen point) and curve to the wool counter. The wool is split into whole
+	shares, one per icon (at most ICON_COUNT icons; fewer when there is less wool, so 5 wool is five "+1"s). Each icon
+	shows its "+share" and releases exactly that much of the held wool when it lands, so the shares add up to `amount`.
 ]]
 local function flyIcons(start: Vector2, distance: number, amount: number)
 	local counterPoint, counter = getCounterPoint()
-	if not counterPoint or not counter then
+	local iconCount = math.min(ICON_COUNT, math.floor(amount))
+	if not counterPoint or not counter or iconCount <= 0 then
 		changeHeld(-amount)
 		return
 	end
@@ -185,14 +206,17 @@ local function flyIcons(start: Vector2, distance: number, amount: number)
 	local burstRadius = 90 * nearness
 	local iconSize = math.floor(34 * math.clamp(nearness, 0.8, 1.4))
 
-	local remaining = amount
-	local share = amount / ICON_COUNT
+	local baseShare = math.floor(amount / iconCount)
+	local leftover = amount - baseShare * iconCount -- the first icons carry one extra each
 	local popIcon = newPopSequence(ICON_POP_GAP_SECONDS)
 
-	for index = 1, ICON_COUNT do
+	for index = 1, iconCount do
+		local share = baseShare + (if index <= leftover then 1 else 0)
+
 		task.delay((index - 1) * ICON_STAGGER_SECONDS, function()
 			local icon = makeIcon(iconSize)
 			icon.Position = UDim2.fromOffset(start.X, start.Y)
+			addShareLabel(icon, share)
 
 			local angle = math.random() * math.pi * 2
 			local burstPoint = start + Vector2.new(math.cos(angle), math.sin(angle)) * burstRadius * (0.5 + math.random() * 0.5)
@@ -216,9 +240,7 @@ local function flyIcons(start: Vector2, distance: number, amount: number)
 						connection:Disconnect()
 						icon:Destroy()
 						punchCounter(counter)
-						local release = if index == ICON_COUNT then remaining else share
-						remaining -= release
-						changeHeld(-release)
+						changeHeld(-share)
 						return
 					end
 				end
@@ -319,7 +341,9 @@ local function collectWool(origin: Vector3, amount: number, color: Color3)
 	end
 end
 
-woolCollected.Event:Connect(function(origin: Vector3, amount: number, color: Color3)
+network.waitUntilReadyAsync()
+
+network.connectEvent(network.RemoteEvents.SheepSheared, function(origin: Vector3, amount: number, color: Color3)
 	-- Hold the wool back straight away, before the counter shows it.
 	changeHeld(amount)
 	holdToken += 1
@@ -333,54 +357,3 @@ woolCollected.Event:Connect(function(origin: Vector3, amount: number, color: Col
 	task.wait()
 	collectWool(origin, amount, color)
 end)
-
---// Worker wool ------------------------------------------------------------------------
-
--- "+N" rising from where a worker's sheep stood.
-local function showWorkerWool(position: Vector3, amount: number)
-	local anchor = Instance.new("Part")
-	anchor.Name = "WorkerWoolAnchor"
-	anchor.Anchored = true
-	anchor.CanCollide = false
-	anchor.CanTouch = false
-	anchor.CanQuery = false
-	anchor.Transparency = 1
-	anchor.Size = Vector3.one * 0.2
-	anchor.Position = position
-	anchor.Parent = workspace
-	debris:AddItem(anchor, WORKER_TEXT_SECONDS + 0.5)
-
-	local billboard = Instance.new("BillboardGui")
-	billboard.Size = UDim2.fromOffset(220, 56)
-	billboard.AlwaysOnTop = true
-	billboard.MaxDistance = 150
-	billboard.Adornee = anchor
-	billboard.Parent = anchor
-
-	local label = Instance.new("TextLabel")
-	label.BackgroundTransparency = 1
-	label.Size = UDim2.fromScale(1, 1)
-	label.Font = FONT
-	label.TextSize = 40
-	label.TextColor3 = WORKER_TEXT_COLOR
-	label.Text = `+{numberFormatter:Format(amount, 1) or amount} Wool`
-	label.Parent = billboard
-
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = WORKER_TEXT_STROKE
-	stroke.Thickness = 3
-	stroke.Parent = label
-
-	local rise = TweenInfo.new(WORKER_TEXT_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	tweenService:Create(billboard, rise, { StudsOffset = Vector3.new(0, WORKER_TEXT_RISE_STUDS, 0) }):Play()
-
-	local fade = TweenInfo.new(WORKER_TEXT_SECONDS * 0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-	task.delay(WORKER_TEXT_SECONDS * 0.55, function()
-		tweenService:Create(label, fade, { TextTransparency = 1 }):Play()
-		tweenService:Create(stroke, fade, { Transparency = 1 }):Play()
-	end)
-end
-
-network.waitUntilReadyAsync()
-
-network.connectEvent(network.RemoteEvents.WorkerWoolGained, showWorkerWool)

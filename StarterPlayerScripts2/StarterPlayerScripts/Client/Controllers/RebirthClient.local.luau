@@ -1,24 +1,6 @@
 --[[
-	The rebirth screen (StarterGui.RebirthScreen). Only DISPLAYS what the server sends
-	(RebirthHandler decides everything).
-
-	Hierarchy this script expects:
-		RebirthScreen (ScreenGui)
-		└─ Main
-		   ├─ MoneyBar          Progress (width = money / cost), MoneyText ("$1,200/$50,000")
-		   ├─ RequirementTip    RequirementText (a tip, or the result of the last rebirth try)
-		   ├─ Requirements      UIListLayout + Template (hidden, cloned once per requirement)
-		   │  ├─ Template       generic row: Completed (+ TextLabel), ImageLabel, TextLabel ("Wool: 1,200/20,000")
-	   │  └─ WoolTemplate / PensTemplate / WorkersTemplate   optional, same layout, used for that requirement
-		   ├─ Exit              closes the screen
-		   └─ Rebirth           sends the rebirth request
-		The HUD button that opens the screen is PlayerGui.Main.Buttons.Rebirth.
-
-	Flow:
-		HUD Rebirth button        -> the screen toggles open and asks the server for fresh state
-		RebirthState (server)     -> money bar, requirement rows and the Rebirth button are redrawn
-		Rebirth button            -> RequestRebirth is sent (only when the state says canRebirth)
-		RebirthResult (server)    -> success / failure message in RequirementText
+	The rebirth screen (StarterGui.RebirthScreen): shows wool towards the next rebirth and the multiplier it gives.
+	Only displays what the server sends; RebirthHandler decides everything.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.RebirthClient
 ]]--
@@ -30,6 +12,7 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 
 --// Instances
 local player = players.LocalPlayer
@@ -43,59 +26,47 @@ local mainFrame = rebirthGui:WaitForChild("Main") :: Frame
 local exitButton = mainFrame:WaitForChild("Exit") :: GuiButton
 local rebirthButton = mainFrame:WaitForChild("Rebirth") :: TextButton
 
-local moneyBar = mainFrame:WaitForChild("MoneyBar") :: Frame
-local moneyProgress = moneyBar:WaitForChild("Progress") :: Frame
-local moneyText = moneyBar:WaitForChild("MoneyText") :: TextLabel
+-- The progress bar is still named MoneyBar in Studio; it now tracks wool.
+local woolBar = mainFrame:WaitForChild("MoneyBar") :: Frame
+local woolProgress = woolBar:WaitForChild("Progress") :: Frame
+local woolText = woolBar:WaitForChild("MoneyText") :: TextLabel
 
 local tipText = mainFrame:WaitForChild("RequirementTip"):WaitForChild("RequirementText") :: TextLabel
+local requirementsFrame = mainFrame:FindFirstChild("Requirements")
 
-local requirementsFrame = mainFrame:WaitForChild("Requirements") :: Frame
-local rowTemplate = requirementsFrame:WaitForChild("Template") :: Frame
+-- Before -> after reward rows; Template is cloned for each row.
+local rewardsFrame = rebirthGui:FindFirstChild("RewardsFrame", true) :: Frame
+local rewardTemplate = rewardsFrame:WaitForChild("Template") :: Frame
 
--- Optional templates for one specific requirement (WoolTemplate, PensTemplate, WorkersTemplate).
--- A requirement without its own template uses the generic Template.
-local specificTemplates: { [string]: Frame } = {}
-for _, id in { "Pens", "Workers" } do
-	local template = requirementsFrame:FindFirstChild(id .. "Template")
-	if template and template:IsA("Frame") then
-		specificTemplates[id] = template
-	end
-end
+local luckRow = rewardTemplate:Clone()
+luckRow.Name = "Luck"
+local luckBefore = luckRow:WaitForChild("Before"):WaitForChild("Amount") :: TextLabel
+local luckAfter = luckRow:WaitForChild("After"):WaitForChild("Amount") :: TextLabel
 
 --// Configs
 local OPEN_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local BAR_TWEEN = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local MESSAGE_SECONDS = 2
-local COLOR_MET = Color3.fromRGB(90, 220, 110)
-local COLOR_UNMET = Color3.fromRGB(235, 90, 90)
 local BUTTON_COLORS = {
 	Ready = Color3.fromRGB(70, 200, 100),
 	NotReady = Color3.fromRGB(120, 120, 120),
 	Maxed = Color3.fromRGB(230, 190, 60),
 }
 
--- What each requirement is called on its row (anything not listed uses the server's label).
-local REQUIREMENT_LABELS = {
-	Pens = "Pens owned",
-	Workers = "Hire workers",
-}
-
 local REASON_TEXT = {
 	Busy = "Please wait...",
-	Shearing = "Finish shearing first",
 	MaxRebirths = "You've reached the max rebirths",
-	NotReady = "You don't meet every requirement yet",
+	NotReady = "You don't have enough wool yet",
 }
 
--- The bar and text as built in Studio, and their darker look once the money target is reached.
-local moneyBarColor = moneyProgress.BackgroundColor3
-local moneyBarReachedColor = moneyBarColor:Lerp(Color3.new(0, 0, 0), 0.4)
-local moneyTextColor = moneyText.TextColor3
-local moneyTextReachedColor = moneyTextColor:Lerp(Color3.new(0, 0, 0), 0.4)
+-- The bar and text as built in Studio, and their darker look once the wool target is reached.
+local barColor = woolProgress.BackgroundColor3
+local barReachedColor = barColor:Lerp(Color3.new(0, 0, 0), 0.4)
+local textColor = woolText.TextColor3
+local textReachedColor = textColor:Lerp(Color3.new(0, 0, 0), 0.4)
 
 --// State
 local state: any = nil -- the last RebirthState from the server
-local rows: { [string]: Frame } = {}
 local messageToken = 0
 
 local openScale = Instance.new("UIScale")
@@ -103,15 +74,23 @@ openScale.Parent = mainFrame
 
 --// Helpers -------------------------------------------------------------------------
 
--- 1234567 -> "1,234,567"
-local function formatNumber(value: number): string
-	local text = tostring(math.floor(value))
-	local formatted = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
-	return (formatted:gsub("^,", ""))
+local function formatWool(value: number): string
+	return numberFormatter:Format(math.floor(value), 1)
 end
 
 local function formatMultiplier(value: number): string
 	return "x" .. (string.format("%.2f", value):gsub("%.?0+$", ""))
+end
+
+-- 248239 -> "248,239"
+local function formatWithCommas(value: number): string
+	local digits = tostring(math.floor(value))
+	return (digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^(-?),", "%1"))
+end
+
+-- "x3.7 (248,239)": the luck multiplier, then the Luck it comes from.
+local function formatLuck(luck: number, factor: number): string
+	return `{formatMultiplier(factor)} ({formatWithCommas(luck)})`
 end
 
 local function shake(button: GuiObject)
@@ -123,75 +102,43 @@ local function shake(button: GuiObject)
 	end)
 end
 
--- The line under the money bar when no message is showing.
+-- "+442 Luck", with a milestone tag when the next rebirth pays bonus Luck.
+local function formatLuckReward(): string
+	local text = `+{numberFormatter:Format(state.luckReward, 1)} Luck`
+	return if state.luckMilestone then `{text} (Milestone bonus!)` else text
+end
+
+-- The line under the wool bar when no message is showing.
 local function getTip(): string
 	if not state then
 		return "Loading..."
 	elseif state.maxed then
 		return "You've reached the max rebirths!"
 	elseif state.canRebirth then
-		return `Ready! Rebirth to sell wool for {formatMultiplier(state.nextMultiplier)}.`
+		return `Ready! Rebirth for {formatMultiplier(state.nextMultiplier)} wool and {formatLuckReward()}.`
 	end
-	return `Meet every requirement to sell wool for {formatMultiplier(state.nextMultiplier)}. Your farm starts over.`
+	return `Collect the wool to rebirth for {formatMultiplier(state.nextMultiplier)} wool and {formatLuckReward()}. Your farm starts over.`
 end
 
 --// Rendering --------------------------------------------------------------------------
 
--- One row per requirement, cloned from the template the first time its id shows up.
-local function getRow(id: string, order: number): Frame
-	local row = rows[id]
-	if not row then
-		row = (specificTemplates[id] or rowTemplate):Clone()
-		row.Name = id
-		row.Parent = requirementsFrame
-		rows[id] = row
-	end
+local function renderWool()
+	local cost = state.woolCost
+	local ratio = if state.maxed or cost <= 0 then 1 else math.clamp(state.wool / cost, 0, 1)
 
-	row.LayoutOrder = order
-	row.Visible = true
-	return row
+	local size = woolProgress.Size
+	tweenService:Create(woolProgress, BAR_TWEEN, { Size = UDim2.new(ratio, 0, size.Y.Scale, size.Y.Offset) }):Play()
+
+	local reached = not state.maxed and state.wool >= cost
+	tweenService:Create(woolProgress, BAR_TWEEN, { BackgroundColor3 = if reached then barReachedColor else barColor }):Play()
+	tweenService:Create(woolText, BAR_TWEEN, { TextColor3 = if reached then textReachedColor else textColor }):Play()
+
+	woolText.Text = if state.maxed then "MAX" else `{formatWool(math.min(state.wool, cost))}/{formatWool(cost)} Wool`
 end
 
-local function renderMoney()
-	local cost = state.moneyCost
-	local ratio = if state.maxed or cost <= 0 then 1 else math.clamp(state.money / cost, 0, 1)
-
-	local size = moneyProgress.Size
-	tweenService:Create(moneyProgress, BAR_TWEEN, { Size = UDim2.new(ratio, 0, size.Y.Scale, size.Y.Offset) }):Play()
-
-	-- Reaching the target darkens the bar and the text reads e.g. $50,000/$50,000 (never above the target).
-	local reached = not state.maxed and state.money >= cost
-	tweenService:Create(moneyProgress, BAR_TWEEN, { BackgroundColor3 = if reached then moneyBarReachedColor else moneyBarColor }):Play()
-	tweenService:Create(moneyText, BAR_TWEEN, { TextColor3 = if reached then moneyTextReachedColor else moneyTextColor }):Play()
-
-	moneyText.Text = if state.maxed then "MAX" else `${formatNumber(math.min(state.money, cost))}/${formatNumber(cost)}`
-end
-
-local function renderRequirements()
-	local seen: { [string]: boolean } = {}
-
-	for order, requirement in state.requirements do
-		seen[requirement.id] = true
-		local row = getRow(requirement.id, order)
-
-		local label = row:FindFirstChild("TextLabel") :: TextLabel?
-		if label then
-			label.Text = `{REQUIREMENT_LABELS[requirement.id] or requirement.label}: {formatNumber(requirement.current)}/{formatNumber(requirement.required)}`
-			label.TextColor3 = if requirement.met then COLOR_MET else COLOR_UNMET
-		end
-
-		local completed = row:FindFirstChild("Completed") :: GuiObject?
-		if completed then
-			completed.Visible = requirement.met
-		end
-	end
-
-	-- Maxed out: no requirements are sent, so any row from before is hidden.
-	for id, row in rows do
-		if not seen[id] then
-			row.Visible = false
-		end
-	end
+local function renderRewards()
+	luckBefore.Text = formatLuck(state.luck, state.luckFactor)
+	luckAfter.Text = formatLuck(state.nextLuck, state.nextLuckFactor)
 end
 
 local function renderButton()
@@ -205,14 +152,12 @@ local function renderButton()
 		rebirthButton.Text = "Rebirth"
 		rebirthButton.BackgroundColor3 = BUTTON_COLORS.NotReady
 	end
-
-	rebirthButton:SetAttribute("CanRebirth", state ~= nil and state.canRebirth)
 end
 
 local function render()
 	if state then
-		renderMoney()
-		renderRequirements()
+		renderWool()
+		renderRewards()
 	end
 
 	messageToken += 1 -- a pending message must not overwrite the fresh text
@@ -268,10 +213,18 @@ end
 
 --// Setup -------------------------------------------------------------------------------
 
-rowTemplate.Visible = false
-for _, template in specificTemplates do
-	template.Visible = false
+-- Rebirths only need wool now, so the old requirement rows stay hidden.
+if requirementsFrame then
+	requirementsFrame.Visible = false
 end
+
+local luckText = luckRow:FindFirstChild("Text")
+if luckText and luckText:IsA("TextLabel") then
+	luckText.Text = "Luck"
+end
+luckRow.Parent = rewardsFrame
+rewardTemplate.Visible = false
+
 rebirthGui.Enabled = false
 updateAlert()
 
@@ -309,9 +262,9 @@ end)
 
 network.connectEvent(network.RemoteEvents.RebirthResult, function(success: boolean, reason: string?, rebirths: number)
 	if success then
-		-- The result arrives just before the fresh state, so the old state's next multiplier is the one just earned.
+		-- The result arrives just before the fresh state, so the old state's next rewards are the ones just earned.
 		if state then
-			flashMessage(`Rebirth {rebirths}! Wool now sells for {formatMultiplier(state.nextMultiplier)}.`)
+			flashMessage(`Rebirth {rebirths}! Wool is now {formatMultiplier(state.nextMultiplier)} and you got {formatLuckReward()}.`)
 		else
 			flashMessage(`Rebirth {rebirths}!`)
 		end
@@ -319,8 +272,5 @@ network.connectEvent(network.RemoteEvents.RebirthResult, function(success: boole
 		flashMessage(REASON_TEXT[reason or ""] or "Can't rebirth right now")
 	end
 end)
-
--- Shearing started: the screen must not stay up over the mini-game.
-network.connectEvent(network.RemoteEvents.ActivateShearing, closeScreen)
 
 network.fireServer(network.RemoteEvents.RequestRebirthState)

@@ -9,62 +9,38 @@
 
 local StrictEnum = require("../Utility/StrictEnum")
 
-export type EnumType = "ActivateShearing"
-    | "DeactivateShearing"
-    | "StartShearing"
-    | "StopShearing"
-    | "ShearAttempt"
-    | "ShearPress"
-    | "ShearDamage"
-    | "SheepBrokeOut"
-    | "WorkerWoolGained"
-    | "OpenPenMenu"
-    | "ClosePenMenu"
-    | "UpgradePen"
-    | "SellPen"
-    | "HireWorker"
-    | "RemoveWorker"
-    | "RequestHireWorkersState"
-    | "HireWorkersState"
-    | "HireWorkersHire"
-    | "WoolSold"
-    | "PurchaseShear"
-    | "EquipShear"
-    | "ShearPurchaseResult"
-    | "RequestRebirth"
-    | "RequestRebirthState"
-    | "RebirthState"
-    | "RebirthResult"
-    | "Teleport"
+export type EnumType = "ShearSwing"
+	| "ShearHit"
+	| "SheepSheared"
+	| "PurchaseShear"
+	| "EquipShear"
+	| "ShearPurchaseResult"
+	| "PurchaseUpgrade"
+	| "UpgradeResult"
+	| "RequestUpgradeState"
+	| "UpgradeState"
+	| "RequestRebirth"
+	| "RequestRebirthState"
+	| "RebirthState"
+	| "RebirthResult"
+	| "Teleport"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
-	ActivateShearing = "ActivateShearing",
-    DeactivateShearing = "DeactivateShearing",
-    StartShearing = "StartShearing",
-    StopShearing = "StopShearing",
-    ShearAttempt = "ShearAttempt",
-    ShearPress = "ShearPress",
-    ShearDamage = "ShearDamage",
-    SheepBrokeOut = "SheepBrokeOut",
-    WorkerWoolGained = "WorkerWoolGained",
-    OpenPenMenu = "OpenPenMenu",
-    ClosePenMenu = "ClosePenMenu",
-    UpgradePen = "UpgradePen",
-    SellPen = "SellPen",
-    HireWorker = "HireWorker",
-    RemoveWorker = "RemoveWorker",
-    RequestHireWorkersState = "RequestHireWorkersState",
-    HireWorkersState = "HireWorkersState",
-    HireWorkersHire = "HireWorkersHire",
-    WoolSold = "WoolSold",
-    PurchaseShear = "PurchaseShear",
-    EquipShear = "EquipShear",
-    ShearPurchaseResult = "ShearPurchaseResult",
-    RequestRebirth = "RequestRebirth",
-    RequestRebirthState = "RequestRebirthState",
-    RebirthState = "RebirthState",
-    RebirthResult = "RebirthResult",
-    Teleport = "Teleport"
+	ShearSwing = "ShearSwing",
+	ShearHit = "ShearHit",
+	SheepSheared = "SheepSheared",
+	PurchaseShear = "PurchaseShear",
+	EquipShear = "EquipShear",
+	ShearPurchaseResult = "ShearPurchaseResult",
+	PurchaseUpgrade = "PurchaseUpgrade",
+	UpgradeResult = "UpgradeResult",
+	RequestUpgradeState = "RequestUpgradeState",
+	UpgradeState = "UpgradeState",
+	RequestRebirth = "RequestRebirth",
+	RequestRebirthState = "RequestRebirthState",
+	RebirthState = "RebirthState",
+	RebirthResult = "RebirthResult",
+	Teleport = "Teleport",
 }
 
 return RemoteEventName

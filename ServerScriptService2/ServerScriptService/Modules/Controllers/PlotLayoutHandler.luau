@@ -1,20 +1,21 @@
 --!strict
 
 --[[
-	Copies the source plot's Waypoints and PenSlots onto every other plot when the game starts.
-	Each copy is placed relative to that plot's SpawnArea, so only the source plot needs editing.
+	Rebuilds every plot from Plots.TemplatePlot when the server starts, placing each copy relative to that plot's SpawnArea.
+	The template is then moved to ServerStorage so it is never handed out as a plot.
 
 	Location: ServerScriptService.Modules.Controllers.PlotLayoutHandler
 ]]--
+
+--// Services
+local serverStorage = game:GetService("ServerStorage")
 
 --// Instances
 local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 
 --// Configs
-local SOURCE_PLOT_NAME = "Plot_1"
+local TEMPLATE_NAME = "TemplatePlot"
 local ANCHOR_NAME = "SpawnArea"
-local PURCHASED_ATTRIBUTE = "Purchased"
-local LAYOUT_FOLDERS = { "Waypoints", "PenSlots" }
 
 local PlotLayoutHandler = {}
 
@@ -23,57 +24,60 @@ local function getAnchor(plot: Instance): BasePart?
 	return if anchor and anchor:IsA("BasePart") then anchor else nil
 end
 
--- Moves every part and model directly inside the folder (descending into sub-folders) from the source anchor's space to the target's.
-local function reposition(container: Instance, sourceAnchor: CFrame, targetAnchor: CFrame)
-	for _, child in container:GetChildren() do
-		if child:IsA("BasePart") then
-			child.CFrame = targetAnchor * sourceAnchor:ToObjectSpace(child.CFrame)
-		elseif child:IsA("Model") then
-			child:PivotTo(targetAnchor * sourceAnchor:ToObjectSpace(child:GetPivot()))
-		else
+-- Moves a part or model (or everything inside a folder) from the template anchor's space to the plot's.
+local function reposition(instance: Instance, sourceAnchor: CFrame, targetAnchor: CFrame)
+	if instance:IsA("BasePart") then
+		instance.CFrame = targetAnchor * sourceAnchor:ToObjectSpace(instance.CFrame)
+	elseif instance:IsA("Model") then
+		instance:PivotTo(targetAnchor * sourceAnchor:ToObjectSpace(instance:GetPivot()))
+	else
+		for _, child in instance:GetChildren() do
 			reposition(child, sourceAnchor, targetAnchor)
 		end
 	end
 end
 
-local function layoutPlot(source: Folder, sourceAnchor: BasePart, plot: Folder)
+-- Replaces everything on the plot except its SpawnArea with a fresh copy of the template.
+local function buildPlot(template: Folder, templateAnchor: BasePart, plot: Folder)
 	local anchor = getAnchor(plot)
 	if not anchor then
 		warn(`PlotLayoutHandler: {plot.Name} has no {ANCHOR_NAME}.`)
 		return
 	end
 
-	for _, name in LAYOUT_FOLDERS do
-		local original = source:FindFirstChild(name)
-		if not original then
-			warn(`PlotLayoutHandler: {source.Name} has no {name}.`)
-			continue
+	for _, child in plot:GetChildren() do
+		if child ~= anchor then
+			child:Destroy()
 		end
+	end
 
-		local existing = plot:FindFirstChild(name)
-		if existing then
-			existing:Destroy()
+	for _, child in template:GetChildren() do
+		if child ~= templateAnchor then
+			local copy = child:Clone()
+			reposition(copy, templateAnchor.CFrame, anchor.CFrame)
+			copy.Parent = plot
 		end
-
-		local copy = original:Clone()
-		reposition(copy, sourceAnchor.CFrame, anchor.CFrame)
-		copy.Parent = plot
 	end
 end
 
-function PlotLayoutHandler.Setup()
-	local source = plotsFolder:WaitForChild(SOURCE_PLOT_NAME)
-	local sourceAnchor = getAnchor(source)
-	if not source:IsA("Folder") or not sourceAnchor then
-		warn(`PlotLayoutHandler: {SOURCE_PLOT_NAME} needs to be a Folder with a {ANCHOR_NAME}.`)
+local function buildPlots()
+	local template = plotsFolder:FindFirstChild(TEMPLATE_NAME)
+	local templateAnchor = if template then getAnchor(template) else nil
+	if not template or not template:IsA("Folder") or not templateAnchor then
+		warn(`PlotLayoutHandler: Plots.{TEMPLATE_NAME} needs to be a Folder with a {ANCHOR_NAME}.`)
 		return
 	end
 
+	template.Parent = serverStorage
+
 	for _, plot in plotsFolder:GetChildren() do
-		if plot ~= source and plot:IsA("Folder") and not plot:GetAttribute(PURCHASED_ATTRIBUTE) then
-			layoutPlot(source, sourceAnchor, plot)
+		if plot:IsA("Folder") then
+			buildPlot(template, templateAnchor, plot)
 		end
 	end
 end
+
+-- Runs when the module is required. ModuleLoader requires every module before any Setup, so the plots are built before anything uses them.
+buildPlots()
 
 return PlotLayoutHandler

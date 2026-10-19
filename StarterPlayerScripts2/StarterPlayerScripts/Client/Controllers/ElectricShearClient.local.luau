@@ -4,8 +4,7 @@
 	The idle crackle and the arc are plain ParticleEmitter / Beam / PointLight objects on the
 	tool, so they need no script. The burst on each snip is triggered here: the server bumps the
 	tool's "Snips" attribute on every accepted hit, and every client watching a tool tagged
-	"ElectricShear" bursts its sparks and flashes its light. The local player's own tool is
-	handled instantly by ShearingClient (no waiting for the attribute to replicate), so it's skipped here.
+	"ElectricShear" bursts its sparks and flashes its light. The local player's own tool is skipped here.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.ElectricShearClient
 ]]--

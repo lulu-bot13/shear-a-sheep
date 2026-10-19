@@ -1,3 +1,22 @@
+--!strict
+
+--[[
+	Every sheep type (wool health, wool and Luck it gives, rarity, base spawn weight) and the luck-weighted spawn roll.
+
+	Location: ServerScriptService.Modules.Constants.SheepData
+]]--
+
+export type SheepInfo = {
+	id: string,
+	name: string,
+	ShearHealth: number,
+	WoolAmount: number,
+	LuckAmount: number, -- Luck the player earns for shearing it bare
+	rarity: string,
+	color: Color3,
+	chance: number, -- base spawn weight (before luck)
+}
+
 local rarityColors = {
 	Common = Color3.fromRGB(107, 114, 128),
 	Uncommon = Color3.fromRGB(21, 128, 61),
@@ -9,160 +28,152 @@ local rarityColors = {
 
 local rarityOrder = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic" }
 
-local sheepData = {
+local sheepData = {}
 
-	["Basic"] = {
+-- Keyed by model name in ReplicatedStorage.Assets.Models.Sheeps.
+sheepData.Sheep = {
+	Basic = {
 		id = "Basic_Sheep",
 		name = "Basic Sheep",
 		ShearHealth = 100,
 		WoolAmount = 15,
+		LuckAmount = 1,
 		rarity = "Common",
 		color = rarityColors.Common,
 		chance = 500000,
 	},
-
-	["GreySheep"] = {
+	GreySheep = {
 		id = "Grey_Sheep",
 		name = "Grey Sheep",
 		ShearHealth = 105,
 		WoolAmount = 18,
+		LuckAmount = 1,
 		rarity = "Common",
 		color = rarityColors.Common,
 		chance = 250000,
 	},
-
-	["BrownSheep"] = {
+	BrownSheep = {
 		id = "Brown_Sheep",
 		name = "Brown Sheep",
 		ShearHealth = 115,
 		WoolAmount = 20,
+		LuckAmount = 2,
 		rarity = "Uncommon",
 		color = rarityColors.Uncommon,
 		chance = 150000,
 	},
-
-	["BlackSheep"] = {
+	BlackSheep = {
 		id = "Black_Sheep",
 		name = "Black Sheep",
 		ShearHealth = 130,
 		WoolAmount = 28,
+		LuckAmount = 3,
 		rarity = "Uncommon",
 		color = rarityColors.Uncommon,
 		chance = 60000,
 	},
-
-	["FluffySheep"] = {
+	FluffySheep = {
 		id = "Fluffy_Sheep",
 		name = "Fluffy Sheep",
 		ShearHealth = 145,
 		WoolAmount = 35,
+		LuckAmount = 5,
 		rarity = "Rare",
 		color = rarityColors.Rare,
 		chance = 30000,
 	},
-
-	["GoldenSheep"] = {
+	GoldenSheep = {
 		id = "Golden_Sheep",
 		name = "Golden Sheep",
 		ShearHealth = 175,
 		WoolAmount = 50,
+		LuckAmount = 10,
 		rarity = "Epic",
 		color = rarityColors.Epic,
 		chance = 7500,
 	},
-
-	["EmeraldSheep"] = {
+	EmeraldSheep = {
 		id = "Emerald_Sheep",
 		name = "Emerald Sheep",
 		ShearHealth = 190,
 		WoolAmount = 60,
+		LuckAmount = 12,
 		rarity = "Epic",
 		color = rarityColors.Epic,
 		chance = 2000,
 	},
-
-	["SpottedSheep"] = {
+	SpottedSheep = {
 		id = "Spotted_Sheep",
 		name = "Spotted Sheep",
 		ShearHealth = 215,
 		WoolAmount = 80,
+		LuckAmount = 25,
 		rarity = "Legendary",
 		color = rarityColors.Legendary,
 		chance = 400,
 	},
-
-	["DiamondSheep"] = {
+	DiamondSheep = {
 		id = "Diamond_Sheep",
 		name = "Diamond Sheep",
 		ShearHealth = 250,
 		WoolAmount = 100,
+		LuckAmount = 60,
 		rarity = "Mythic",
 		color = rarityColors.Mythic,
 		chance = 100,
 	},
-
-}
+} :: { [string]: SheepInfo }
 
 --[[
-	Per-rarity-tier weight multipliers used by pen upgrades: as a pen levels
-	up, common sheep get less likely and rare+ sheep get more likely. Level 1
-	is the untouched base table (no override -- see Pen.lua).
-]]--
-sheepData.UpgradeMultipliers = {
-	[1] = { Common = 1,    Uncommon = 1,    Rare = 1,    Epic = 1,   Legendary = 1,  Mythic = 1 },
-	[2] = { Common = 0.8,  Uncommon = 1.3,  Rare = 1.6,  Epic = 2.2, Legendary = 3,  Mythic = 4 },
-	[3] = { Common = 0.6,  Uncommon = 1.6,  Rare = 2.4,  Epic = 3.6, Legendary = 5,  Mythic = 8 },
-	[4] = { Common = 0.45, Uncommon = 2,    Rare = 3.2,  Epic = 5,   Legendary = 8,  Mythic = 14 },
-	[5] = { Common = 0.3,  Uncommon = 2.5,  Rare = 4.5,  Epic = 8,   Legendary = 14, Mythic = 25 },
-}
-sheepData.MaxPenLevel = 5
+	Luck boosts every tier above Common: a sheep's weight is multiplied by luckFactor ^ (tier index),
+	where luckFactor = 1 + LUCK_STRENGTH * log10(1 + luck). The log keeps exponential Luck from breaking the odds.
+]]
+sheepData.LUCK_STRENGTH = 0.5
 
--- Sum of every species' base weight (1,000,000 by construction).
-function sheepData.getTotalWeight(chances: { [string]: number }?): number
+local tierIndex: { [string]: number } = {}
+for index, rarity in rarityOrder do
+	tierIndex[rarity] = index - 1
+end
+
+function sheepData.getLuckFactor(luck: number): number
+	return 1 + sheepData.LUCK_STRENGTH * math.log10(1 + math.max(luck, 0))
+end
+
+local function getWeight(info: SheepInfo, luckFactor: number): number
+	return info.chance * luckFactor ^ (tierIndex[info.rarity] or 0)
+end
+
+local function getTotalWeight(luckFactor: number): number
 	local total = 0
-	for sheepName, data in sheepData do
-		if type(data) == "table" and data.chance then
-			total += (chances and chances[sheepName]) or data.chance
-		end
+	for _, info in sheepData.Sheep do
+		total += getWeight(info, luckFactor)
 	end
 	return total
 end
 
---[[
-	Builds a chances table (sheepName -> weight) for the given pen level, biasing rarer tiers upward.
-	`baseLuck` (1 = none; it grows with rebirths) boosts every tier above Common on top of the level's
-	multipliers.
-]]
-function sheepData.buildChancesForLevel(level: number, baseLuck: number?): { [string]: number }?
-	local luck = baseLuck or 1
-	local multipliers = sheepData.UpgradeMultipliers[level]
-	if not multipliers or (level <= 1 and luck <= 1) then
-		return nil -- nil means "use the base table as-is"
-	end
+-- Picks a sheep type name for a player with this much Luck.
+function sheepData.roll(luck: number, random: Random?): string?
+	local luckFactor = sheepData.getLuckFactor(luck)
+	local roll = (random or Random.new()):NextNumber() * getTotalWeight(luckFactor)
 
-	local chances = {}
-	for sheepName, data in sheepData do
-		if type(data) == "table" and data.chance then
-			local multiplier = (multipliers[data.rarity] or 1) * (if data.rarity == "Common" then 1 else luck)
-			chances[sheepName] = data.chance * multiplier
+	local cumulative = 0
+	for name, info in sheepData.Sheep do
+		cumulative += getWeight(info, luckFactor)
+		if roll <= cumulative then
+			return name
 		end
 	end
-	return chances
+	return nil
 end
 
-function sheepData.getOddsText(sheepName: string, chances: { [string]: number }?): string
-	local data = sheepData[sheepName]
-	if not data then
+function sheepData.getOddsText(name: string, luck: number): string
+	local info = sheepData.Sheep[name]
+	if not info then
 		return "1 in ?"
 	end
 
-	local weight = (chances and chances[sheepName]) or data.chance
-	local total = sheepData.getTotalWeight(chances)
-	if weight <= 0 or total <= 0 then
-		return "1 in ?"
-	end
-
-	local odds = math.max(1, math.floor(total / weight + 0.5))
+	local luckFactor = sheepData.getLuckFactor(luck)
+	local odds = math.max(1, math.floor(getTotalWeight(luckFactor) / getWeight(info, luckFactor) + 0.5))
 	return `1 in {odds}`
 end
 

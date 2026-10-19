@@ -4,7 +4,7 @@
 	Pressing any ProximityPrompt tagged "ShearShop" opens the shop. Each shear in
 	ShearShopUIData gets a card cloned from the Template: name, speed / damage, a spinning
 	3D preview and a purchase button. Buying is validated by the server (ShearShopHandler);
-	the cards update from the player's "ShearId" / "OwnedShears" attributes and Money. A shear that is
+	the cards update from the player's "ShearId" / "OwnedShears" attributes and wool. A shear that is
 	owned but not equipped shows "Equip" and switches to it when pressed (EquipShear).
 
 	Performance: the previews are built once (on first open), and ONE render connection
@@ -34,7 +34,7 @@ local mainFrame = shopGui:WaitForChild("Main") :: Frame
 local scrollFrame = mainFrame:WaitForChild("ScrollingFrame") :: ScrollingFrame
 local cardTemplate = scrollFrame:WaitForChild("Template") :: Frame
 local closeButton = mainFrame:WaitForChild("Close") :: TextButton
-local money = player:WaitForChild("leaderstats"):WaitForChild("Money") :: IntValue
+local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
 
 --// Configs
 local SHOP_PROMPT_TAG = "ShearShop"
@@ -44,11 +44,11 @@ local MESSAGE_SECONDS = 1.3
 local OPEN_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
 local REASON_TEXT = {
-	NoMoney = "Not enough money",
+	NoWool = "Not enough wool",
 	TooFar = "Too far away",
 	Owned = "Already owned",
-	Busy = "Finish shearing first",
 	NotOwned = "Buy it first",
+	Locked = "Shear more sheep",
 }
 
 type Card = {
@@ -100,12 +100,19 @@ local function isOwned(id: string): boolean
 	return false
 end
 
+local function getSheepSheared(): number
+	local count = player:GetAttribute("SheepShearedCount")
+	return if type(count) == "number" then count else 0
+end
+
 local function getState(card: Card): string
 	if card.info.id == (player:GetAttribute("ShearId") or "DefaultShear") then
 		return "equipped"
 	elseif isOwned(card.info.id) then
 		return "owned"
-	elseif money.Value >= card.info.price then
+	elseif getSheepSheared() < card.info.sheepRequired then
+		return "locked"
+	elseif wool.Value >= card.info.price then
 		return "ready"
 	end
 	return "poor"
@@ -121,8 +128,11 @@ local function refreshCard(card: Card)
 	elseif state == "owned" then
 		card.purchaseLabel.Text = "Equip"
 		card.purchase.BackgroundColor3 = colors.Owned
+	elseif state == "locked" then
+		card.purchaseLabel.Text = `Shear {getSheepSheared()}/{card.info.sheepRequired} Sheep`
+		card.purchase.BackgroundColor3 = colors.Locked
 	else
-		card.purchaseLabel.Text = `Purchase - {UIData.formatMoney(card.info.price)}`
+		card.purchaseLabel.Text = UIData.formatWool(card.info.price)
 		card.purchase.BackgroundColor3 = if state == "ready" then colors.Ready else colors.Poor
 	end
 
@@ -196,10 +206,10 @@ local function createCards()
 		local nameLabel = frame:WaitForChild("ShearName") :: TextLabel
 		local buffsLabel = frame:WaitForChild("Buffs") :: TextLabel
 		local purchase = frame:WaitForChild("Purchase") :: GuiButton
-		local purchaseLabel = purchase:WaitForChild("TextLabel") :: TextLabel
+		local purchaseLabel = purchase:WaitForChild("Label") :: TextLabel
 
 		nameLabel.Text = info.displayName
-		buffsLabel.Text = `Damage: x{string.format("%.2f", info.damageMultiplier)}\nSweet spot: x{string.format("%.2f", info.zoneScale)}`
+		buffsLabel.Text = `Damage: {info.damage}\nRange: {info.range} studs`
 		purchase.AutoButtonColor = true
 		if purchase:IsA("TextButton") then
 			purchase.Text = ""
@@ -226,7 +236,9 @@ local function createCards()
 			elseif state == "owned" then
 				network.fireServer(network.RemoteEvents.EquipShear, info.id)
 			elseif state == "poor" then
-				flashMessage(card, REASON_TEXT.NoMoney)
+				flashMessage(card, REASON_TEXT.NoWool)
+			elseif state == "locked" then
+				flashMessage(card, REASON_TEXT.Locked)
 			else
 				shake(purchase)
 			end
@@ -411,18 +423,21 @@ end
 
 --// Setup ---------------------------------------------------------------------------
 
+-- Kept across respawns: a reset would swap in a fresh copy and leave this script opening the destroyed one.
+shopGui.ResetOnSpawn = false
+mainFrame.Visible = true
 createCards()
 shopGui.Enabled = false
 
 closeButton.MouseButton1Click:Connect(closeShop)
 
-money.Changed:Connect(function()
+wool.Changed:Connect(function()
 	if shopGui.Enabled then
 		refreshAll()
 	end
 end)
 
-for _, attribute in { "ShearId", "OwnedShears" } do
+for _, attribute in { "ShearId", "OwnedShears", "SheepShearedCount" } do
 	player:GetAttributeChangedSignal(attribute):Connect(function()
 		if shopGui.Enabled then
 			refreshAll()
@@ -456,6 +471,3 @@ network.connectEvent(network.RemoteEvents.ShearPurchaseResult, function(id: stri
 		flashMessage(card, REASON_TEXT[reason or ""] or "Can't buy")
 	end
 end)
-
--- Shearing started: the shop must not stay up over the mini-game.
-network.connectEvent(network.RemoteEvents.ActivateShearing, closeShop)

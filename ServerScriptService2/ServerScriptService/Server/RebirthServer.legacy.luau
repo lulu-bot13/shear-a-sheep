@@ -1,13 +1,8 @@
 --!strict
 
 --[[
-	Connects the rebirth screen to the server rules in RebirthHandler:
-		RequestRebirthState (client -> server)  "send me the current rebirth state"
-		RequestRebirth      (client -> server)  "rebirth me" (the server checks everything itself)
-		RebirthState        (server -> client)  the full state for drawing the screen
-		RebirthResult       (server -> client)  success?, reason, new rebirth count
-
-	The state is also pushed on its own whenever something on it changes (money, wool, pens, workers).
+	Connects the rebirth screen to RebirthHandler: answers state and rebirth requests,
+	and pushes fresh state on its own whenever the player's wool, luck or rebirths change.
 
 	Location: ServerScriptService.Server.RebirthServer
 ]]--
@@ -31,11 +26,7 @@ local lastSignature: { [Player]: string } = {}
 
 -- A short fingerprint of the state, so an unchanged state is never sent twice.
 local function getSignature(state: RebirthHandler.State): string
-	local parts = { tostring(state.rebirths), tostring(state.money), tostring(state.canRebirth) }
-	for _, requirement in state.requirements do
-		table.insert(parts, tostring(requirement.current))
-	end
-	return table.concat(parts, "|")
+	return `{state.rebirths}|{state.wool}|{state.canRebirth}|{state.luck}`
 end
 
 local function pushState(player: Player, force: boolean)

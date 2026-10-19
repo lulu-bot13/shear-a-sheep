@@ -1,8 +1,8 @@
 --!strict
 
 --[[
-	Rebirth rules: what the next rebirth needs, performing it, and the Rebirths attribute/leaderstat.
-	Per-rebirth rewards live in ServerScriptService.Modules.Constants.RebirthData.
+	Rebirth rules: spend wool to reset the farm (wool, Luck, capacity, upgrades) for a permanent wool multiplier
+	and a Luck reward the new farm starts with. Shears are kept. Costs, multipliers and rewards live in RebirthData.
 
 	Location: ServerScriptService.Modules.Controllers.RebirthHandler
 ]]--
@@ -12,23 +12,13 @@ local players = game:GetService("Players")
 
 --// Modules
 local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
-local InventoryHandler = require(script.Parent.InventoryHandler)
-local PenHandler = require(script.Parent.PenHandler)
-local ShearHandler = require(script.Parent.ShearHandler)
+local FarmData = require(script.Parent.Parent.Constants.FarmData)
+local SheepData = require(script.Parent.Parent.Constants.SheepData)
+local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
+local SheepSpawnHandler = require(script.Parent.SheepSpawnHandler)
 
 --// Configs
-local REBIRTHS_ATTRIBUTE = "Rebirths"
-local WOOL_ITEM = "Wool"
-local WORKERS_OWNED_ATTRIBUTE = "WorkersOwned" -- kept in step with WorkerHandler
 local LEADERSTATS_WAIT_SECONDS = 15
-
-export type Requirement = {
-	id: string,
-	label: string,
-	current: number,
-	required: number,
-	met: boolean,
-}
 
 export type State = {
 	rebirths: number,
@@ -36,10 +26,15 @@ export type State = {
 	maxed: boolean,
 	multiplier: number,
 	nextMultiplier: number,
-	money: number,
-	moneyCost: number,
-	requirements: { Requirement },
+	wool: number,
+	woolCost: number,
 	canRebirth: boolean,
+	luckReward: number, -- Luck the next rebirth grants (0 when maxed)
+	luckMilestone: boolean, -- the next rebirth is a milestone (bonus Luck)
+	luck: number, -- Luck right now
+	luckFactor: number, -- the odds multiplier that Luck gives
+	nextLuck: number, -- Luck the farm starts with after the next rebirth (same as luck when maxed)
+	nextLuckFactor: number,
 }
 
 --// State
@@ -47,117 +42,60 @@ local rebirthing: { [Player]: boolean } = {}
 
 local RebirthHandler = {}
 
---// Helpers -------------------------------------------------------------------
-
-local function getMoneyValue(player: Player): IntValue?
-	local leaderstats = player:FindFirstChild("leaderstats")
-	local money = leaderstats and leaderstats:FindFirstChild("Money")
-	return if money and money:IsA("IntValue") then money else nil
+local function getNumber(player: Player, key: string): number
+	local value = PlayerDataHandler.get(player, key)
+	return if type(value) == "number" then value else 0
 end
 
-local function countWorkers(player: Player): number
-	local count = 0
-	for _, pen in PenHandler.getPens(player) do
-		if pen.data.automated then
-			count += 1
-		end
-	end
-	return count
-end
-
-local function makeRequirement(id: string, label: string, current: number, required: number): Requirement
-	return { id = id, label = label, current = current, required = required, met = current >= required }
-end
-
--- Puts the player's farm back to the start (see RebirthData for what is reset and what is kept).
-local function resetProgress(player: Player)
-	local wool = InventoryHandler.getItem(player, WOOL_ITEM)
-	if wool > 0 then
-		InventoryHandler.removeItem(player, WOOL_ITEM, wool)
-	end
-
-	-- Only the newest pen can be removed at a time, so go from the end back to pen 2.
-	local pens = PenHandler.getPens(player)
-	for index = #pens, 2, -1 do
-		PenHandler.removePen(player, pens[index])
-	end
-
-	local basePen = pens[1]
-	if basePen then
-		basePen:resetProgress()
-		PenHandler.applyRebirthTier(basePen)
-	end
-	player:SetAttribute(WORKERS_OWNED_ATTRIBUTE, 0) -- hired workers are lost with the farm
-
-	local money = getMoneyValue(player)
-	if money then
-		money.Value = RebirthData.getStartingMoney()
-	end
+-- Puts the farm back to the start (shears are kept), with the Luck every rebirth so far has granted.
+local function resetProgress(player: Player, rebirths: number)
+	PlayerDataHandler.set(player, "Wool", 0)
+	PlayerDataHandler.set(player, "Luck", RebirthData.getStartingLuck(rebirths))
+	PlayerDataHandler.set(player, "MaxSheep", FarmData.StartingMaxSheep)
+	PlayerDataHandler.set(player, "MoreWoolLevel", 0)
+	PlayerDataHandler.set(player, "SpeedLevel", 0)
+	SheepSpawnHandler.resetFarm(player)
 end
 
 --// Public API ------------------------------------------------------------------
 
 function RebirthHandler.getRebirths(player: Player): number
-	local value = player:GetAttribute(REBIRTHS_ATTRIBUTE)
-	return if type(value) == "number" then value else 0
-end
-
--- How many times more than normal this player's wool sells for (1 = normal).
-function RebirthHandler.getMultiplier(player: Player): number
-	return RebirthData.getMultiplier(RebirthHandler.getRebirths(player))
+	return getNumber(player, "Rebirths")
 end
 
 -- Everything the client needs to draw the rebirth screen for this player.
 function RebirthHandler.getState(player: Player): State
 	local rebirths = RebirthHandler.getRebirths(player)
-	local moneyCost = RebirthData.getMoneyCost(rebirths)
-	local maxed = moneyCost == nil
-
-	local moneyValue = getMoneyValue(player)
-	local money = if moneyValue then moneyValue.Value else 0
-
-	local requirements: { Requirement } = {}
-	local canRebirth = false
-
-	if moneyCost then
-		local slotLimit = RebirthData.getSlotLimit(rebirths)
-		local pensRequired = math.min(RebirthData.getPensRequired(rebirths), slotLimit)
-		local workersRequired = math.min(RebirthData.getWorkersRequired(rebirths), slotLimit)
-
-		table.insert(requirements, makeRequirement("Pens", "Pens", #PenHandler.getPens(player), pensRequired))
-		table.insert(requirements, makeRequirement("Workers", "Workers", countWorkers(player), workersRequired))
-
-		canRebirth = money >= moneyCost
-		for _, requirement in requirements do
-			if not requirement.met then
-				canRebirth = false
-			end
-		end
-	end
+	local woolCost = RebirthData.getWoolCost(rebirths)
+	local wool = getNumber(player, "Wool")
+	local luck = getNumber(player, "Luck")
+	local nextLuck = if woolCost == nil then luck else RebirthData.getStartingLuck(rebirths + 1)
 
 	return {
 		rebirths = rebirths,
 		maxRebirths = RebirthData.MAX_REBIRTHS,
-		maxed = maxed,
+		maxed = woolCost == nil,
 		multiplier = RebirthData.getMultiplier(rebirths),
-		nextMultiplier = RebirthData.getMultiplier(math.min(rebirths + 1, RebirthData.MAX_REBIRTHS)),
-		money = money,
-		moneyCost = moneyCost or 0,
-		requirements = requirements,
-		canRebirth = canRebirth,
+		nextMultiplier = RebirthData.getMultiplier(rebirths + 1),
+		wool = wool,
+		woolCost = woolCost or 0,
+		canRebirth = woolCost ~= nil and wool >= woolCost,
+		luckReward = RebirthData.getLuckReward(rebirths + 1),
+		luckMilestone = RebirthData.isMilestone(rebirths + 1),
+		luck = luck,
+		luckFactor = SheepData.getLuckFactor(luck),
+		nextLuck = nextLuck,
+		nextLuckFactor = SheepData.getLuckFactor(nextLuck),
 	}
 end
 
 --[[
 	Tries to rebirth the player. Returns true on success, or false plus a reason the client can show
-	("Busy", "Shearing", "MaxRebirths" or "NotReady"). Everything is checked here, on the server.
+	("Busy", "MaxRebirths" or "NotReady"). Everything is checked here, on the server.
 ]]
 function RebirthHandler.rebirth(player: Player): (boolean, string?)
-	if rebirthing[player] then
+	if rebirthing[player] or not PlayerDataHandler.getData(player) then
 		return false, "Busy"
-	end
-	if ShearHandler.isShearing(player) then
-		return false, "Shearing"
 	end
 
 	local state = RebirthHandler.getState(player)
@@ -171,40 +109,39 @@ function RebirthHandler.rebirth(player: Player): (boolean, string?)
 	rebirthing[player] = true
 
 	-- The rebirth is counted first, so a problem while resetting can never cost the player progress for nothing.
-	player:SetAttribute(REBIRTHS_ATTRIBUTE, state.rebirths + 1)
+	PlayerDataHandler.set(player, "Rebirths", state.rebirths + 1)
 
-	local success, err = pcall(resetProgress, player)
+	local success, err = pcall(function()
+		resetProgress(player, state.rebirths + 1)
+	end)
 	if not success then
 		warn(`RebirthHandler: resetting {player.Name}'s farm failed: {err}`)
 	end
 
 	rebirthing[player] = nil
-	print(`{player.Name} rebirthed (now {state.rebirths + 1}).`)
 	return true, nil
 end
 
 --// Lifecycle ---------------------------------------------------------------------
 
--- Gives the player their Rebirths attribute and mirrors it as a leaderstat once the leaderstats folder exists.
+-- Mirrors Rebirths as a leaderstat once the leaderstats folder exists.
 local function onPlayerAdded(player: Player)
-	if player:GetAttribute(REBIRTHS_ATTRIBUTE) == nil then
-		player:SetAttribute(REBIRTHS_ATTRIBUTE, 0)
+	if not PlayerDataHandler.waitForData(player) then
+		return
 	end
 
-	task.spawn(function()
-		local leaderstats = player:WaitForChild("leaderstats", LEADERSTATS_WAIT_SECONDS)
-		if not leaderstats then
-			return
-		end
+	local leaderstats = player:WaitForChild("leaderstats", LEADERSTATS_WAIT_SECONDS)
+	if not leaderstats then
+		return
+	end
 
-		local display = Instance.new("IntValue")
-		display.Name = "Rebirths"
+	local display = Instance.new("IntValue")
+	display.Name = "Rebirths"
+	display.Value = RebirthHandler.getRebirths(player)
+	display.Parent = leaderstats
+
+	player:GetAttributeChangedSignal("Rebirths"):Connect(function()
 		display.Value = RebirthHandler.getRebirths(player)
-		display.Parent = leaderstats
-
-		player:GetAttributeChangedSignal(REBIRTHS_ATTRIBUTE):Connect(function()
-			display.Value = RebirthHandler.getRebirths(player)
-		end)
 	end)
 end
 
@@ -215,7 +152,7 @@ function RebirthHandler.Setup()
 	end)
 
 	for _, player in players:GetPlayers() do
-		onPlayerAdded(player)
+		task.spawn(onPlayerAdded, player)
 	end
 end
 

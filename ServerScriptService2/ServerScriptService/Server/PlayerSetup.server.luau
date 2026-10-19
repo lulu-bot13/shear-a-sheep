@@ -1,10 +1,12 @@
+--[[
+	Sets up each joining player: the leaderstats folder, the Sheep/Players collision groups and a hidden name tag.
+
+	Location: ServerScriptService.Server.PlayerSetup
+]]--
+
 --// Services
 local players = game:GetService("Players")
 local physicsService = game:GetService("PhysicsService")
-
---// Modules
-local InventoryHandler = require(game.ServerScriptService.Modules.Controllers.InventoryHandler)
-local RebirthData = require(game.ServerScriptService.Modules.Constants.RebirthData)
 
 -- Sheep stay collidable with the ground but not with players, so they never block or bump them.
 local function setupCollisionGroups()
@@ -42,34 +44,20 @@ local function hideHumanoidName(character: Model)
 	end
 end
 
+local function onCharacterAdded(character: Model)
+	assignPlayerCollisionGroup(character)
+	task.spawn(hideHumanoidName, character)
+end
+
 local function onPlayerAdded(player: Player)
-    print(`Player {player.Name} has joined the game!`)
+	local leaderstats = Instance.new("Folder")
+	leaderstats.Name = "leaderstats"
+	leaderstats.Parent = player
 
-    InventoryHandler.setupPlayer(player)
-    InventoryHandler.addItem(player, "Wool", 0)
-
-    local leaderstats = Instance.new("Folder")
-    leaderstats.Name = "leaderstats"
-    leaderstats.Parent = player
-
-    local money = Instance.new("IntValue")
-    money.Name = "Money"
-    money.Value = RebirthData.getStartingMoney()
-    money.Parent = leaderstats
-
-    local currentSheepId = Instance.new("IntValue")
-    currentSheepId.Name = "CurrentSheepId"
-    currentSheepId.Parent = player
-
-    if player.Character then
-        assignPlayerCollisionGroup(player.Character)
-        task.spawn(hideHumanoidName, player.Character)
-    end
-    player.CharacterAdded:Connect(assignPlayerCollisionGroup)
-    player.CharacterAdded:Connect(function(character: Model)
-        task.spawn(hideHumanoidName, character)
-    end)
-
+	if player.Character then
+		onCharacterAdded(player.Character)
+	end
+	player.CharacterAdded:Connect(onCharacterAdded)
 end
 
 players.PlayerAdded:Connect(onPlayerAdded)

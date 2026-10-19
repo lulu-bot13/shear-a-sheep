@@ -1,12 +1,6 @@
 --[[
-	Server side of the shear shop.
-
-	Every player has exactly one equipped shear, stored as the player attribute "ShearId" (replicates to
-	the client) and mirrored by a Tool in their Backpack. Bought shears stay in a temporary inventory
-	("OwnedShears") and can be switched between at the shop. Buying a shear validates everything on
-	the server (range, money), charges the player, equips it, destroys the old shear Tool and hands
-	over the new one. The tool is re-synced on every respawn, since the
-	StarterPack would otherwise hand back the default shear.
+	Server side of the shear shop: buying shears with wool once enough sheep are sheared, switching between owned ones and keeping the
+	equipped shear's Tool in the player's Backpack. Owned and equipped shears are saved through PlayerDataHandler.
 
 	Location: ServerScriptService.Modules.Controllers.ShearShopHandler
 ]]--
@@ -19,14 +13,13 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
-local ShearTimingData = require(replicatedStorage.Shared.Constants.ShearTimingData)
+local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 
 --// Configs
 local PURCHASE_COOLDOWN = 0.3
 
 --// State
 local lastPurchase: { [Player]: number } = {}
-local ownedShears: { [Player]: { [string]: boolean } } = {}
 
 local shearShopHandler = {}
 
@@ -36,44 +29,34 @@ local function getShearTemplates(): Instance
 	return replicatedStorage.Assets.Shears
 end
 
-local function getMoney(player: Player): IntValue?
-	local leaderstats = player:FindFirstChild("leaderstats")
-	local money = leaderstats and leaderstats:FindFirstChild("Money")
-	return if money and money:IsA("IntValue") then money else nil
-end
-
 local function getShearId(player: Player): string
 	local id = player:GetAttribute("ShearId")
 	return if ShearData.get(id) then id :: string else ShearData.DefaultShearId
 end
 
---[[
-	Temporary inventory: the shears each player has bought, kept in memory only (lost when they leave).
-	Mirrored to the player attribute "OwnedShears" ("DefaultShear,SteelShears") so the shop UI can read it.
-]]--
+local function getOwned(player: Player): { string }
+	local owned = PlayerDataHandler.get(player, "OwnedShears")
+	return if type(owned) == "table" then owned else { ShearData.DefaultShearId }
+end
+
 local function isOwned(player: Player, id: string): boolean
-	local owned = ownedShears[player]
-	return owned ~= nil and owned[id] == true
+	return table.find(getOwned(player), id) ~= nil
+end
+
+-- Mirrored as "DefaultShear,SteelShears" so the shop UI can read it.
+local function updateOwnedAttribute(player: Player)
+	player:SetAttribute("OwnedShears", table.concat(getOwned(player), ","))
 end
 
 local function addOwned(player: Player, id: string)
-	local owned = ownedShears[player]
-	if not owned then
-		owned = {}
-		ownedShears[player] = owned
+	local owned = table.clone(getOwned(player))
+	if not table.find(owned, id) then
+		table.insert(owned, id)
 	end
-	owned[id] = true
-
-	local ids: { string } = {}
-	for _, info in ShearData.Shears do
-		if owned[info.id] then
-			table.insert(ids, info.id)
-		end
-	end
-	player:SetAttribute("OwnedShears", table.concat(ids, ","))
+	PlayerDataHandler.set(player, "OwnedShears", owned)
+	updateOwnedAttribute(player)
 end
 
--- Distance from a character to the closest shop prompt; nil if there is none / no character.
 local function isNearShop(player: Player): boolean
 	local character = player.Character
 	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
@@ -113,10 +96,7 @@ local function getShearTools(player: Player): { Tool }
 	return found
 end
 
---[[
-	Makes the player's tools match their ShearId: any other shear is destroyed, a missing one is
-	cloned from the templates, and duplicates of the right one are removed.
-]]--
+-- Makes the player's tools match their ShearId: other shears are destroyed and a missing one is cloned in.
 local function syncTools(player: Player)
 	local backpack = player:FindFirstChildOfClass("Backpack")
 	if not backpack then
@@ -142,34 +122,39 @@ local function syncTools(player: Player)
 		end
 
 		keeper = template:Clone()
-		keeper.Parent = backpack
+	end
+
+	-- The client sizes the hitbox ring and paces its swings from these.
+	local tool = keeper :: Tool
+	local info = ShearData.get(currentId)
+	if info then
+		tool:SetAttribute("ShearRange", info.range)
+		tool:SetAttribute("ShearCooldown", ShearData.SwingCooldown)
+	end
+	if not tool.Parent then
+		tool.Parent = backpack
 	end
 end
 
 local function setShear(player: Player, id: string)
-	local info = ShearData.get(id)
-	if not info then
+	if not ShearData.get(id) then
 		return
 	end
 
+	PlayerDataHandler.set(player, "ShearId", id)
 	player:SetAttribute("ShearId", id)
 	syncTools(player)
-
-	-- Required lazily: PenHandler -> Pen requires this module. Workers use the owner's shear too.
-	for _, pen in require(script.Parent.PenHandler).getPens(player) do
-		pen:refreshWorkerShears()
-	end
 end
 
 local function reply(player: Player, id: string, success: boolean, reason: string?)
 	network.fireClient(network.RemoteEvents.ShearPurchaseResult, player, id, success, reason)
 end
 
---// Purchase ------------------------------------------------------------------
+--// Remote handlers ---------------------------------------------------------------
 
 local function onPurchaseShear(player: Player, id: any)
 	local info = ShearData.get(id)
-	if not info then
+	if not info or not PlayerDataHandler.getData(player) then
 		return
 	end
 
@@ -178,13 +163,6 @@ local function onPurchaseShear(player: Player, id: any)
 		return
 	end
 	lastPurchase[player] = now
-
-	-- Required lazily: ShearHandler requires this module too.
-	local ShearHandler = require(script.Parent.ShearHandler)
-	if ShearHandler.isShearing(player) then
-		reply(player, info.id, false, "Busy")
-		return
-	end
 
 	if not isNearShop(player) then
 		reply(player, info.id, false, "TooFar")
@@ -196,29 +174,26 @@ local function onPurchaseShear(player: Player, id: any)
 		return
 	end
 
-	local money = getMoney(player)
-	if not money or money.Value < info.price then
-		reply(player, info.id, false, "NoMoney")
+	local sheared = PlayerDataHandler.get(player, "SheepShearedCount")
+	if (if type(sheared) == "number" then sheared else 0) < info.sheepRequired then
+		reply(player, info.id, false, "Locked")
 		return
 	end
 
-	money.Value -= info.price
+	if not PlayerDataHandler.spend(player, "Wool", info.price) then
+		reply(player, info.id, false, "NoWool")
+		return
+	end
+
 	addOwned(player, info.id)
 	setShear(player, info.id)
-	print(`{player.Name} bought {info.id} for {info.price}.`)
 	reply(player, info.id, true, nil)
 end
 
--- Switches to a shear already in the player's (temporary) inventory.
+-- Switches to a shear the player already owns.
 local function onEquipShear(player: Player, id: any)
 	local info = ShearData.get(id)
-	if not info then
-		return
-	end
-
-	local ShearHandler = require(script.Parent.ShearHandler)
-	if ShearHandler.isShearing(player) then
-		reply(player, info.id, false, "Busy")
+	if not info or not PlayerDataHandler.getData(player) then
 		return
 	end
 
@@ -238,25 +213,19 @@ end
 
 --// Public API ------------------------------------------------------------------
 
-function shearShopHandler.getShearId(player: Player): string
-	return getShearId(player)
+-- The shear the player has equipped (its stats).
+function shearShopHandler.getShear(player: Player): ShearData.ShearInfo
+	return ShearData.get(getShearId(player)) or ShearData.Shears[1]
 end
 
--- The player's shear stats for the shearing mini-game (multipliers; 1 = the basic shear).
-function shearShopHandler.getStats(player: Player): ShearTimingData.ShearStats
-	local info = ShearData.get(getShearId(player))
-	if not info then
-		return table.clone(ShearTimingData.DefaultShearStats)
-	end
-
-	return {
-		damageMultiplier = info.damageMultiplier,
-		zoneScale = info.zoneScale,
-		cursorSpeed = info.cursorSpeed,
-	}
+-- The equipped shear's Tool if the character is holding it out, else nil.
+function shearShopHandler.getHeldTool(player: Player): Tool?
+	local character = player.Character
+	local tool = character and character:FindFirstChild(getShearId(player))
+	return if tool and tool:IsA("Tool") then tool else nil
 end
 
--- Bumps the equipped shear's "Snips" attribute on every successful hit; clients watch it to play snip effects for everyone.
+-- Bumps the equipped shear's "Snips" attribute on every hit; clients watch it to play snip effects for everyone.
 function shearShopHandler.registerSnip(player: Player)
 	local currentId = getShearId(player)
 	for _, tool in getShearTools(player) do
@@ -270,8 +239,13 @@ end
 --// Lifecycle ----------------------------------------------------------------------
 
 local function onPlayerAdded(player: Player)
-	addOwned(player, ShearData.DefaultShearId)
-	setShear(player, ShearData.DefaultShearId)
+	local data = PlayerDataHandler.waitForData(player)
+	if not data then
+		return
+	end
+
+	updateOwnedAttribute(player)
+	setShear(player, if isOwned(player, data.ShearId) then data.ShearId else ShearData.DefaultShearId)
 
 	local function onCharacterAdded()
 		-- The StarterPack fills the Backpack around spawn; sync once it has settled.
@@ -301,7 +275,6 @@ function shearShopHandler.Start()
 
 	players.PlayerRemoving:Connect(function(player: Player)
 		lastPurchase[player] = nil
-		ownedShears[player] = nil
 	end)
 end
 

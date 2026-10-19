@@ -1,6 +1,8 @@
+--!strict
+
 --[[
-	Spawns, tracks and recycles sheep. Every sheep belongs to one player and lives in the
-	Sheeps folder of that player's plot, so plots never share sheep.
+	Spawns, tracks and recycles sheep. Each sheep lives in the Sheeps folder of its owner's plot
+	and is rolled with the owner's Luck.
 
 	Location: ServerScriptService.Modules.Controllers.SheepHandler
 ]]--
@@ -8,60 +10,67 @@
 --// Services
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local collectionService = game:GetService("CollectionService")
+local players = game:GetService("Players")
 
 --// Modules
+local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
 local PlotHandler = require(script.Parent.PlotHandler)
-local SheepData = require(game.ServerScriptService.Modules.Constants.SheepData)
-local ObjectPool = require(game.ServerScriptService.Modules.Utils.ObjectPool)
-local ShearTimingData = require(replicatedStorage.Shared.Constants.ShearTimingData)
+local SheepData = require(script.Parent.Parent.Constants.SheepData)
+local ObjectPool = require(script.Parent.Parent.Utils.ObjectPool)
+local WoolData = require(replicatedStorage.Shared.Constants.WoolData)
 
 --// References
 local sheepModels = replicatedStorage.Assets.Models.Sheeps
 local sheepHudTemplate = replicatedStorage.Assets.UI.SheepHUD :: BillboardGui
+local sheepHudNameLabel = sheepHudTemplate:FindFirstChild("NameLabel", true) :: TextLabel? -- the health bar copies its font
 
 --// Configs
 local SHEEPS_FOLDER_NAME = "Sheeps" -- lives inside each plot
 local SHEEP_TAG = "Sheep"
+local SHEEP_COLLISION_GROUP = "Sheep"
 local OWNER_ATTRIBUTE = "OwnerId"
 local WOOL_PART_NAME = "Torso" -- the mesh that is the sheep's wool
 local WOOL_BASE_SIZE = "WoolBaseSize" -- the wool's untouched look, remembered on the part itself
 local WOOL_BASE_COLOR = "WoolBaseColor"
+local HEALTH_HUD_NAME = "HealthHUD"
+local HEALTH_HUD_SIZE = Vector2.new(4.5, 1.3) -- studs
+local HEALTH_FULL_COLOR = Color3.fromRGB(110, 220, 120)
+local HEALTH_EMPTY_COLOR = Color3.fromRGB(230, 90, 80)
 
 --// Object pool keys
-local SHEEP_POOL = "SheepModel" -- keyed by sheepType name, since meshes differ per sheepType
+local SHEEP_POOL = "SheepModel" -- keyed by sheep type name, since meshes differ per type
 local HUD_POOL = "SheepHUD"
 local HUD_KEY = "SheepHUD"
 
+--// State
 local sheepById: { [number]: Model } = {}
 local woolConnections: { [number]: RBXScriptConnection } = {}
+local countByOwner: { [number]: number } = {}
 local nextSheepId = 0
+local random = Random.new()
 
 local SheepHandler = {}
 
---[[
-	Only the actual sheepType entries in SheepData carry a numeric `chance`
-	field (helper tables like RarityColors/UpgradeMultipliers and helper
-	functions live alongside them in the same module and must be skipped).
-]]--
-local function isSheepTypeEntry(data: any): boolean
-	return type(data) == "table" and type(data.chance) == "number"
-end
+SheepHandler.CountChanged = Signal.new() -- (player, count)
 
---[[
-	Returns the Sheep Model registered under the given id, or nil if no
-	such sheep is currently active.
-]]
+--// Lookups ---------------------------------------------------------------------------
+
 function SheepHandler.getSheep(id: number): Model?
 	return sheepById[id]
 end
 
---[[
-	Returns the id of the player the sheep belongs to, or nil if the sheep has
-	no owner (or isn't a sheep).
-]]
 function SheepHandler.getOwnerId(sheep: Model): number?
 	local ownerId = sheep:GetAttribute(OWNER_ATTRIBUTE)
 	return if type(ownerId) == "number" then ownerId else nil
+end
+
+-- Every active sheep, keyed by id (read only).
+function SheepHandler.getAllSheep(): { [number]: Model }
+	return sheepById
+end
+
+function SheepHandler.getSheepCount(player: Player): number
+	return countByOwner[player.UserId] or 0
 end
 
 -- Shows or hides the name / rarity / odds billboard floating over the sheep.
@@ -72,6 +81,17 @@ function SheepHandler.setHudVisible(sheep: Model, visible: boolean)
 		hud.Enabled = visible
 	end
 end
+
+local function setCount(ownerId: number, count: number)
+	countByOwner[ownerId] = if count > 0 then count else nil
+
+	local owner = players:GetPlayerByUserId(ownerId)
+	if owner then
+		SheepHandler.CountChanged:Fire(owner, count)
+	end
+end
+
+--// Wool look --------------------------------------------------------------------------
 
 local function getWoolPart(sheep: Instance): BasePart?
 	local part = sheep:FindFirstChild(WOOL_PART_NAME)
@@ -87,16 +107,11 @@ local function getWoolBase(wool: BasePart): (Vector3, Color3)
 		wool:SetAttribute(WOOL_BASE_SIZE, size)
 		wool:SetAttribute(WOOL_BASE_COLOR, color)
 	end
-	return size, color
+	return size :: Vector3, color :: Color3
 end
 
 -- Shrinks the wool and fades it towards bare skin as the sheep's ShearHealth drops (seen by everyone).
 local function updateWoolVisual(sheep: Model)
-	-- A worker's pen keeps the wool as it is (nothing to resize/recolour on every swing).
-	if sheep:GetAttribute("WorkerShearing") then
-		return
-	end
-
 	local wool = getWoolPart(sheep)
 	local health = sheep:GetAttribute("ShearHealth")
 	local maxHealth = sheep:GetAttribute("MaxShearHealth")
@@ -106,28 +121,127 @@ local function updateWoolVisual(sheep: Model)
 
 	local baseSize, baseColor = getWoolBase(wool)
 	local shorn = 1 - math.clamp(health / maxHealth, 0, 1)
-	wool.Size = baseSize * Vector3.one:Lerp(ShearTimingData.ShornTorsoScale, shorn)
-	wool.Color = baseColor:Lerp(ShearTimingData.ShornColor, shorn * ShearTimingData.ShornColorBlend)
+	wool.Size = baseSize * Vector3.new(1, 1, 1):Lerp(WoolData.ShornTorsoScale, shorn)
+	wool.Color = baseColor:Lerp(WoolData.ShornColor, shorn * WoolData.ShornColorBlend)
 end
 
--- Puts a pooled sheep's wool back to full.
-local function restoreWool(sheep: Instance)
+-- The colour of the sheep's full wool (for the wool that flies off it).
+function SheepHandler.getWoolColor(sheep: Model): Color3
+	local wool = getWoolPart(sheep)
+	if not wool then
+		return Color3.new(1, 1, 1)
+	end
+	local _, color = getWoolBase(wool)
+	return color
+end
+
+--// Health bar ------------------------------------------------------------------------------
+
+-- Builds the health billboard once per model; it sits where the info card does and takes its place while damaged.
+local function createHealthHud(root: BasePart)
+	local font = sheepHudNameLabel and sheepHudNameLabel.FontFace or Font.fromEnum(Enum.Font.GothamBold)
+
+	local hud = Instance.new("BillboardGui")
+	hud.Name = HEALTH_HUD_NAME
+	hud.Size = UDim2.fromScale(HEALTH_HUD_SIZE.X, HEALTH_HUD_SIZE.Y)
+	hud.StudsOffset = sheepHudTemplate.StudsOffset
+	hud.StudsOffsetWorldSpace = sheepHudTemplate.StudsOffsetWorldSpace
+	hud.MaxDistance = sheepHudTemplate.MaxDistance
+	hud.LightInfluence = 0
+	hud.Enabled = false
+	hud.Adornee = root
+
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Name = "NameLabel"
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Size = UDim2.fromScale(1, 0.42)
+	nameLabel.FontFace = font
+	nameLabel.TextScaled = true
+	nameLabel.TextColor3 = Color3.new(1, 1, 1)
+	nameLabel.Parent = hud
+	local nameStroke = Instance.new("UIStroke")
+	nameStroke.Thickness = 2
+	nameStroke.Parent = nameLabel
+
+	local bar = Instance.new("Frame")
+	bar.Name = "Bar"
+	bar.Position = UDim2.fromScale(0, 0.5)
+	bar.Size = UDim2.fromScale(1, 0.5)
+	bar.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+	bar.Parent = hud
+	Instance.new("UICorner", bar).CornerRadius = UDim.new(0.5, 0)
+	local barStroke = Instance.new("UIStroke")
+	barStroke.Thickness = 2
+	barStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	barStroke.Parent = bar
+
+	local fill = Instance.new("Frame")
+	fill.Name = "Fill"
+	fill.Size = UDim2.fromScale(1, 1)
+	fill.BorderSizePixel = 0
+	fill.Parent = bar
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(0.5, 0)
+
+	local healthText = Instance.new("TextLabel")
+	healthText.Name = "HealthText"
+	healthText.BackgroundTransparency = 1
+	healthText.Size = UDim2.fromScale(1, 1)
+	healthText.FontFace = font
+	healthText.TextScaled = true
+	healthText.TextColor3 = Color3.new(1, 1, 1)
+	healthText.ZIndex = 2
+	healthText.Parent = bar
+	local textStroke = Instance.new("UIStroke")
+	textStroke.Thickness = 1.5
+	textStroke.Parent = healthText
+
+	hud.Parent = root
+end
+
+-- Shows the wool left as a bar over the sheep once it has been sheared at all; the info card hides meanwhile.
+local function updateHealthHud(sheep: Model)
+	local root = sheep:FindFirstChild("HumanoidRootPart")
+	local hud = root and root:FindFirstChild(HEALTH_HUD_NAME)
+	local health = sheep:GetAttribute("ShearHealth")
+	local maxHealth = sheep:GetAttribute("MaxShearHealth")
+	if not hud or not hud:IsA("BillboardGui") or type(health) ~= "number" or type(maxHealth) ~= "number" or maxHealth <= 0 then
+		return
+	end
+
+	local damaged = health < maxHealth
+	hud.Enabled = damaged
+	SheepHandler.setHudVisible(sheep, not damaged)
+	if not damaged then
+		return
+	end
+
+	local ratio = math.clamp(health / maxHealth, 0, 1)
+	local nameLabel = hud:FindFirstChild("NameLabel") :: TextLabel
+	local bar = hud:FindFirstChild("Bar") :: Frame
+	local fill = bar:FindFirstChild("Fill") :: Frame
+	local healthText = bar:FindFirstChild("HealthText") :: TextLabel
+
+	nameLabel.Text = tostring(sheep:GetAttribute("SheepName") or "Sheep")
+	fill.Size = UDim2.fromScale(ratio, 1)
+	fill.Visible = ratio > 0
+	fill.BackgroundColor3 = HEALTH_EMPTY_COLOR:Lerp(HEALTH_FULL_COLOR, ratio)
+	healthText.Text = `{math.ceil(health)} / {maxHealth}`
+end
+
+--// Pooling -------------------------------------------------------------------------------
+
+local function resetSheepForPool(sheep: Instance)
 	local wool = getWoolPart(sheep)
 	if wool then
 		local baseSize, baseColor = getWoolBase(wool)
 		wool.Size = baseSize
 		wool.Color = baseColor
 	end
-end
 
-local function resetSheepForPool(sheep: Instance)
-	restoreWool(sheep)
-	sheep:SetAttribute("WorkerShearing", nil)
 	sheep:SetAttribute(OWNER_ATTRIBUTE, nil)
 
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
 	if humanoid then
-		humanoid.PlatformStand = false
 		humanoid.WalkSpeed = 0
 	end
 
@@ -138,23 +252,19 @@ local function resetSheepForPool(sheep: Instance)
 			hud.Adornee = nil
 			ObjectPool.release(HUD_POOL, HUD_KEY, hud)
 		end
-
 		root.Anchored = true
 	end
 end
 
---[[
-	Removes the sheep registered under the given id from the registry and
-	returns its Model to the object pool for reuse (destroyed only if it
-	has no known sheepType, which shouldn't normally happen).
-]]
-function SheepHandler.removeSheep(id: number)
+-- Removes the sheep from the registry and returns its Model to the pool. Returns its owner's id.
+local function releaseSheep(id: number): number?
 	local sheep = sheepById[id]
 	if not sheep then
-		return
+		return nil
 	end
 
 	sheepById[id] = nil
+	local ownerId = SheepHandler.getOwnerId(sheep)
 
 	local woolConnection = woolConnections[id]
 	if woolConnection then
@@ -168,52 +278,68 @@ function SheepHandler.removeSheep(id: number)
 	else
 		sheep:Destroy()
 	end
+
+	return ownerId
 end
 
-local function getChance(sheepName: string, data: { chance: number }, chances: { [string]: number }?): number
-	return if chances and chances[sheepName] then chances[sheepName] else data.chance
+-- Removes a sheep (sheared bare or broke out); its owner's sheep count drops by one.
+function SheepHandler.removeSheep(id: number)
+	local ownerId = releaseSheep(id)
+	if ownerId then
+		setCount(ownerId, (countByOwner[ownerId] or 1) - 1)
+	end
 end
 
-local function getRandomSheep(chances: { [string]: number }?)
-	local totalChance = 0
-	for sheepName, data in SheepData do
-		if isSheepTypeEntry(data) then
-			totalChance += getChance(sheepName, data, chances)
+-- Removes every sheep the player owns without counting it as a loss (they left, or rebirthed).
+function SheepHandler.clearSheep(player: Player)
+	for id, sheep in sheepById do
+		if SheepHandler.getOwnerId(sheep) == player.UserId then
+			releaseSheep(id)
 		end
 	end
+	countByOwner[player.UserId] = nil
+end
 
-	if totalChance <= 0 then
+--// Building a sheep -------------------------------------------------------------------
+
+-- The collision group and health bar are set up once per model; pooled models keep them.
+local function prepareNewModel(sheepModel: Model, root: BasePart)
+	for _, descendant in sheepModel:GetDescendants() do
+		if descendant:IsA("BasePart") then
+			descendant.CollisionGroup = SHEEP_COLLISION_GROUP
+		end
+	end
+	createHealthHud(root)
+end
+
+local function acquireModel(sheepType: string): Model?
+	local pooled = ObjectPool.acquire(SHEEP_POOL, sheepType)
+	if pooled then
+		return pooled :: Model
+	end
+
+	local template = sheepModels:FindFirstChild(sheepType)
+	if not template or not template:IsA("Model") then
+		warn(`SheepHandler: '{sheepType}' is not a model in Assets.Models.Sheeps.`)
 		return nil
 	end
 
-	-- Weights aren't guaranteed to be whole numbers once a pen's upgrade
-	-- multipliers are applied, so roll with a float instead of math.random(int, int).
-	local randomValue = math.random() * totalChance
-	local cumulativeChance = 0
-
-	for sheepName, data in SheepData do
-		if isSheepTypeEntry(data) then
-			cumulativeChance += getChance(sheepName, data, chances)
-			if randomValue <= cumulativeChance then
-				return sheepName
-			end
-		end
+	local sheepModel = template:Clone()
+	local root = sheepModel:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") or not sheepModel:FindFirstChildOfClass("Humanoid") then
+		warn(`SheepHandler: sheep model '{sheepType}' needs a HumanoidRootPart and a Humanoid.`)
+		sheepModel:Destroy()
+		return nil
 	end
 
-	return nil
-end
-
-local function acquireHud(): BillboardGui
-	local hud = ObjectPool.acquire(HUD_POOL, HUD_KEY)
-	if not hud then
-		hud = sheepHudTemplate:Clone()
-	end
-	return hud :: BillboardGui
+	sheepModel:SetAttribute("SheepType", sheepType)
+	prepareNewModel(sheepModel, root)
+	return sheepModel
 end
 
 -- Fills in and (re)parents a SheepHUD billboard under the sheep's HumanoidRootPart.
-local function attachHud(humanoidRootPart: BasePart, data, oddsText: string)
-	local hud = acquireHud()
+local function attachHud(root: BasePart, info: SheepData.SheepInfo, oddsText: string)
+	local hud = (ObjectPool.acquire(HUD_POOL, HUD_KEY) or sheepHudTemplate:Clone()) :: BillboardGui
 
 	local card = hud:FindFirstChild("Card")
 	local nameLabel = card and card:FindFirstChild("NameLabel") :: TextLabel?
@@ -222,28 +348,25 @@ local function attachHud(humanoidRootPart: BasePart, data, oddsText: string)
 	local oddsLabel = card and card:FindFirstChild("OddsLabel") :: TextLabel?
 
 	if nameLabel then
-		nameLabel.Text = data.name
+		nameLabel.Text = info.name
 	end
 	if rarityLabel then
-		rarityLabel.Text = data.rarity
+		rarityLabel.Text = info.rarity
 	end
 	if rarityPill and rarityPill:IsA("Frame") then
-		rarityPill.BackgroundColor3 = data.color
+		rarityPill.BackgroundColor3 = info.color
 	end
 	if oddsLabel then
 		oddsLabel.Text = oddsText
 	end
 
 	hud.Name = "SheepHUD"
-	hud.Enabled = true -- a pooled HUD may have been hidden during a shearing session
-	hud.Adornee = humanoidRootPart
-	hud.Parent = humanoidRootPart
+	hud.Enabled = true
+	hud.Adornee = root
+	hud.Parent = root
 end
 
---[[
-	Returns the Sheeps folder of the plot the player owns (created if the plot lacks one),
-	or nil if the player has no plot.
-]]
+-- The Sheeps folder of the plot the player owns (created if missing), or nil if they have no plot.
 local function getSheepFolder(player: Player): Folder?
 	local plot = PlotHandler.getPlayerPlot(player)
 	if not plot then
@@ -262,83 +385,66 @@ local function getSheepFolder(player: Player): Folder?
 end
 
 --[[
-	Clones a sheep into the player's plot and sets its data
-
-	@param player The player the sheep belongs to (it spawns in their plot's Sheeps folder)
-	@param position The position for the sheep
-	@param chances Chance for the rarity UI
-	@return Model, number The sheep and its unique id
+	Rolls a sheep type with the player's Luck and drops it at `position` on their plot.
+	Returns the sheep and its id, or nil if it couldn't be spawned.
 ]]
-function SheepHandler.spawnSheep(player: Player, position: Vector3, chances: { [string]: number }?): (Model?, number?)
+function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number): (Model?, number?)
 	local sheepFolder = getSheepFolder(player)
 	if not sheepFolder then
-		warn(`SheepHandler: {player.Name} has no plot to spawn a sheep in.`)
 		return nil, nil
 	end
 
-	local randomSheepName = getRandomSheep(chances)
-	local data = randomSheepName and SheepData[randomSheepName]
-	if not randomSheepName or not data then
-		warn(`No Data found for Sheep with the name: '{tostring(randomSheepName)}'`)
+	local sheepType = SheepData.roll(luck, random)
+	local info = sheepType and SheepData.Sheep[sheepType]
+	if not sheepType or not info then
 		return nil, nil
 	end
 
-	local sheepModel = ObjectPool.acquire(SHEEP_POOL, randomSheepName)
+	local sheepModel = acquireModel(sheepType)
 	if not sheepModel then
-		local template = sheepModels:FindFirstChild(randomSheepName)
-		if not template or not template:IsA("Model") then
-			warn(`Sheep with name '{randomSheepName}' is not a valid model.`)
-			return nil, nil
-		end
-		sheepModel = template:Clone()
-		sheepModel:SetAttribute("SheepType", randomSheepName)
-	end
-
-	local humanoidRootPart = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart?
-	local humanoid = sheepModel:FindFirstChildOfClass("Humanoid")
-	if not humanoidRootPart or not humanoid then
-		warn(`SheepHandler: sheep model '{sheepModel.Name}' needs a HumanoidRootPart and a Humanoid.`)
-		sheepModel:Destroy()
 		return nil, nil
 	end
 
-	collectionService:AddTag(sheepModel, SHEEP_TAG)
-	sheepModel.Parent = sheepFolder
+	local root = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
+	local oddsText = SheepData.getOddsText(sheepType, luck)
 
 	nextSheepId += 1
 	local id = nextSheepId
 	sheepById[id] = sheepModel
 
-	local shearHealthUI = humanoidRootPart:FindFirstChild("Health")
-	local healthText = shearHealthUI and shearHealthUI:FindFirstChild("Health")
-	if healthText and healthText:IsA("TextLabel") then
-		healthText.Text = tostring(data.ShearHealth) .. " / " .. tostring(data.ShearHealth)
-	end
-
-	local oddsText = SheepData.getOddsText(randomSheepName, chances)
-
-	-- Set the data
 	sheepModel:SetAttribute("id", id)
 	sheepModel:SetAttribute(OWNER_ATTRIBUTE, player.UserId)
-	sheepModel:SetAttribute("ShearHealth", data.ShearHealth)
-	sheepModel:SetAttribute("MaxShearHealth", data.ShearHealth)
-	sheepModel:SetAttribute("WoolAmount", data.WoolAmount)
-	sheepModel:SetAttribute("SheepName", data.name)
-	sheepModel:SetAttribute("Rarity", data.rarity)
-	sheepModel:SetAttribute("RarityColor", data.color)
+	sheepModel:SetAttribute("ShearHealth", info.ShearHealth)
+	sheepModel:SetAttribute("MaxShearHealth", info.ShearHealth)
+	sheepModel:SetAttribute("WoolAmount", info.WoolAmount)
+	sheepModel:SetAttribute("LuckAmount", info.LuckAmount)
+	sheepModel:SetAttribute("SheepType", sheepType)
+	sheepModel:SetAttribute("SheepName", info.name)
+	sheepModel:SetAttribute("Rarity", info.rarity)
+	sheepModel:SetAttribute("RarityColor", info.color)
 	sheepModel:SetAttribute("Odds", oddsText)
 
-	humanoidRootPart.Anchored = false
-	humanoidRootPart.CFrame = CFrame.new(position)
+	sheepModel:PivotTo(CFrame.new(position) * CFrame.Angles(0, random:NextNumber(0, math.pi * 2), 0))
+	root.Anchored = false
+	collectionService:AddTag(sheepModel, SHEEP_TAG)
+	sheepModel.Parent = sheepFolder
 
-	attachHud(humanoidRootPart, data, oddsText)
-
-	-- Shearing (by hand or by a worker) only ever changes ShearHealth; the wool follows it.
-	updateWoolVisual(sheepModel)
-	woolConnections[id] = sheepModel:GetAttributeChangedSignal("ShearHealth"):Connect(function()
-		updateWoolVisual(sheepModel)
+	-- The server walks the sheep, so it keeps physics ownership (no handing it to a nearby player).
+	pcall(function()
+		root:SetNetworkOwner(nil)
 	end)
 
+	attachHud(root, info, oddsText)
+
+	-- Shearing only ever changes ShearHealth; the wool and health bar follow it.
+	updateWoolVisual(sheepModel)
+	updateHealthHud(sheepModel)
+	woolConnections[id] = sheepModel:GetAttributeChangedSignal("ShearHealth"):Connect(function()
+		updateWoolVisual(sheepModel)
+		updateHealthHud(sheepModel)
+	end)
+
+	setCount(player.UserId, (countByOwner[player.UserId] or 0) + 1)
 	return sheepModel, id
 end
 
