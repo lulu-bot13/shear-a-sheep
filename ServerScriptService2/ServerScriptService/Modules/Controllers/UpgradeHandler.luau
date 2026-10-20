@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Wool upgrades: +1 sheep capacity, More Wool levels and Faster Speed levels. Bought from the UpgradeShop UI (opened at the
+	Wool upgrades: +1 sheep capacity, More Wool, Faster Speed and Shear Damage levels. Bought from the UpgradeShop UI (opened at the
 	plot's UpgradePlotShack or the HUD button) through the PurchaseUpgrade remote; each card's state is pushed with UpgradeState.
 
 	Location: ServerScriptService.Modules.Controllers.UpgradeHandler
@@ -15,6 +15,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
+local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 
@@ -24,13 +25,14 @@ local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 --// Configs
 local PURCHASE_COOLDOWN = 0.25
 local STATE_REQUEST_COOLDOWN = 0.5
-local STATE_KEYS = { MaxSheep = true, MoreWoolLevel = true, SpeedLevel = true } -- data the cards show
+local STATE_KEYS = { MaxSheep = true, MoreWoolLevel = true, SpeedLevel = true, DamageLevel = true, ShearId = true } -- data the cards show
 
 -- One card in the UpgradeShop. `after` and `cost` are nil once the upgrade is maxed.
 export type CardState = {
 	id: string,
 	title: string,
 	icon: string,
+	level: number, -- levels bought so far
 	before: string,
 	after: string?,
 	cost: number?,
@@ -45,18 +47,38 @@ local function getNumber(player: Player, key: string): number
 	return if type(value) == "number" then value else 0
 end
 
--- How many times the upgrade has been bought, or nil if it can't be bought any more.
-local function getLevel(player: Player, id: string): number?
+-- How many times the upgrade has been bought, maxed or not.
+local function getBoughtLevel(player: Player, id: string): number
 	if id == "Capacity" then
-		local maxSheep = getNumber(player, "MaxSheep")
-		return if maxSheep < FarmData.MaxSheepCap then maxSheep - FarmData.StartingMaxSheep else nil
+		return getNumber(player, "MaxSheep") - FarmData.StartingMaxSheep
 	elseif id == "MoreWool" then
 		return getNumber(player, "MoreWoolLevel")
 	elseif id == "FasterSpeed" then
-		local level = getNumber(player, "SpeedLevel")
-		return if level < (UpgradeData.Upgrades.FasterSpeed.maxLevel or math.huge) then level else nil
+		return getNumber(player, "SpeedLevel")
+	elseif id == "ShearDamage" then
+		return getNumber(player, "DamageLevel")
 	end
-	return nil
+	return 0
+end
+
+-- How many times the upgrade has been bought, or nil if it can't be bought any more.
+local function getLevel(player: Player, id: string): number?
+	local info = UpgradeData.Upgrades[id]
+	if not info then
+		return nil
+	end
+
+	local level = getBoughtLevel(player, id)
+	if id == "Capacity" then
+		return if getNumber(player, "MaxSheep") < FarmData.MaxSheepCap then level else nil
+	end
+	return if level < (info.maxLevel or math.huge) then level else nil
+end
+
+-- Base damage of the player's equipped shear.
+local function getShearBaseDamage(player: Player): number
+	local shear = ShearData.get(PlayerDataHandler.get(player, "ShearId")) or ShearData.Shears[1]
+	return shear.damage
 end
 
 -- Sets the character's walk speed from the player's Faster Speed level.
@@ -74,6 +96,8 @@ local function applyUpgrade(player: Player, id: string, level: number)
 		PlayerDataHandler.set(player, "MoreWoolLevel", level + 1)
 	elseif id == "FasterSpeed" then
 		PlayerDataHandler.set(player, "SpeedLevel", level + 1)
+	elseif id == "ShearDamage" then
+		PlayerDataHandler.set(player, "DamageLevel", level + 1)
 	end
 end
 
@@ -92,6 +116,11 @@ local function getValues(player: Player, id: string, level: number?): (string, s
 		local current = getNumber(player, "MoreWoolLevel")
 		return formatMultiplier(UpgradeData.getMoreWoolMultiplier(current)),
 			formatMultiplier(UpgradeData.getMoreWoolMultiplier(current + 1))
+	elseif id == "ShearDamage" then
+		local current = getNumber(player, "DamageLevel")
+		local baseDamage = getShearBaseDamage(player)
+		return tostring(UpgradeData.getShearDamage(baseDamage, current)),
+			tostring(UpgradeData.getShearDamage(baseDamage, current + 1))
 	else
 		local current = getNumber(player, "SpeedLevel")
 		return tostring(UpgradeData.getWalkSpeed(current)), tostring(UpgradeData.getWalkSpeed(current + 1))
@@ -115,6 +144,7 @@ function UpgradeHandler.getState(player: Player): { CardState }
 			id = id,
 			title = info.displayName,
 			icon = info.icon,
+			level = getBoughtLevel(player, id),
 			before = before,
 			after = if level then after else nil,
 			cost = if level then UpgradeData.getCost(id, level) else nil,

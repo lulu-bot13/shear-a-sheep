@@ -35,11 +35,13 @@ export type Data = {
 	SheepCount: number?, -- sheep on the farm when the player left; nil = start with a full farm
 	MoreWoolLevel: number,
 	SpeedLevel: number, -- Faster Speed upgrade levels
+	DamageLevel: number, -- Shear Damage upgrade levels
 	Rebirths: number,
 	ShearId: string,
 	OwnedShears: { string },
 	SheepShearedCount: number, -- lifetime sheep shorn bare (kept through rebirths); unlocks shears
 	BestFind: string, -- SheepData type key of the rarest sheep ever shorn; "" = none yet
+	SheepIndex: { [string]: string }, -- sheep type -> "Found" | "Claimed" (kept through rebirths)
 }
 
 local function getDefaultData(): Data
@@ -50,11 +52,13 @@ local function getDefaultData(): Data
 		SheepCount = nil,
 		MoreWoolLevel = 0,
 		SpeedLevel = 0,
+		DamageLevel = 0,
 		Rebirths = 0,
 		ShearId = ShearData.DefaultShearId,
 		OwnedShears = { ShearData.DefaultShearId },
 		SheepShearedCount = 0,
 		BestFind = "",
+		SheepIndex = {},
 	}
 end
 

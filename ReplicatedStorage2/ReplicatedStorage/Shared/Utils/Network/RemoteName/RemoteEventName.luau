@@ -24,6 +24,11 @@ export type EnumType = "ShearSwing"
 	| "RebirthState"
 	| "RebirthResult"
 	| "Teleport"
+	| "ClaimIndexReward"
+	| "ClaimAllIndexRewards"
+	| "IndexClaimResult"
+	| "RequestIndexState"
+	| "IndexState"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	ShearSwing = "ShearSwing",
@@ -41,6 +46,11 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	RebirthState = "RebirthState",
 	RebirthResult = "RebirthResult",
 	Teleport = "Teleport",
+	ClaimIndexReward = "ClaimIndexReward",
+	ClaimAllIndexRewards = "ClaimAllIndexRewards",
+	IndexClaimResult = "IndexClaimResult",
+	RequestIndexState = "RequestIndexState",
+	IndexState = "IndexState",
 }
 
 return RemoteEventName

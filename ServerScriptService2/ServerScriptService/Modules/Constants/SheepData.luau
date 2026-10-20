@@ -12,6 +12,7 @@ export type SheepInfo = {
 	ShearHealth: number,
 	WoolAmount: number,
 	LuckAmount: number, -- Luck the player earns for shearing it bare
+	IndexLuck: number?, -- permanent Luck for claiming it in the Index once; nil = worked out from its odds
 	rarity: string,
 	color: Color3,
 	chance: number, -- base spawn weight (before luck)
@@ -38,6 +39,7 @@ sheepData.Sheep = {
 		ShearHealth = 100,
 		WoolAmount = 15,
 		LuckAmount = 1,
+		IndexLuck = 8,
 		rarity = "Common",
 		color = rarityColors.Common,
 		chance = 500000,
@@ -48,6 +50,7 @@ sheepData.Sheep = {
 		ShearHealth = 105,
 		WoolAmount = 18,
 		LuckAmount = 1,
+		IndexLuck = 11,
 		rarity = "Common",
 		color = rarityColors.Common,
 		chance = 250000,
@@ -58,6 +61,7 @@ sheepData.Sheep = {
 		ShearHealth = 115,
 		WoolAmount = 20,
 		LuckAmount = 2,
+		IndexLuck = 16,
 		rarity = "Uncommon",
 		color = rarityColors.Uncommon,
 		chance = 150000,
@@ -68,6 +72,7 @@ sheepData.Sheep = {
 		ShearHealth = 130,
 		WoolAmount = 28,
 		LuckAmount = 3,
+		IndexLuck = 27,
 		rarity = "Uncommon",
 		color = rarityColors.Uncommon,
 		chance = 60000,
@@ -78,6 +83,7 @@ sheepData.Sheep = {
 		ShearHealth = 145,
 		WoolAmount = 35,
 		LuckAmount = 5,
+		IndexLuck = 41,
 		rarity = "Rare",
 		color = rarityColors.Rare,
 		chance = 30000,
@@ -88,6 +94,7 @@ sheepData.Sheep = {
 		ShearHealth = 175,
 		WoolAmount = 50,
 		LuckAmount = 10,
+		IndexLuck = 94,
 		rarity = "Epic",
 		color = rarityColors.Epic,
 		chance = 7500,
@@ -98,6 +105,7 @@ sheepData.Sheep = {
 		ShearHealth = 190,
 		WoolAmount = 60,
 		LuckAmount = 12,
+		IndexLuck = 208,
 		rarity = "Epic",
 		color = rarityColors.Epic,
 		chance = 2000,
@@ -108,6 +116,7 @@ sheepData.Sheep = {
 		ShearHealth = 215,
 		WoolAmount = 80,
 		LuckAmount = 25,
+		IndexLuck = 547,
 		rarity = "Legendary",
 		color = rarityColors.Legendary,
 		chance = 400,
@@ -118,6 +127,7 @@ sheepData.Sheep = {
 		ShearHealth = 250,
 		WoolAmount = 100,
 		LuckAmount = 60,
+		IndexLuck = 1256,
 		rarity = "Mythic",
 		color = rarityColors.Mythic,
 		chance = 100,
@@ -166,17 +176,67 @@ function sheepData.roll(luck: number, random: Random?): string?
 	return nil
 end
 
-function sheepData.getOddsText(name: string, luck: number): string
+-- N in "1 in N" for this sheep type at this much Luck; nil for an unknown type.
+function sheepData.getOdds(name: string, luck: number): number?
 	local info = sheepData.Sheep[name]
 	if not info then
-		return "1 in ?"
+		return nil
 	end
 
 	local luckFactor = sheepData.getLuckFactor(luck)
-	local odds = math.max(1, math.floor(getTotalWeight(luckFactor) / getWeight(info, luckFactor) + 0.5))
-	return `1 in {odds}`
+	return math.max(1, math.floor(getTotalWeight(luckFactor) / getWeight(info, luckFactor) + 0.5))
 end
 
+function sheepData.getOddsText(name: string, luck: number): string
+	local odds = sheepData.getOdds(name, luck)
+	return if odds then `1 in {odds}` else "1 in ?"
+end
+
+--[[
+	Index Luck: a one-time, permanent reward for claiming a sheep type in the Index (rebirths keep it).
+	It follows the type's base "1 in N" odds: INDEX_LUCK_BASE * N ^ INDEX_LUCK_EXPONENT, so rarer sheep are worth far more.
+	Sheep:  Basic Grey Brown Black Fluffy Golden Emerald Spotted Diamond   (whole Index: 2,208)
+	Luck:   8     11   16    27    41     94     208     547     1256
+	A new sheep without an IndexLuck gets this formula automatically.
+]]
+sheepData.INDEX_LUCK_BASE = 5
+sheepData.INDEX_LUCK_EXPONENT = 0.6
+
+local baseTotalWeight = getTotalWeight(1)
+
+function sheepData.getIndexLuck(name: string): number
+	local info = sheepData.Sheep[name]
+	if not info then
+		return 0
+	end
+	if info.IndexLuck then
+		return info.IndexLuck
+	end
+	local odds = baseTotalWeight / info.chance
+	return math.floor(sheepData.INDEX_LUCK_BASE * odds ^ sheepData.INDEX_LUCK_EXPONENT + 0.5)
+end
+
+-- Luck from every type claimed in this Index ({ [sheepType]: "Found" | "Claimed" }).
+function sheepData.getClaimedIndexLuck(index: { [string]: string }): number
+	local total = 0
+	for name, status in index do
+		if status == "Claimed" then
+			total += sheepData.getIndexLuck(name)
+		end
+	end
+	return total
+end
+
+-- Every sheep type key, commonest first: the order the Index shows them in.
+local indexOrder: { string } = {}
+for name in sheepData.Sheep do
+	table.insert(indexOrder, name)
+end
+table.sort(indexOrder, function(a: string, b: string): boolean
+	return sheepData.Sheep[a].chance > sheepData.Sheep[b].chance
+end)
+
+sheepData.IndexOrder = indexOrder
 sheepData.RarityColors = rarityColors
 sheepData.RarityOrder = rarityOrder
 

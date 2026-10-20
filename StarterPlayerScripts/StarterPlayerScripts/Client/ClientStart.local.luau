@@ -37,9 +37,15 @@ local function updateLuckAmountLabel()
 	luckAmountLabel.Text = `Luck: {numberFormatter:Format(luckAmountValue.Value, 1)}`
 end
 
+-- 32932 -> "32,932"
+local function formatWithCommas(value: number): string
+	local digits = tostring(math.floor(value))
+	return (digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^(-?),", "%1"))
+end
+
 local function updateSheepCountLabel()
 	local count = player:GetAttribute("SheepShearedCount")
-	sheepCountLabel.Text = `Sheep Sheared: {numberFormatter:Format(if type(count) == "number" then count else 0, 1)}`
+	sheepCountLabel.Text = `Sheep Sheared: {formatWithCommas(if type(count) == "number" then count else 0)}`
 end
 
 updateWoolAmountLabel()

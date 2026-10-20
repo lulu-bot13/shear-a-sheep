@@ -39,7 +39,10 @@ local RING_COLOR = Color3.fromRGB(120, 200, 255)
 local RING_TRANSPARENCY = 0.75
 local RING_FLASH_TRANSPARENCY = 0.35 -- the ring brightens for a moment on every swing
 local RING_FLASH_TWEEN = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local GROUND_RAY_LENGTH = 12
+local GROUND_RAY_LENGTH = 50
+local GROUND_RAY_PASSES = 5 -- sheep / players / walls the ground ray may pass through before giving up
+local MIN_FLOOR_NORMAL_Y = 0.6 -- steeper surfaces are walls, not floor
+local FEET_TOLERANCE = 0.5 -- studs the ring may sit above the character's feet (steps, uneven floor)
 local DAMAGE_COLOR = Color3.fromRGB(255, 150, 150)
 local DAMAGE_RISE = 2.5 -- studs the number floats up
 local DAMAGE_SECONDS = 0.7
@@ -91,6 +94,7 @@ poolFolder.Parent = replicatedStorage
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.RespectCanCollide = true -- invisible trigger and zone parts are not floor
 
 -- The hitbox ring: a flat cylinder (a cylinder's axis is its X, so it is turned to stand on end).
 local ring = Instance.new("Part")
@@ -258,6 +262,42 @@ local function updateRangeHighlights(center: Vector3)
 	end
 end
 
+-- The sheep or character model this part belongs to, if any; standing next to one must not lift the ring onto it.
+local function getMobModel(part: Instance): Model?
+	local model = part:FindFirstAncestorOfClass("Model")
+	while model do
+		if model:FindFirstChildOfClass("Humanoid") or collectionService:HasTag(model, SHEEP_TAG) then
+			return model
+		end
+		model = model:FindFirstAncestorOfClass("Model")
+	end
+	return nil
+end
+
+-- Y of the floor under the character, never above its feet. Sheep, players and walls are skipped.
+local function getGroundY(character: Model, root: BasePart): number
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	-- R6 reports a HipHeight of 0; its legs are always 2 studs.
+	local hipHeight = if humanoid and humanoid.RigType == Enum.HumanoidRigType.R15 then humanoid.HipHeight else 2
+	local feetY = root.Position.Y - root.Size.Y / 2 - hipHeight
+
+	rayParams.FilterDescendantsInstances = { character, ring, poolFolder }
+	local direction = Vector3.new(0, -GROUND_RAY_LENGTH, 0)
+	for _ = 1, GROUND_RAY_PASSES do
+		local result = workspace:Raycast(root.Position, direction, rayParams)
+		if not result then
+			break
+		end
+
+		local mob = getMobModel(result.Instance)
+		if not mob and result.Normal.Y >= MIN_FLOOR_NORMAL_Y then
+			return math.min(result.Position.Y, feetY + FEET_TOLERANCE)
+		end
+		rayParams:AddToFilter(mob or result.Instance)
+	end
+	return feetY
+end
+
 -- Keeps the ring flat on the ground under the character and the in-range outlines current.
 local function updateRing()
 	local character = player.Character
@@ -268,9 +308,7 @@ local function updateRing()
 		return
 	end
 
-	rayParams.FilterDescendantsInstances = { character, ring }
-	local result = workspace:Raycast(root.Position, Vector3.new(0, -GROUND_RAY_LENGTH, 0), rayParams)
-	local groundY = if result then result.Position.Y else root.Position.Y - 3
+	local groundY = getGroundY(character, root)
 
 	ring.CFrame = CFrame.new(root.Position.X, groundY + RING_THICKNESS / 2, root.Position.Z) * CFrame.Angles(0, 0, math.rad(90))
 	ring.Parent = workspace

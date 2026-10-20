@@ -14,6 +14,7 @@ local players = game:GetService("Players")
 local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
+local IndexHandler = require(script.Parent.IndexHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local SheepSpawnHandler = require(script.Parent.SheepSpawnHandler)
 
@@ -47,13 +48,19 @@ local function getNumber(player: Player, key: string): number
 	return if type(value) == "number" then value else 0
 end
 
--- Puts the farm back to the start (shears are kept), with the Luck every rebirth so far has granted.
+-- Luck a farm starts with after `rebirths` rebirths: every rebirth reward plus the player's claimed Index Luck.
+local function getStartingLuck(player: Player, rebirths: number): number
+	return RebirthData.getStartingLuck(rebirths) + IndexHandler.getClaimedLuck(player)
+end
+
+-- Puts the farm back to the start (shears and the Index are kept).
 local function resetProgress(player: Player, rebirths: number)
 	PlayerDataHandler.set(player, "Wool", 0)
-	PlayerDataHandler.set(player, "Luck", RebirthData.getStartingLuck(rebirths))
+	PlayerDataHandler.set(player, "Luck", getStartingLuck(player, rebirths))
 	PlayerDataHandler.set(player, "MaxSheep", FarmData.StartingMaxSheep)
 	PlayerDataHandler.set(player, "MoreWoolLevel", 0)
 	PlayerDataHandler.set(player, "SpeedLevel", 0)
+	PlayerDataHandler.set(player, "DamageLevel", 0)
 	SheepSpawnHandler.resetFarm(player)
 end
 
@@ -69,7 +76,7 @@ function RebirthHandler.getState(player: Player): State
 	local woolCost = RebirthData.getWoolCost(rebirths)
 	local wool = getNumber(player, "Wool")
 	local luck = getNumber(player, "Luck")
-	local nextLuck = if woolCost == nil then luck else RebirthData.getStartingLuck(rebirths + 1)
+	local nextLuck = if woolCost == nil then luck else getStartingLuck(player, rebirths + 1)
 
 	return {
 		rebirths = rebirths,

@@ -20,13 +20,20 @@ local RebirthHandler = require(serverScriptService.Modules.Controllers.RebirthHa
 local POLL_SECONDS = 0.5
 local REBIRTH_COOLDOWN_SECONDS = 1.5
 local STATE_REQUEST_COOLDOWN_SECONDS = 0.5
+local DEBUG = true -- TODO: set to false once the rebirth button works
+
+local function debugLog(message: string)
+	if DEBUG then
+		print(`[RebirthServer] {message}`)
+	end
+end
 
 --// State
 local lastSignature: { [Player]: string } = {}
 
 -- A short fingerprint of the state, so an unchanged state is never sent twice.
 local function getSignature(state: RebirthHandler.State): string
-	return `{state.rebirths}|{state.wool}|{state.canRebirth}|{state.luck}`
+	return `{state.rebirths}|{state.wool}|{state.canRebirth}|{state.luck}|{state.nextLuck}`
 end
 
 local function pushState(player: Player, force: boolean)
@@ -42,12 +49,17 @@ end
 
 network.waitUntilReadyAsync()
 
+debugLog("network ready, listening for rebirth requests")
+
 network.connectEvent(network.RemoteEvents.RequestRebirthState, function(player: Player)
+	debugLog(`{player.Name} asked for their rebirth state`)
 	pushState(player, true)
 end, { network.Middleware.RateLimit(STATE_REQUEST_COOLDOWN_SECONDS) })
 
 network.connectEvent(network.RemoteEvents.RequestRebirth, function(player: Player)
+	local before = RebirthHandler.getState(player)
 	local success, reason = RebirthHandler.rebirth(player)
+	debugLog(`{player.Name} rebirth: success {success}, reason {reason}, wool {before.wool}/{before.woolCost}, rebirths {before.rebirths}`)
 	network.fireClient(network.RemoteEvents.RebirthResult, player, success, reason, RebirthHandler.getRebirths(player))
 	pushState(player, true)
 end, { network.Middleware.RateLimit(REBIRTH_COOLDOWN_SECONDS) })

@@ -35,8 +35,6 @@ local SHOP_PROMPT_TAG = "UpgradeShop"
 local CLOSE_DISTANCE_EXTRA = 6 -- studs past the prompt's activation range before the shop closes itself
 local DISTANCE_CHECK_SECONDS = 0.25
 local MESSAGE_SECONDS = 1.3
-local OPEN_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-local BOUGHT_TWEEN = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local AFTER_COLOR = "#1EFF3C" -- the "after" number in the Upgrade text
 local MAX_COLOR = "#FFD54A"
 
@@ -51,6 +49,7 @@ type Card = {
 	title: TextLabel,
 	price: TextLabel,
 	upgrade: TextLabel,
+	level: TextLabel,
 	purchase: GuiButton,
 	icon: GuiObject?,
 	state: any,
@@ -62,8 +61,14 @@ local cards: { [string]: Card } = {}
 local activePrompt: ProximityPrompt? = nil
 local openToken = 0
 
-local openScale = Instance.new("UIScale")
-openScale.Parent = mainFrame
+local layout = scrollFrame:FindFirstChildOfClass("UIListLayout") or scrollFrame:FindFirstChildOfClass("UIGridLayout")
+local framePadding = scrollFrame:FindFirstChildOfClass("UIPadding")
+
+-- Scale on Y inside a ScrollingFrame is relative to the canvas, so these are turned into pixels of the visible window.
+local cardSize = cardTemplate.Size
+local listPadding = if layout and layout:IsA("UIListLayout") then layout.Padding else nil
+local gridCellSize = if layout and layout:IsA("UIGridLayout") then layout.CellSize else nil
+local gridCellPadding = if layout and layout:IsA("UIGridLayout") then layout.CellPadding else nil
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -74,16 +79,6 @@ local function shake(button: GuiObject)
 			task.wait(0.04)
 		end
 	end)
-end
-
-local function pop(frame: GuiObject)
-	local scale = frame:FindFirstChildOfClass("UIScale")
-	if not scale then
-		scale = Instance.new("UIScale")
-		scale.Parent = frame
-	end
-	scale.Scale = 1.06
-	tweenService:Create(scale, BOUGHT_TWEEN, { Scale = 1 }):Play()
 end
 
 -- The plot the instance sits in, or nil if it isn't inside one.
@@ -103,27 +98,52 @@ end
 
 --// Cards -----------------------------------------------------------------------------
 
--- Sizes the scroll frame's canvas (Y) to fit every card plus the frame's own padding.
+local function toWindowPixels(size: UDim, windowHeight: number): UDim
+	return UDim.new(0, math.floor(size.Offset + size.Scale * windowHeight))
+end
+
+-- Sizes the cards (and the layout's gaps) from the window height so a taller canvas can't make them grow.
+local function updateCardSizes()
+	local windowHeight = scrollFrame.AbsoluteWindowSize.Y
+	local height = toWindowPixels(cardSize.Y, windowHeight)
+	for _, card in cards do
+		card.frame.Size = UDim2.new(cardSize.X, height)
+	end
+
+	if listPadding then
+		local list = layout :: UIListLayout
+		list.Padding = toWindowPixels(listPadding, windowHeight)
+	elseif gridCellSize and gridCellPadding then
+		local grid = layout :: UIGridLayout
+		grid.CellSize = UDim2.new(gridCellSize.X, toWindowPixels(gridCellSize.Y, windowHeight))
+		grid.CellPadding = UDim2.new(gridCellPadding.X, toWindowPixels(gridCellPadding.Y, windowHeight))
+	end
+end
+
+-- Only when the cards don't fit does the canvas get taller (in pixels) so the player can scroll to the rest.
 local function updateCanvasSize()
-	local layout = scrollFrame:FindFirstChildOfClass("UIListLayout") or scrollFrame:FindFirstChildOfClass("UIGridLayout")
 	if not layout then
 		return
 	end
 
-	local padding = scrollFrame:FindFirstChildOfClass("UIPadding")
+	local windowHeight = scrollFrame.AbsoluteWindowSize.Y
 	local paddingY = 0
-	if padding then
-		local frameHeight = scrollFrame.AbsoluteSize.Y
-		paddingY = padding.PaddingTop.Offset + padding.PaddingTop.Scale * frameHeight
-			+ padding.PaddingBottom.Offset + padding.PaddingBottom.Scale * frameHeight
+	if framePadding then
+		paddingY = framePadding.PaddingTop.Offset + framePadding.PaddingTop.Scale * windowHeight
+			+ framePadding.PaddingBottom.Offset + framePadding.PaddingBottom.Scale * windowHeight
 	end
 
-	scrollFrame.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + paddingY)
+	local needed = math.ceil(layout.AbsoluteContentSize.Y + paddingY)
+	local canvasSize = UDim2.fromOffset(0, if needed > windowHeight then needed else 0)
+	if scrollFrame.CanvasSize ~= canvasSize then
+		scrollFrame.CanvasSize = canvasSize
+	end
 end
 
 local function renderCard(card: Card)
 	local state = card.state
 	card.title.Text = state.title
+	card.level.Text = `lvl {state.level or 0}`
 
 	if state.after then
 		card.upgrade.Text = `{state.before} -> <font color="{AFTER_COLOR}"><b>{state.after}</b></font>`
@@ -156,6 +176,7 @@ local function createCard(state: any, order: number): Card
 	local frame = cardTemplate:Clone()
 	frame.Name = state.id
 	frame.LayoutOrder = order
+	frame.Size = UDim2.new(cardSize.X, toWindowPixels(cardSize.Y, scrollFrame.AbsoluteWindowSize.Y))
 	frame.Visible = true
 
 	local shearImage = frame:FindFirstChild("ShearImage")
@@ -164,6 +185,7 @@ local function createCard(state: any, order: number): Card
 		title = frame:WaitForChild("Title") :: TextLabel,
 		price = frame:WaitForChild("Price") :: TextLabel,
 		upgrade = frame:WaitForChild("Upgrade") :: TextLabel,
+		level = frame:WaitForChild("Level") :: TextLabel,
 		purchase = frame:WaitForChild("Purchase") :: GuiButton,
 		icon = if shearImage then shearImage:FindFirstChild("Icon") :: GuiObject? else nil,
 		state = state,
@@ -254,9 +276,7 @@ local function openShop(prompt: ProximityPrompt?)
 
 	network.fireServer(network.RemoteEvents.RequestUpgradeState)
 
-	openScale.Scale = 0.85
 	shopGui.Enabled = true
-	tweenService:Create(openScale, OPEN_TWEEN, { Scale = 1 }):Play()
 
 	if not prompt then
 		return
@@ -315,21 +335,20 @@ end
 shopGui.ResetOnSpawn = false
 mainFrame.Visible = true
 cardTemplate.Visible = false
-scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.None
+scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.None -- updateCanvasSize sizes it instead
 shopGui.Enabled = false
 updateAlert()
 wool.Changed:Connect(updateAlert)
 
--- The layout only measures its content after a card lands, so the refresh is deferred.
-scrollFrame.ChildAdded:Connect(function(child: Instance)
-	if child:IsA("GuiObject") then
-		task.defer(updateCanvasSize)
-	end
-end)
-local layout = scrollFrame:FindFirstChildOfClass("UIListLayout") or scrollFrame:FindFirstChildOfClass("UIGridLayout")
 if layout then
 	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvasSize)
 end
+scrollFrame:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(function()
+	updateCardSizes()
+	updateCanvasSize()
+end)
+updateCardSizes()
+updateCanvasSize()
 
 if closeButton then
 	closeButton.Activated:Connect(closeShop)
@@ -360,9 +379,7 @@ network.connectEvent(network.RemoteEvents.UpgradeResult, function(id: any, succe
 		return
 	end
 
-	if success then
-		pop(card.frame) -- the new price already came in the UpgradeState sent just before this
-	else
+	if not success then
 		flashMessage(card, REASON_TEXT[reason or ""] or "Can't buy")
 	end
 end)

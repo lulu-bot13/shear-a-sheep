@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Hitbox shearing: every swing of the held shear takes its damage off each of the player's sheep within its range.
+	Hitbox shearing: every swing of the held shear takes its damage (with the Shear Damage upgrade) off each of the player's sheep within its range.
 	A sheep shorn bare pays out wool (with the rebirth and More Wool multipliers) and Luck, then leaves the farm.
 
 	Location: ServerScriptService.Modules.Controllers.ShearHandler
@@ -17,6 +17,7 @@ local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
+local IndexHandler = require(script.Parent.IndexHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local SheepHandler = require(script.Parent.SheepHandler)
 local ShearShopHandler = require(script.Parent.ShearShopHandler)
@@ -104,6 +105,7 @@ local function finishSheep(player: Player, sheep: Model, sheepId: number, origin
 
 	SheepHandler.removeSheep(sheepId)
 	updateBestFind(player, sheepType)
+	IndexHandler.discover(player, sheepType)
 	PlayerDataHandler.increment(player, "Wool", wool)
 	PlayerDataHandler.increment(player, "SheepShearedCount", 1)
 	if type(luck) == "number" and luck > 0 then
@@ -128,6 +130,7 @@ local function onShearSwing(player: Player)
 	lastSwing[player] = now
 
 	local shear = ShearShopHandler.getShear(player)
+	local shearDamage = UpgradeData.getShearDamage(shear.damage, getNumber(player, "DamageLevel"))
 	local hits: { Hit } = {}
 
 	for _, sheep in getSheepInRange(player, playerRoot.Position, shear.range + ShearData.RangeTolerance) do
@@ -138,7 +141,7 @@ local function onShearSwing(player: Player)
 			continue
 		end
 
-		local damage = math.min(shear.damage, health)
+		local damage = math.min(shearDamage, health)
 		local newHealth = health - damage
 		local position = root.Position
 		table.insert(hits, {

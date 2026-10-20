@@ -302,11 +302,16 @@ end
 
 --// Building a sheep -------------------------------------------------------------------
 
--- The collision group and health bar are set up once per model; pooled models keep them.
+--[[
+	The collision group and health bar are set up once per model; pooled models keep them.
+	Only the invisible root collides: the camera pops in front of any opaque collidable part, and players stand
+	inside the sheep while shearing (the groups don't collide), so collidable body parts yanked the camera around.
+]]
 local function prepareNewModel(sheepModel: Model, root: BasePart)
 	for _, descendant in sheepModel:GetDescendants() do
 		if descendant:IsA("BasePart") then
 			descendant.CollisionGroup = SHEEP_COLLISION_GROUP
+			descendant.CanCollide = descendant == root
 		end
 	end
 	createHealthHud(root)
