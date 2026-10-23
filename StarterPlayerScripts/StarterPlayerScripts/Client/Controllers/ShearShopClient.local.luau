@@ -23,6 +23,7 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local alerts = require(script.Parent.Parent.Modules.Alerts)
 local UIData = require(script.Parent.Parent.Modules.ShearShopUIData)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
@@ -145,6 +146,7 @@ local function flashMessage(card: Card, text: string)
 	card.messageToken += 1
 	local token = card.messageToken
 	card.priceLabel.Text = text
+	alerts.show(`{card.info.displayName}: {text}`, "error")
 	shake(card.purchase)
 
 	task.delay(MESSAGE_SECONDS, function()

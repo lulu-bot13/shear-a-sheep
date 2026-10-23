@@ -16,6 +16,7 @@ local soundService = game:GetService("SoundService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
+local alerts = require(script.Parent.Parent.Modules.Alerts)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
@@ -41,16 +42,16 @@ local SHACK_NAME = "UpgradePlotShack" -- matches UpgradeData.ShackName on the se
 local SHACK_LABEL_NAME = "Upgrades" -- the TextLabel over each shack
 local CLOSE_DISTANCE_EXTRA = 6 -- studs past the prompt's activation range before the shop closes itself
 local DISTANCE_CHECK_SECONDS = 0.25
-local MESSAGE_SECONDS = 1.3
 local AFTER_COLOR = "#1EFF3C" -- the "after" number in the Upgrade text
 local MAX_COLOR = "#FFD54A"
 local DISABLED_COLOR = Color3.fromRGB(130, 130, 130) -- the Purchase button while the upgrade can't be bought
 local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so card sizes aren't measured
 
+-- Alert text when an upgrade can't be bought; "%s" is the upgrade's name.
 local REASON_TEXT = {
-	NoWool = "Not enough wool",
-	Maxed = "Maxed",
-	NotLoaded = "Loading...",
+	NoWool = "Not enough wool for %s",
+	Maxed = "%s is MAXED",
+	NotLoaded = "Still loading, try again",
 }
 
 type Card = {
@@ -63,7 +64,6 @@ type Card = {
 	purchaseColor: Color3,
 	icon: GuiObject?,
 	state: any,
-	messageToken: number,
 }
 
 --// State
@@ -187,18 +187,15 @@ local function updatePurchaseButton(card: Card)
 	card.purchase.BackgroundColor3 = if canBuy then card.purchaseColor else DISABLED_COLOR
 end
 
--- Shows a short message in the card's Price, then goes back to the price.
-local function flashMessage(card: Card, text: string)
-	card.messageToken += 1
-	local token = card.messageToken
-	card.price.Text = text
+-- The card's text stays as it is; the reason goes in an alert at the top of the screen.
+local function showFailure(card: Card, reason: string?)
+	local text = REASON_TEXT[reason or ""] or "Can't buy %s"
+	alerts.show(string.format(text, card.state.title), "error")
 	shake(card.purchase)
 
-	task.delay(MESSAGE_SECONDS, function()
-		if token == card.messageToken then
-			renderCard(card)
-		end
-	end)
+	if errorSound and errorSound:IsA("Sound") then
+		errorSound:Play()
+	end
 end
 
 local function createCard(state: any, order: number): Card
@@ -220,13 +217,12 @@ local function createCard(state: any, order: number): Card
 		purchaseColor = purchase.BackgroundColor3,
 		icon = if shearImage then shearImage:FindFirstChild("Icon") :: GuiObject? else nil,
 		state = state,
-		messageToken = 0,
 	}
 	card.upgrade.RichText = true
 
 	card.purchase.Activated:Connect(function()
 		if not card.state.after then
-			flashMessage(card, REASON_TEXT.Maxed)
+			showFailure(card, "Maxed")
 			return
 		end
 		network.fireServer(network.RemoteEvents.PurchaseUpgrade, card.state.id)
@@ -267,7 +263,6 @@ local function applyState(states: { any })
 		end
 
 		card.state = state
-		card.messageToken += 1 -- a pending message must not overwrite the fresh price
 		renderCard(card)
 		updatePurchaseButton(card)
 	end
@@ -408,22 +403,20 @@ network.waitUntilReadyAsync()
 
 network.connectEvent(network.RemoteEvents.UpgradeState, applyState)
 
-network.connectEvent(network.RemoteEvents.UpgradeResult, function(id: any, success: boolean, reason: string?)
+network.connectEvent(network.RemoteEvents.UpgradeResult, function(id: any, success: boolean, reason: string?, level: number?)
 	local card = if type(id) == "string" then cards[id] else nil
 	if not card then
 		return
 	end
 
 	if not success then
-		flashMessage(card, REASON_TEXT[reason or ""] or "Can't buy")
+		showFailure(card, reason)
+		return
+	end
 
-		if errorSound and errorSound:IsA("Sound") then
-			errorSound:Play()
-		end
-	else
-		if cashInSound and cashInSound:IsA("Sound") then
-			cashInSound:Play()
-		end
+	alerts.show(`Upgraded {card.state.title} -> lvl {level or card.state.level or 0}`, "success")
+	if cashInSound and cashInSound:IsA("Sound") then
+		cashInSound:Play()
 	end
 end)
 

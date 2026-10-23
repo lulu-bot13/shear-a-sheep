@@ -13,6 +13,7 @@ local tweenService = game:GetService("TweenService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
+local alerts = require(script.Parent.Parent.Modules.Alerts)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 local DEBUG = true -- TODO: set to false once the rebirth button works
@@ -57,6 +58,12 @@ local LUCK_AFTER_COLOR = Color3.fromRGB(170, 235, 170)
 local ALERT_SHAKE_SECONDS = 3
 local ALERT_SHAKE_ANGLES = { -10, 10, -8, 8, -4, 4, 0 }
 local CLICK_SHAKE_ANGLES = { -3, 3, -2, 2, 0 }
+
+local REASON_TEXT = {
+	NotReady = "Not enough wool to rebirth",
+	MaxRebirths = "Rebirths are MAXED",
+	Busy = "Already rebirthing",
+}
 
 -- Luck icons falling down the screen after a rebirth. Spawning + the slowest fall add up to EFFECT_SECONDS.
 local LUCK_ICON_IMAGE = "rbxassetid://86611651520562" -- "rbxassetid://..."; empty uses the first icon in the rebirth screen's RewardsFrame
@@ -245,6 +252,7 @@ rebirthButton.MouseButton1Click:Connect(function()
 		network.fireServer(network.RemoteEvents.RequestRebirth)
 	else
 		debugLog(`clicked Rebirth, not ready: wool {state.wool}/{state.woolCost}, canRebirth {state.canRebirth}, maxed {state.maxed}`)
+		alerts.show(if state.maxed then REASON_TEXT.MaxRebirths else REASON_TEXT.NotReady, "error")
 		shake(rebirthButton, CLICK_SHAKE_ANGLES)
 	end
 end)
@@ -261,11 +269,13 @@ network.connectEvent(network.RemoteEvents.RebirthState, function(newState: any)
 	end
 end)
 
-network.connectEvent(network.RemoteEvents.RebirthResult, function(success: boolean, reason: string?)
+network.connectEvent(network.RemoteEvents.RebirthResult, function(success: boolean, reason: string?, rebirths: number?)
 	debugLog(`rebirth result: success {success}, reason {reason}`)
 	if success then
+		alerts.showCenter("REBIRTHED", `Rebirth {rebirths or "?"}`)
 		playLuckRain()
 	else
+		alerts.show(REASON_TEXT[reason or ""] or "Can't rebirth", "error")
 		shake(rebirthButton, CLICK_SHAKE_ANGLES)
 	end
 end)

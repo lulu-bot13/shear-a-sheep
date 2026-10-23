@@ -1,6 +1,6 @@
 --[[
-	Plays the wool collect effect after a sheep is sheared: wool drops on the ground and is pulled into the character
-	(or flies straight in with DROP_WOOL_ON_GROUND off), and the wool counter swells as it goes up.
+	Every shear hit splits the wool / Luck it knocked off into pooled DropTemplates that fall around the sheep, get pulled into
+	the character, and add up on a total over its root. The HUD counters swell as they land.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.WoolCollectClient
 ]]--
@@ -15,72 +15,114 @@ local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+local dropTemplate = replicatedStorage:WaitForChild("Assets"):WaitForChild("DropTemplate") :: BasePart
 
 --// Sound Effects
 local uiSounds = soundService:WaitForChild("UISounds")
 local popSfx = uiSounds:FindFirstChild("Pop")
 
 --// Configs
-local DROP_WOOL_ON_GROUND = true -- false = the puffs fly straight from the sheep into the character instead
-local DROP_PIECE_COUNT = 6 -- at most; fewer when there is less wool, like the icons
+local DROPS_PER_FULL_SHEEP = 50 -- a hit taking 10% of a sheep's health drops 5
+local MAX_DROPS_PER_HIT = 8 -- per currency; never more drops than the amount itself
+local MAX_ACTIVE_DROPS = 60 -- past this, a hit's wool goes straight to the counter
+local PREWARM_DROPS = 16
 local DROP_FALL_SECONDS = 0.45 -- arcing out of the sheep onto the ground
-local DROP_REST_SECONDS = 0.5 -- lying on the ground before being pulled in
+local DROP_BOUNCE_SECONDS = 0.16 -- one quick hop off the ground, then straight to the character
+local DROP_BOUNCE_HEIGHT = 0.9
 local DROP_PULL_SECONDS = 0.22 -- the parabola up to the character
-local DROP_STAGGER_SECONDS = 0.05
+local DROP_STAGGER_SECONDS = 0.04
 local DROP_FALL_HEIGHT = 2.5 -- studs each arc rises above a straight line at its middle
 local DROP_PULL_HEIGHT = 5
 local DROP_SCATTER_RADIUS = 4.5
-local DROP_PIECE_SIZE = 0.8
-local DROP_LIFETIME_SECONDS = 5 -- a piece is cleaned up after this whatever happens
-local DROP_TRAIL_SECONDS = 0.18 -- how long each piece's trail lingers behind it
-local TOTAL_HIDE_SECONDS = 1.2 -- the running total on the character hides this long after the last piece arrives
+local DROP_GROUND_LIFT = 0.6 -- studs a drop rests above the ground
+local PARK_CFRAME = CFrame.new(0, 10000, 0) -- idle drops wait out of sight here instead of being reparented
 
-local PUFF_COUNT = 16
-local PUFF_BURST_SECONDS = 0.3 -- splashing out of the sheep
-local PUFF_FLIGHT_SECONDS = 0.5 -- curving in to the character
-local PUFF_STAGGER_SECONDS = 0.012
-local PUFF_POP_GAP_SECONDS = 0.05 -- minimum spacing between pops as wool lands on the character
+local TOTAL_OFFSET = Vector3.new(0, 4, 0)
+local TOTAL_STACK_OFFSET = Vector3.new(0, 5.5, 0) -- the Luck total, while the wool total is showing too
+local TOTAL_HIDE_SECONDS = 1.2 -- a total hides this long after its last drop arrives
+
+local PUFF_POP_GAP_SECONDS = 0.05 -- minimum spacing between pops as drops land on the character
 local POP_PITCH_STEP = 0.04 -- each pop in a run is slightly higher
 local POP_MAX_STEPS = 10
-local HOLD_TIMEOUT_SECONDS = 5 -- the counter is never held back longer than this, whatever happens
+local HOLD_TIMEOUT_SECONDS = 5 -- the counters are never held back longer than this, whatever happens
 
-local COUNTER_GROW_SCALE = 1.15 -- the wool counter swells to this when wool is added...
+local COUNTER_GROW_SCALE = 1.15 -- the HUD counter swells to this when a drop lands...
 local COUNTER_GROW_SECONDS = 0.12
 local COUNTER_HOLD_SECONDS = 0.7 -- ...stays big this long...
 local COUNTER_SHRINK_SECONDS = 0.2 -- ...then settles back
 
-local SHARE_TEXT_COLOR = Color3.fromRGB(255, 255, 255)
-local SHARE_STROKE_COLOR = Color3.fromRGB(40, 70, 110)
+type Kind = "Wool" | "Luck"
 
-local WOOL_EDGE_COLOR = Color3.fromRGB(176, 214, 245)
+local ICONS: { [Kind]: string } = {
+	Wool = "rbxassetid://112199646421676",
+	Luck = "rbxassetid://86611651520562",
+}
+local HOLD_ATTRIBUTES: { [Kind]: string } = { Wool = "WoolLabelHold", Luck = "LuckLabelHold" }
+local COUNTER_LABELS: { [Kind]: string } = { Wool = "WoolAmount", Luck = "LuckAmount" }
+
+-- One pooled DropTemplate clone and the pieces of it that get updated.
+type DropObject = {
+	part: BasePart,
+	gui: BillboardGui,
+	icon: ImageLabel,
+	label: TextLabel,
+	trail: Trail?,
+}
+
+type ActiveDrop = {
+	object: DropObject,
+	kind: Kind,
+	amount: number,
+	origin: Vector3,
+	ground: Vector3,
+	startAt: number,
+	started: boolean,
+	root: BasePart, -- pulled towards the current character's root, or this one if it is gone
+	pop: () -> (),
+}
+
+type Total = {
+	gui: BillboardGui,
+	label: TextLabel,
+	amount: number,
+	token: number,
+}
+
+-- The server's payout for one sheep a swing hit (see ShearHandler).
+type DropInfo = {
+	position: Vector3,
+	wool: number,
+	luck: number,
+	fraction: number,
+	luckDrops: boolean,
+}
 
 --// State
 local holdToken = 0
-local totalGui: BillboardGui? = nil
-local totalLabel: TextLabel? = nil
-local totalAmount = 0
-local totalToken = 0
-local counterTweens: { Tween } = {}
+local idleDrops: { DropObject } = {}
+local activeDrops: { ActiveDrop } = {}
+local totals: { [Kind]: Total } = {}
+local counterTweens: { [Kind]: { Tween } } = {}
+local heartbeatConnection: RBXScriptConnection? = nil
+local moveParts: { BasePart } = {}
+local moveCFrames: { CFrame } = {}
+
+-- Created by this client, so the drops only exist locally.
+local dropFolder = Instance.new("Folder")
+dropFolder.Name = "WoolDrops"
+dropFolder.Parent = workspace
+
+local groundParams = RaycastParams.new()
+groundParams.FilterType = Enum.RaycastFilterType.Exclude
+groundParams.CollisionGroup = "Players" -- skips sheep, which don't collide with players
+groundParams.RespectCanCollide = true
 
 --// Helpers -------------------------------------------------------------------
-
-local function bezier(a: Vector3, b: Vector3, c: Vector3, t: number): Vector3
-	local ab = a:Lerp(b, t)
-	local bc = b:Lerp(c, t)
-	return ab:Lerp(bc, t)
-end
-
-local function easeOut(t: number): number
-	return 1 - (1 - t) ^ 3
-end
-
-local function easeIn(t: number): number
-	return t * t
-end
 
 local function smoothstep(t: number): number
 	return t * t * (3 - 2 * t)
@@ -102,22 +144,18 @@ local function splitShares(amount: number, count: number): { number }
 	return shares
 end
 
--- A "+N" with a white fill and blue outline.
-local function makeAmountLabel(amount: number, parent: Instance): TextLabel
-	local label = Instance.new("TextLabel")
-	label.BackgroundTransparency = 1
-	label.Font = Enum.Font.GothamBlack
-	label.TextScaled = true
-	label.TextColor3 = SHARE_TEXT_COLOR
-	label.Text = `+{amount}`
+-- Lets the icon and text spill past their frames instead of being cut off.
+local function disableClipping(gui: BillboardGui)
+	gui.ClipsDescendants = false
+	for _, descendant in gui:GetDescendants() do
+		if descendant:IsA("GuiObject") then
+			descendant.ClipsDescendants = false
+		end
+	end
+end
 
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = SHARE_STROKE_COLOR
-	stroke.Thickness = 2
-	stroke.Parent = label
-
-	label.Parent = parent
-	return label
+local function formatAmount(amount: number): string
+	return `+{numberFormatter:Format(amount, 1)}`
 end
 
 -- Plays a fresh copy of the pop so overlapping pops don't cut each other off.
@@ -151,10 +189,11 @@ local function getCharacterRoot(): BasePart?
 	return if character then character:FindFirstChild("HumanoidRootPart") :: BasePart? else nil
 end
 
--- Holds back `change` more wool from the counter (negative = lets some through).
-local function changeHeld(change: number)
-	local held = player:GetAttribute("WoolLabelHold")
-	player:SetAttribute("WoolLabelHold", math.max((if type(held) == "number" then held else 0) + change, 0))
+-- Holds back `change` more of this currency from its counter (negative = lets some through).
+local function changeHeld(kind: Kind, change: number)
+	local attribute = HOLD_ATTRIBUTES[kind]
+	local held = player:GetAttribute(attribute)
+	player:SetAttribute(attribute, math.max((if type(held) == "number" then held else 0) + change, 0))
 end
 
 local function getScale(label: GuiObject): UIScale
@@ -167,25 +206,36 @@ local function getScale(label: GuiObject): UIScale
 	return scale :: UIScale
 end
 
--- The total over the character bounces a little every time a piece lands in it.
+-- The total over the character bounces a little every time a drop lands in it.
 local function punchLabel(label: GuiObject)
 	local scale = getScale(label)
 	scale.Scale = 1.18
 	tweenService:Create(scale, TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 end
 
---// Wool counter ------------------------------------------------------------------------
+-- Where a drop scattered to `point` comes to rest: just above the ground under it.
+local function findGround(point: Vector3): Vector3
+	groundParams.FilterDescendantsInstances = if player.Character then { player.Character, dropFolder } else { dropFolder }
+	local result = workspace:Raycast(point + Vector3.new(0, 3, 0), Vector3.new(0, -25, 0), groundParams)
+	local ground = if result then result.Position else point - Vector3.new(0, 2.5, 0)
+	return ground + Vector3.new(0, DROP_GROUND_LIFT, 0)
+end
 
--- The counter swells, stays big for a moment, then settles; more wool while it's big keeps it big.
-local function growCounter(label: GuiObject)
-	for _, tween in counterTweens do
-		tween:Cancel()
+--// HUD counters ------------------------------------------------------------------------
+
+-- The counter swells, stays big for a moment, then settles; more drops while it's big keep it big.
+local function growCounter(kind: Kind, label: GuiObject)
+	local running = counterTweens[kind]
+	if running then
+		for _, tween in running do
+			tween:Cancel()
+		end
 	end
 
 	local scale = getScale(label)
 	local grow = tweenService:Create(scale, TweenInfo.new(COUNTER_GROW_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = COUNTER_GROW_SCALE })
 	local shrink = tweenService:Create(scale, TweenInfo.new(COUNTER_SHRINK_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 0, false, COUNTER_HOLD_SECONDS), { Scale = 1 })
-	counterTweens = { grow, shrink }
+	counterTweens[kind] = { grow, shrink }
 
 	grow.Completed:Connect(function(state: Enum.PlaybackState)
 		if state == Enum.PlaybackState.Completed then
@@ -195,257 +245,270 @@ local function growCounter(label: GuiObject)
 	grow:Play()
 end
 
--- Lets `amount` of the held wool through to the counter.
-local function addToCounter(amount: number)
-	changeHeld(-amount)
+-- Lets `amount` of the held currency through to its counter.
+local function addToCounter(kind: Kind, amount: number)
+	changeHeld(kind, -amount)
 
 	local main = playerGui:FindFirstChild("Main")
-	local label = main and main:FindFirstChild("WoolAmount")
+	local label = main and main:FindFirstChild(COUNTER_LABELS[kind])
 	if label and label:IsA("GuiObject") then
-		growCounter(label)
+		growCounter(kind, label)
 	end
 end
 
---// Wool to the character -------------------------------------------------------------------
+--// Totals over the character ---------------------------------------------------------------
 
-local function makeWoolPart(name: string, size: number, color: Color3, position: Vector3, lifetime: number): Part
-	local part = Instance.new("Part")
-	part.Name = name
-	part.Shape = Enum.PartType.Ball
-	part.Size = Vector3.one * size
-	part.Color = color
-	part.Material = Enum.Material.SmoothPlastic
+local function getTotal(kind: Kind, root: BasePart): Total
+	local total = totals[kind]
+	if total and total.gui.Parent == root then
+		return total
+	end
+	if total then
+		total.gui:Destroy()
+	end
+
+	local gui = (dropTemplate:FindFirstChild("BillboardGui") :: BillboardGui):Clone()
+	gui.Name = `{kind}Total`
+	gui.AlwaysOnTop = true
+	gui.Enabled = false
+	disableClipping(gui)
+	gui.Adornee = root
+	gui.Parent = root
+	;(gui:FindFirstChild("Icon") :: ImageLabel).Image = ICONS[kind]
+
+	local newTotal = { gui = gui, label = gui:FindFirstChild("TextLabel") :: TextLabel, amount = 0, token = 0 }
+	totals[kind] = newTotal
+	return newTotal
+end
+
+-- Adds a landed drop to the "+N" on the character's root, which hides once the drops stop coming.
+local function addToTotal(kind: Kind, root: BasePart, amount: number)
+	if not root.Parent then
+		return
+	end
+
+	local total = getTotal(kind, root)
+	total.amount += amount
+	total.label.Text = formatAmount(total.amount)
+	total.gui.Enabled = true
+	punchLabel(total.label)
+
+	if kind == "Luck" then
+		local woolTotal = totals["Wool" :: Kind]
+		local stacked = woolTotal ~= nil and woolTotal.gui.Enabled and woolTotal.gui.Parent == root
+		total.gui.StudsOffset = if stacked then TOTAL_STACK_OFFSET else TOTAL_OFFSET
+	else
+		total.gui.StudsOffset = TOTAL_OFFSET
+	end
+
+	total.token += 1
+	local token = total.token
+	task.delay(TOTAL_HIDE_SECONDS, function()
+		if token == total.token then
+			total.gui.Enabled = false
+			total.amount = 0
+		end
+	end)
+end
+
+--// Drop pool ---------------------------------------------------------------------
+
+local function createDropObject(): DropObject
+	local part = dropTemplate:Clone()
 	part.Anchored = true
 	part.CanCollide = false
 	part.CanTouch = false
 	part.CanQuery = false
 	part.CastShadow = false
-	part.Position = position
-	part.Parent = workspace
-	debris:AddItem(part, lifetime)
-	return part
-end
+	part.CFrame = PARK_CFRAME
 
--- A trail streaming behind the piece as it moves.
-local function addTrail(piece: BasePart, color: Color3)
-	local top = Instance.new("Attachment")
-	top.Position = Vector3.new(0, DROP_PIECE_SIZE * 0.3, 0)
-	top.Parent = piece
-	local bottom = Instance.new("Attachment")
-	bottom.Position = Vector3.new(0, -DROP_PIECE_SIZE * 0.3, 0)
-	bottom.Parent = piece
-
-	local trail = Instance.new("Trail")
-	trail.Attachment0 = top
-	trail.Attachment1 = bottom
-	trail.Color = ColorSequence.new(color, WOOL_EDGE_COLOR)
-	trail.Transparency = NumberSequence.new(0.2, 1)
-	trail.WidthScale = NumberSequence.new(1, 0)
-	trail.Lifetime = DROP_TRAIL_SECONDS
-	trail.FaceCamera = true
-	trail.LightEmission = 0.4
-	trail.Parent = piece
-end
-
--- The "+N" on the character's root that adds up every piece as it arrives, then hides once the pieces stop coming.
-local function addToTotal(root: BasePart, share: number)
-	if not root.Parent then
-		return
+	local gui = part:FindFirstChild("BillboardGui") :: BillboardGui
+	gui.Enabled = false
+	disableClipping(gui)
+	local trail = part:FindFirstChildOfClass("Trail")
+	if trail then
+		trail.Enabled = false
 	end
 
-	if not totalGui or not totalLabel or totalGui.Parent ~= root then
-		if totalGui then
-			totalGui:Destroy()
-		end
-		local gui = Instance.new("BillboardGui")
-		gui.Name = "WoolTotal"
-		gui.Size = UDim2.fromScale(2.4, 1)
-		gui.AlwaysOnTop = true
-		gui.Adornee = root
-		gui.Parent = root
-
-		local label = makeAmountLabel(0, gui)
-		label.Size = UDim2.fromScale(1, 1)
-		totalGui = gui
-		totalLabel = label
-		totalAmount = 0
-	end
-
-	local gui = totalGui :: BillboardGui
-	local label = totalLabel :: TextLabel
-	totalAmount += share
-	label.Text = `+{totalAmount}`
-	gui.Enabled = true
-	punchLabel(label)
-
-	totalToken += 1
-	local token = totalToken
-	task.delay(TOTAL_HIDE_SECONDS, function()
-		if token == totalToken then
-			gui.Enabled = false
-			totalAmount = 0
-		end
-	end)
+	part.Parent = dropFolder
+	return {
+		part = part,
+		gui = gui,
+		icon = gui:FindFirstChild("Icon") :: ImageLabel,
+		label = gui:FindFirstChild("TextLabel") :: TextLabel,
+		trail = trail,
+	}
 end
 
--- Where a piece scattered to `point` comes to rest: the ground under it, skipping sheep (they don't collide with players).
-local function findGround(point: Vector3, size: number): Vector3
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = if player.Character then { player.Character } else {}
-	params.CollisionGroup = "Players"
-	params.RespectCanCollide = true
+local function releaseDrop(object: DropObject)
+	object.gui.Enabled = false
+	if object.trail then
+		object.trail.Enabled = false
+	end
+	object.part.CFrame = PARK_CFRAME
+	table.insert(idleDrops, object)
+end
 
-	local result = workspace:Raycast(point + Vector3.new(0, 3, 0), Vector3.new(0, -25, 0), params)
-	local ground = if result then result.Position else point - Vector3.new(0, 2.5, 0)
-	return ground + Vector3.new(0, size / 2, 0)
+for _ = 1, PREWARM_DROPS do
+	table.insert(idleDrops, createDropObject())
+end
+
+--// Drop movement -----------------------------------------------------------------
+
+-- Where a drop is `elapsed` seconds after it started, or nil once it has reached the character.
+local function getDropPosition(drop: ActiveDrop, elapsed: number, target: Vector3): Vector3?
+	if elapsed < DROP_FALL_SECONDS then
+		return parabola(drop.origin, drop.ground, DROP_FALL_HEIGHT, elapsed / DROP_FALL_SECONDS)
+	end
+
+	local bounceElapsed = elapsed - DROP_FALL_SECONDS
+	if bounceElapsed < DROP_BOUNCE_SECONDS then
+		local t = bounceElapsed / DROP_BOUNCE_SECONDS
+		return drop.ground + Vector3.new(0, 4 * DROP_BOUNCE_HEIGHT * t * (1 - t), 0)
+	end
+
+	local pullElapsed = bounceElapsed - DROP_BOUNCE_SECONDS
+	if pullElapsed >= DROP_PULL_SECONDS then
+		return nil
+	end
+	return parabola(drop.ground, target, DROP_PULL_HEIGHT, smoothstep(pullElapsed / DROP_PULL_SECONDS))
+end
+
+local function arrive(drop: ActiveDrop, root: BasePart)
+	releaseDrop(drop.object)
+	drop.pop()
+	addToTotal(drop.kind, root, drop.amount)
+	addToCounter(drop.kind, drop.amount)
+end
+
+-- One loop moves every drop in a single BulkMoveTo, and only runs while there are drops.
+local function stepDrops()
+	local now = os.clock()
+	local currentRoot = getCharacterRoot()
+	local count = 0
+
+	for index = #activeDrops, 1, -1 do
+		local drop = activeDrops[index]
+		local elapsed = now - drop.startAt
+		if elapsed < 0 then
+			continue
+		end
+
+		if not drop.started then
+			drop.started = true
+			drop.object.gui.Enabled = true
+			if drop.object.trail then
+				drop.object.trail:Clear()
+				drop.object.trail.Enabled = true
+			end
+		end
+
+		local root = currentRoot or drop.root
+		local position = getDropPosition(drop, elapsed, root.Position)
+		if position then
+			count += 1
+			moveParts[count] = drop.object.part
+			moveCFrames[count] = CFrame.new(position)
+		else
+			activeDrops[index] = activeDrops[#activeDrops]
+			activeDrops[#activeDrops] = nil
+			arrive(drop, root)
+		end
+	end
+
+	for index = #moveParts, count + 1, -1 do
+		moveParts[index] = nil
+		moveCFrames[index] = nil
+	end
+	if count > 0 then
+		workspace:BulkMoveTo(moveParts, moveCFrames, Enum.BulkMoveMode.FireCFrameChanged)
+	end
+
+	if #activeDrops == 0 and heartbeatConnection then
+		heartbeatConnection:Disconnect()
+		heartbeatConnection = nil
+	end
+end
+
+local function spawnDrops(kind: Kind, origin: Vector3, amount: number, count: number, root: BasePart, pop: () -> ())
+	local now = os.clock()
+	for index, share in splitShares(amount, count) do
+		local object = table.remove(idleDrops) or createDropObject()
+		object.icon.Image = ICONS[kind]
+		object.label.Text = formatAmount(share)
+		object.part.CFrame = CFrame.new(origin)
+
+		local angle = math.random() * math.pi * 2
+		local scatter = Vector3.new(math.cos(angle), 0, math.sin(angle)) * DROP_SCATTER_RADIUS * (0.4 + math.random() * 0.6)
+
+		table.insert(activeDrops, {
+			object = object,
+			kind = kind,
+			amount = share,
+			origin = origin,
+			ground = findGround(origin + scatter),
+			startAt = now + (index - 1) * DROP_STAGGER_SECONDS,
+			started = false,
+			root = root,
+			pop = pop,
+		})
+	end
+
+	if not heartbeatConnection then
+		heartbeatConnection = runService.Heartbeat:Connect(stepDrops)
+	end
 end
 
 --[[
-	The wool splits into pieces (one whole share each) that fall around the sheep showing their "+share".
-	Each is then pulled in along a parabola, adding its share to the total on the character's root and to the counter.
-	The counter is already holding back `amount` (set when the event arrived).
+	Splits one hit's `amount` into drops: more the bigger a share of the sheep the hit took, never more than the amount,
+	the per-hit cap or the free room under MAX_ACTIVE_DROPS. With no room it goes straight to the total and counter.
+	The counter is already holding `amount` back.
 ]]
-local function dropWool(origin: Vector3, amount: number, color: Color3)
-	local rootPart = getCharacterRoot()
-	local pieceCount = math.min(DROP_PIECE_COUNT, math.floor(amount))
-	if not rootPart or pieceCount <= 0 then
-		addToCounter(amount)
+local function dropCurrency(kind: Kind, origin: Vector3, amount: number, fraction: number, pop: () -> ())
+	local root = getCharacterRoot()
+	local wanted = math.clamp(math.round(fraction * DROPS_PER_FULL_SHEEP), 1, MAX_DROPS_PER_HIT)
+	local count = math.min(wanted, math.floor(amount), MAX_ACTIVE_DROPS - #activeDrops)
+
+	if not root or count <= 0 then
+		if root then
+			addToTotal(kind, root, amount)
+		end
+		addToCounter(kind, amount)
 		return
 	end
-
-	local popPiece = newPopSequence(PUFF_POP_GAP_SECONDS)
-
-	for index, share in splitShares(amount, pieceCount) do
-		task.delay((index - 1) * DROP_STAGGER_SECONDS, function()
-			local piece = makeWoolPart("WoolPiece", DROP_PIECE_SIZE, color, origin, DROP_LIFETIME_SECONDS)
-
-			local angle = math.random() * math.pi * 2
-			local scatter = Vector3.new(math.cos(angle), 0, math.sin(angle)) * DROP_SCATTER_RADIUS * (0.4 + math.random() * 0.6)
-			local ground = findGround(origin + scatter, DROP_PIECE_SIZE)
-
-			local tag = Instance.new("BillboardGui")
-			tag.Size = UDim2.fromScale(1.4, 0.6)
-			tag.StudsOffset = Vector3.new(0, 0.8, 0)
-			tag.AlwaysOnTop = true
-			tag.Parent = piece
-			makeAmountLabel(share, tag).Size = UDim2.fromScale(1, 1)
-			addTrail(piece, color)
-
-			local startTime = os.clock()
-			local connection: RBXScriptConnection
-			connection = runService.Heartbeat:Connect(function()
-				if not piece.Parent then
-					connection:Disconnect()
-					addToCounter(share)
-					return
-				end
-
-				local elapsed = os.clock() - startTime
-				if elapsed < DROP_FALL_SECONDS then
-					piece.Position = parabola(origin, ground, DROP_FALL_HEIGHT, elapsed / DROP_FALL_SECONDS)
-					return
-				end
-
-				local currentRoot = getCharacterRoot() or rootPart
-				local pullElapsed = elapsed - DROP_FALL_SECONDS - DROP_REST_SECONDS
-				if pullElapsed < 0 then
-					piece.Position = ground
-					return
-				end
-
-				local t = math.min(pullElapsed / DROP_PULL_SECONDS, 1)
-				piece.Position = parabola(ground, currentRoot.Position, DROP_PULL_HEIGHT, smoothstep(t))
-				piece.Size = Vector3.one * DROP_PIECE_SIZE * (1 - 0.5 * t)
-
-				if t >= 1 then
-					connection:Disconnect()
-					piece:Destroy()
-					popPiece()
-					addToTotal(currentRoot, share)
-					addToCounter(share)
-				end
-			end)
-		end)
-	end
-end
-
--- The original effect: puffs splash out of the sheep and curve straight into the character.
-local function collectWool(origin: Vector3, amount: number, color: Color3)
-	local rootPart = getCharacterRoot()
-	if not rootPart then
-		addToCounter(amount)
-		return
-	end
-
-	local landed = 0
-	local released = false
-	local popPuff = newPopSequence(PUFF_POP_GAP_SECONDS)
-
-	for index = 1, PUFF_COUNT do
-		task.delay((index - 1) * PUFF_STAGGER_SECONDS, function()
-			local puff = makeWoolPart("WoolPuff", 0.5 + math.random() * 0.45, color, origin, 3)
-
-			local outward = Vector3.new(math.random() - 0.5, 0, math.random() - 0.5)
-			outward = if outward.Magnitude > 0.05 then outward.Unit else Vector3.xAxis
-			local burstPoint = origin + outward * (2 + math.random() * 2.5) + Vector3.new(0, 1.5 + math.random() * 2.5, 0)
-			local side = Vector3.new(-outward.Z, 0, outward.X) * (math.random() - 0.5) * 6
-
-			local startTime = os.clock()
-			local connection: RBXScriptConnection
-			connection = runService.Heartbeat:Connect(function()
-				local elapsed = os.clock() - startTime
-				if not puff.Parent then
-					connection:Disconnect()
-					return
-				end
-
-				if elapsed < PUFF_BURST_SECONDS then
-					puff.Position = origin:Lerp(burstPoint, easeOut(elapsed / PUFF_BURST_SECONDS))
-					return
-				end
-
-				-- Curve in to the character, following them if they move.
-				local currentRoot = getCharacterRoot() or rootPart
-				local target = currentRoot.Position + Vector3.new(0, 0.5, 0)
-				local control = burstPoint:Lerp(target, 0.5) + Vector3.new(0, 3, 0) + side
-				local t = math.min((elapsed - PUFF_BURST_SECONDS) / PUFF_FLIGHT_SECONDS, 1)
-				puff.Position = bezier(burstPoint, control, target, easeIn(t))
-				puff.Size = Vector3.one * math.max(puff.Size.X * (1 - 0.04 * t), 0.2)
-
-				-- Complete
-				if t >= 1 then
-					connection:Disconnect()
-					puff:Destroy()
-					popPuff()
-					landed += 1
-					if landed >= PUFF_COUNT * 0.6 and not released then
-						released = true
-						addToCounter(amount)
-					end
-				end
-			end)
-		end)
-	end
+	spawnDrops(kind, origin, amount, count, root, pop)
 end
 
 network.waitUntilReadyAsync()
 
-network.connectEvent(network.RemoteEvents.SheepSheared, function(origin: Vector3, amount: number, color: Color3)
-	-- Hold the wool back straight away, before the counter shows it.
-	changeHeld(amount)
+network.connectEvent(network.RemoteEvents.SheepSheared, function(drops: { DropInfo })
+	-- Hold the payout back straight away, before the counters show it. A Luck sheep's wool isn't dropped, so it isn't held.
+	for _, info in drops do
+		if info.wool > 0 and not info.luckDrops then
+			changeHeld("Wool", info.wool)
+		end
+		if info.luck > 0 then
+			changeHeld("Luck", info.luck)
+		end
+	end
+
 	holdToken += 1
 	local token = holdToken
 	task.delay(HOLD_TIMEOUT_SECONDS, function()
 		if token == holdToken then
-			player:SetAttribute("WoolLabelHold", 0) -- something went wrong; show the real number
+			-- Something went wrong; show the real numbers.
+			player:SetAttribute("WoolLabelHold", 0)
+			player:SetAttribute("LuckLabelHold", 0)
 		end
 	end)
 
-	task.wait()
-	if DROP_WOOL_ON_GROUND then
-		dropWool(origin, amount, color)
-	else
-		collectWool(origin, amount, color)
+	local pop = newPopSequence(PUFF_POP_GAP_SECONDS)
+	for _, info in drops do
+		if info.wool > 0 and not info.luckDrops then
+			dropCurrency("Wool", info.position, info.wool, info.fraction, pop)
+		end
+		if info.luck > 0 then
+			dropCurrency("Luck", info.position, info.luck, info.fraction, pop)
+		end
 	end
 end)

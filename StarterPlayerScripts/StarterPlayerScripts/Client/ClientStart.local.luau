@@ -29,15 +29,18 @@ local inventory = player:WaitForChild("Inventory")
 local woolAmountValue = inventory:WaitForChild("Wool") :: IntValue
 local luckAmountValue = inventory:WaitForChild("Luck") :: IntValue
 
--- WoolCollectClient holds back the wool still flying to the counter, so the number climbs as it lands.
+-- WoolCollectClient holds back the wool and Luck still flying to the counters, so the numbers climb as they land.
+local function getShown(value: IntValue, holdAttribute: string): number
+	local held = player:GetAttribute(holdAttribute)
+	return math.max(value.Value - (if type(held) == "number" then held else 0), 0)
+end
+
 local function updateWoolAmountLabel()
-	local held = player:GetAttribute("WoolLabelHold")
-	local shown = math.max(woolAmountValue.Value - (if type(held) == "number" then held else 0), 0)
-	woolAmountLabel.Text = `Wool: {numberFormatter:Format(shown, 1)}`
+	woolAmountLabel.Text = `Wool: {numberFormatter:Format(getShown(woolAmountValue, "WoolLabelHold"), 1)}`
 end
 
 local function updateLuckAmountLabel()
-	luckAmountLabel.Text = `Luck: {numberFormatter:Format(luckAmountValue.Value, 1)}`
+	luckAmountLabel.Text = `Luck: {numberFormatter:Format(getShown(luckAmountValue, "LuckLabelHold"), 1)}`
 end
 
 -- 32932 -> "32,932"
@@ -59,3 +62,4 @@ woolAmountValue.Changed:Connect(updateWoolAmountLabel)
 luckAmountValue.Changed:Connect(updateLuckAmountLabel)
 player:GetAttributeChangedSignal("SheepShearedCount"):Connect(updateSheepCountLabel)
 player:GetAttributeChangedSignal("WoolLabelHold"):Connect(updateWoolAmountLabel)
+player:GetAttributeChangedSignal("LuckLabelHold"):Connect(updateLuckAmountLabel)

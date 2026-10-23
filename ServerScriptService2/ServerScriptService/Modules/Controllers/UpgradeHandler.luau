@@ -289,7 +289,8 @@ function UpgradeHandler.Start()
 
 	network.connectEvent(network.RemoteEvents.PurchaseUpgrade, function(player: Player, id: any)
 		local success, reason = UpgradeHandler.purchase(player, id)
-		network.fireClient(network.RemoteEvents.UpgradeResult, player, id, success, reason)
+		local level = if success then getBoughtLevel(player, id) else nil
+		network.fireClient(network.RemoteEvents.UpgradeResult, player, id, success, reason, level)
 	end, { network.Middleware.RateLimit(PURCHASE_COOLDOWN) })
 
 	network.connectEvent(network.RemoteEvents.RequestUpgradeState, pushState, {

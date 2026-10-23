@@ -13,6 +13,7 @@ export type SheepInfo = {
 	WoolAmount: number,
 	LuckAmount: number, -- Luck the player earns for shearing it bare
 	IndexLuck: number?, -- permanent Luck for claiming it in the Index once; nil = worked out from its odds
+	luckDrops: boolean?, -- shearing it only drops Luck on the ground (its wool still pays out)
 	rarity: string,
 	color: Color3,
 	chance: number, -- base spawn weight (before luck)
@@ -117,6 +118,7 @@ sheepData.Sheep = {
 		WoolAmount = 150,
 		LuckAmount = 125,
 		IndexLuck = 456,
+		luckDrops = true,
 		rarity = "Epic",
 		color = rarityColors.Epic,
 		chance = 2100,
