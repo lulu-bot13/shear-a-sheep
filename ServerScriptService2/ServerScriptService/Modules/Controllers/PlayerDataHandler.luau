@@ -36,6 +36,7 @@ export type Data = {
 	MoreWoolLevel: number,
 	SpeedLevel: number, -- Faster Speed upgrade levels
 	DamageLevel: number, -- Shear Damage upgrade levels
+	RespawnLevel: number, -- Faster Respawn upgrade levels
 	Rebirths: number,
 	ShearId: string,
 	OwnedShears: { string },
@@ -53,6 +54,7 @@ local function getDefaultData(): Data
 		MoreWoolLevel = 0,
 		SpeedLevel = 0,
 		DamageLevel = 0,
+		RespawnLevel = 0,
 		Rebirths = 0,
 		ShearId = ShearData.DefaultShearId,
 		OwnedShears = { ShearData.DefaultShearId },

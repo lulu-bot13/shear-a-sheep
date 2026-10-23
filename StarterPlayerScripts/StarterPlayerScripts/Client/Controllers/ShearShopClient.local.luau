@@ -5,7 +5,7 @@
 	ShearShopUIData gets a card cloned from the Template: name, speed / damage, a spinning
 	3D preview and a purchase button. Buying is validated by the server (ShearShopHandler);
 	the cards update from the player's "ShearId" / "OwnedShears" attributes and wool. A shear that is
-	owned but not equipped shows "Equip" and switches to it when pressed (EquipShear).
+	owned but not equipped switches to it when its BUY button is pressed (EquipShear).
 
 	Performance: the previews are built once (on first open), and ONE render connection
 	exists only while the shop is open. It turns each preview by moving its ViewportFrame
@@ -24,6 +24,7 @@ local tweenService = game:GetService("TweenService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local UIData = require(script.Parent.Parent.Modules.ShearShopUIData)
+local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
 local player = players.LocalPlayer
@@ -33,7 +34,6 @@ local shopGui = playerGui:WaitForChild("Shop") :: ScreenGui
 local mainFrame = shopGui:WaitForChild("Main") :: Frame
 local scrollFrame = mainFrame:WaitForChild("ScrollingFrame") :: ScrollingFrame
 local cardTemplate = scrollFrame:WaitForChild("Template") :: Frame
-local closeButton = mainFrame:WaitForChild("Close") :: TextButton
 local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
 
 --// Configs
@@ -41,7 +41,6 @@ local SHOP_PROMPT_TAG = "ShearShop"
 local CLOSE_DISTANCE_EXTRA = 6 -- studs past the prompt's activation range before the shop closes itself
 local DISTANCE_CHECK_SECONDS = 0.25
 local MESSAGE_SECONDS = 1.3
-local OPEN_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
 local REASON_TEXT = {
 	NoWool = "Not enough wool",
@@ -55,7 +54,7 @@ type Card = {
 	info: any,
 	frame: Frame,
 	purchase: GuiButton,
-	purchaseLabel: TextLabel,
+	priceLabel: TextLabel,
 	viewport: ViewportFrame?,
 	camera: Camera?,
 	center: Vector3,
@@ -71,9 +70,6 @@ local activePrompt: ProximityPrompt? = nil
 local renderConnection: RBXScriptConnection? = nil
 local openToken = 0
 local spinAngle = 0
-
-local openScale = Instance.new("UIScale")
-openScale.Parent = mainFrame
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -122,17 +118,15 @@ local function refreshCard(card: Card)
 	local state = getState(card)
 	local colors = UIData.ButtonColors
 
+	card.priceLabel.Text = UIData.formatWool(card.info.price)
+
 	if state == "equipped" then
-		card.purchaseLabel.Text = "Equipped"
 		card.purchase.BackgroundColor3 = colors.Equipped
 	elseif state == "owned" then
-		card.purchaseLabel.Text = "Equip"
 		card.purchase.BackgroundColor3 = colors.Owned
 	elseif state == "locked" then
-		card.purchaseLabel.Text = `Shear {getSheepSheared()}/{card.info.sheepRequired} Sheep`
 		card.purchase.BackgroundColor3 = colors.Locked
 	else
-		card.purchaseLabel.Text = UIData.formatWool(card.info.price)
 		card.purchase.BackgroundColor3 = if state == "ready" then colors.Ready else colors.Poor
 	end
 
@@ -146,11 +140,11 @@ local function refreshAll()
 	end
 end
 
--- Shows a short message on a card's button, then goes back to its normal text.
+-- Shows a short message in the card's Price, then goes back to the price.
 local function flashMessage(card: Card, text: string)
 	card.messageToken += 1
 	local token = card.messageToken
-	card.purchaseLabel.Text = text
+	card.priceLabel.Text = text
 	shake(card.purchase)
 
 	task.delay(MESSAGE_SECONDS, function()
@@ -206,10 +200,12 @@ local function createCards()
 		local nameLabel = frame:WaitForChild("ShearName") :: TextLabel
 		local buffsLabel = frame:WaitForChild("Buffs") :: TextLabel
 		local purchase = frame:WaitForChild("Purchase") :: GuiButton
+		local priceLabel = frame:WaitForChild("Price") :: TextLabel
 		local purchaseLabel = purchase:WaitForChild("Label") :: TextLabel
 
 		nameLabel.Text = info.displayName
 		buffsLabel.Text = `Damage: {info.damage}\nRange: {info.range} studs`
+		purchaseLabel.Text = "BUY"
 		purchase.AutoButtonColor = true
 		if purchase:IsA("TextButton") then
 			purchase.Text = ""
@@ -219,7 +215,7 @@ local function createCards()
 			info = info,
 			frame = frame,
 			purchase = purchase,
-			purchaseLabel = purchaseLabel,
+			priceLabel = priceLabel,
 			viewport = nil,
 			camera = nil,
 			center = Vector3.zero,
@@ -352,38 +348,37 @@ local function getPromptPosition(prompt: ProximityPrompt): Vector3?
 	return nil
 end
 
+local window = windowsManager.register("ShearShop", {
+	gui = shopGui,
+	frame = mainFrame,
+	onOpen = function()
+		openToken += 1
+		buildPreviews()
+		refreshAll()
+		renderConnection = runService.RenderStepped:Connect(onRender)
+	end,
+	onClose = function()
+		openToken += 1
+		activePrompt = nil
+		if renderConnection then
+			renderConnection:Disconnect()
+			renderConnection = nil
+		end
+	end,
+})
+
 local function closeShop()
-	if not shopGui.Enabled then
-		return
-	end
-
-	openToken += 1
-	activePrompt = nil
-	shopGui.Enabled = false
-
-	if renderConnection then
-		renderConnection:Disconnect()
-		renderConnection = nil
-	end
+	window.close()
 end
 
 local function openShop(prompt: ProximityPrompt)
 	activePrompt = prompt
-	if shopGui.Enabled then
+	if window.isOpen() then
 		return
 	end
 
-	openToken += 1
+	window.open()
 	local token = openToken
-
-	buildPreviews()
-	refreshAll()
-
-	openScale.Scale = 0.85
-	shopGui.Enabled = true
-	tweenService:Create(openScale, OPEN_TWEEN, { Scale = 1 }):Play()
-
-	renderConnection = runService.RenderStepped:Connect(onRender)
 
 	-- Walk away from the NPC and the shop closes itself.
 	task.spawn(function()
@@ -412,7 +407,7 @@ local function connectPrompt(instance: Instance)
 
 	instance.Triggered:Connect(function(triggeringPlayer: Player)
 		if triggeringPlayer == player then
-			if shopGui.Enabled then
+			if window.isOpen() then
 				closeShop()
 			else
 				openShop(instance)
@@ -423,23 +418,17 @@ end
 
 --// Setup ---------------------------------------------------------------------------
 
--- Kept across respawns: a reset would swap in a fresh copy and leave this script opening the destroyed one.
-shopGui.ResetOnSpawn = false
-mainFrame.Visible = true
 createCards()
-shopGui.Enabled = false
-
-closeButton.MouseButton1Click:Connect(closeShop)
 
 wool.Changed:Connect(function()
-	if shopGui.Enabled then
+	if window.isOpen() then
 		refreshAll()
 	end
 end)
 
 for _, attribute in { "ShearId", "OwnedShears", "SheepShearedCount" } do
 	player:GetAttributeChangedSignal(attribute):Connect(function()
-		if shopGui.Enabled then
+		if window.isOpen() then
 			refreshAll()
 		end
 	end)

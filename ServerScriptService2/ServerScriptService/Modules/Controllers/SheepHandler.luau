@@ -23,6 +23,7 @@ local WoolData = require(replicatedStorage.Shared.Constants.WoolData)
 local sheepModels = replicatedStorage.Assets.Models.Sheeps
 local sheepHudTemplate = replicatedStorage.Assets.UI.SheepHUD :: BillboardGui
 local sheepHudNameLabel = sheepHudTemplate:FindFirstChild("NameLabel", true) :: TextLabel? -- the health bar copies its font
+local walkAnimation = replicatedStorage.Assets.Animations.SheepWalking :: Animation
 
 --// Configs
 local SHEEPS_FOLDER_NAME = "Sheeps" -- lives inside each plot
@@ -36,6 +37,7 @@ local HEALTH_HUD_NAME = "HealthHUD"
 local HEALTH_HUD_SIZE = Vector2.new(4.5, 1.3) -- studs
 local HEALTH_FULL_COLOR = Color3.fromRGB(110, 220, 120)
 local HEALTH_EMPTY_COLOR = Color3.fromRGB(230, 90, 80)
+local WALK_MIN_SPEED = 0.1 -- below this the sheep counts as standing still
 
 --// Object pool keys
 local SHEEP_POOL = "SheepModel" -- keyed by sheep type name, since meshes differ per type
@@ -239,6 +241,7 @@ local function resetSheepForPool(sheep: Instance)
 	end
 
 	sheep:SetAttribute(OWNER_ATTRIBUTE, nil)
+	sheep:SetAttribute("Grazing", nil)
 
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
 	if humanoid then
@@ -302,8 +305,28 @@ end
 
 --// Building a sheep -------------------------------------------------------------------
 
+-- Loops SheepWalking while the sheep moves. The track loads on its first move, once the model is in the game.
+local function bindWalkAnimation(humanoid: Humanoid)
+	local track: AnimationTrack? = nil
+	humanoid.Running:Connect(function(speed: number)
+		if not track then
+			local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator")
+			animator.Parent = humanoid
+			track = animator:LoadAnimation(walkAnimation)
+		end
+		local walkTrack = track :: AnimationTrack
+		walkTrack.Looped = true
+
+		if speed > WALK_MIN_SPEED and not walkTrack.IsPlaying then
+			walkTrack:Play()
+		elseif speed <= WALK_MIN_SPEED and walkTrack.IsPlaying then
+			walkTrack:Stop()
+		end
+	end)
+end
+
 --[[
-	The collision group and health bar are set up once per model; pooled models keep them.
+	The collision group, health bar and walk animation are set up once per model; pooled models keep them.
 	Only the invisible root collides: the camera pops in front of any opaque collidable part, and players stand
 	inside the sheep while shearing (the groups don't collide), so collidable body parts yanked the camera around.
 ]]
@@ -315,6 +338,7 @@ local function prepareNewModel(sheepModel: Model, root: BasePart)
 		end
 	end
 	createHealthHud(root)
+	bindWalkAnimation(sheepModel:FindFirstChildOfClass("Humanoid") :: Humanoid)
 end
 
 local function acquireModel(sheepType: string): Model?

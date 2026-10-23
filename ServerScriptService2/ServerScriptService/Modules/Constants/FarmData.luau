@@ -30,6 +30,12 @@ farmData.Wander = {
 	EdgePadding = 2, -- studs kept clear of the SheepArea's edges
 	TickSeconds = 0.25, -- how often the wander loop checks every sheep
 	ShearHoldSeconds = 3, -- a sheared sheep stands still this long after the last snip before wandering again
+
+	-- Grazing: after some walks the sheep bends down and eats grass (animated by SheepGrazeClient).
+	GrazeChance = 0.6, -- chance a walk ends in grazing
+	MinGrazeSeconds = 3, -- how long it keeps its head down
+	MaxGrazeSeconds = 7,
+	GrazeSettleSeconds = 0.3, -- pause after arriving before the head goes down
 }
 
 --// Plot instance names -------------------------------------------------------------------

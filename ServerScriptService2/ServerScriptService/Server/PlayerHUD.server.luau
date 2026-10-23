@@ -17,7 +17,7 @@ local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 local VIP_GAMEPASS_ID = 0 -- TODO: set to the VIP game pass id
 local HUD_NAME = "PlayerHUD"
 local VERIFIED_ICON = utf8.char(0xE000) -- Roblox's built-in verified badge glyph
-local PREMIUM_ICON = utf8.char(0xE001) -- Roblox's built-in Premium glyph
+local PLUS_ICON = utf8.char(0xE003) -- Roblox's built-in Roblox Plus glyph
 local VIP_COLOR = "#FFD54A"
 local DEBUG = false -- TODO: set to false once the HUD shows up
 
@@ -56,7 +56,7 @@ local function getDisplayNameText(player: Player): string
 		text ..= ` {VERIFIED_ICON}`
 	end
 	if player.MembershipType == Enum.MembershipType.Premium then
-		text ..= ` {PREMIUM_ICON}`
+		text ..= ` {PLUS_ICON}`
 	end
 	return text
 end
@@ -103,15 +103,18 @@ local function refreshHud(player: Player)
 		warn(`[PlayerHUD] no BestFind TextLabel in the HUD`)
 	end
 
-	-- Optional: only templates with a "Title" label show the TitleHandler title.
 	local title = hud:FindFirstChild("Title")
 	local titleName = player:GetAttribute("Title")
 	local titleColor = player:GetAttribute("TitleColor")
 	if title and title:IsA("TextLabel") then
+		title.Visible = true
 		title.Text = if type(titleName) == "string" then titleName else ""
 		if typeof(titleColor) == "Color3" then
 			title.TextColor3 = titleColor
 		end
+		debugLog(`{player.Name} Title = "{title.Text}"`)
+	else
+		warn(`[PlayerHUD] no Title TextLabel in the HUD`)
 	end
 end
 

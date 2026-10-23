@@ -8,7 +8,7 @@
 local players = game:GetService("Players")
 local physicsService = game:GetService("PhysicsService")
 
--- Sheep stay collidable with the ground but not with players, so they never block or bump them.
+-- Sheep stay collidable with the ground but not with players or each other, so none end up standing on another.
 local function setupCollisionGroups()
 	pcall(function()
 		physicsService:RegisterCollisionGroup("Sheep")
@@ -17,6 +17,7 @@ local function setupCollisionGroups()
 		physicsService:RegisterCollisionGroup("Players")
 	end)
 	physicsService:CollisionGroupSetCollidable("Sheep", "Players", false)
+	physicsService:CollisionGroupSetCollidable("Sheep", "Sheep", false)
 end
 
 setupCollisionGroups()

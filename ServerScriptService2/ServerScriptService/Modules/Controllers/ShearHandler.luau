@@ -115,25 +115,20 @@ local function finishSheep(player: Player, sheep: Model, sheepId: number, origin
 	network.fireClient(network.RemoteEvents.SheepSheared, player, origin, wool, color)
 end
 
-local function onShearSwing(player: Player)
-	local now = os.clock()
-	if now - (lastSwing[player] or 0) < ShearData.SwingCooldown * COOLDOWN_LENIENCY then
+-- Shears every one of the player's sheep within the equipped shear's range (times `rangeMultiplier`) once.
+function ShearHandler.shearAround(player: Player, rangeMultiplier: number?, damageMultiplier: number?)
+	local playerRoot = getRootPart(player.Character)
+	if not playerRoot then
 		return
 	end
-
-	local character = player.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local playerRoot = getRootPart(character)
-	if not humanoid or humanoid.Health <= 0 or not playerRoot or not ShearShopHandler.getHeldTool(player) then
-		return
-	end
-	lastSwing[player] = now
 
 	local shear = ShearShopHandler.getShear(player)
 	local shearDamage = UpgradeData.getShearDamage(shear.damage, getNumber(player, "DamageLevel"))
+	shearDamage = math.max(math.floor(shearDamage * (damageMultiplier or 1)), 1)
+	local range = shear.range * (rangeMultiplier or 1) + ShearData.RangeTolerance
 	local hits: { Hit } = {}
 
-	for _, sheep in getSheepInRange(player, playerRoot.Position, shear.range + ShearData.RangeTolerance) do
+	for _, sheep in getSheepInRange(player, playerRoot.Position, range) do
 		local sheepId = sheep:GetAttribute("id")
 		local health = sheep:GetAttribute("ShearHealth")
 		local root = getRootPart(sheep)
@@ -163,6 +158,22 @@ local function onShearSwing(player: Player)
 		ShearShopHandler.registerSnip(player)
 		network.fireClient(network.RemoteEvents.ShearHit, player, hits)
 	end
+end
+
+local function onShearSwing(player: Player)
+	local now = os.clock()
+	if now - (lastSwing[player] or 0) < ShearData.SwingCooldown * COOLDOWN_LENIENCY then
+		return
+	end
+
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 or not ShearShopHandler.getHeldTool(player) then
+		return
+	end
+	lastSwing[player] = now
+
+	ShearHandler.shearAround(player)
 end
 
 --// Lifecycle ---------------------------------------------------------------------

@@ -10,6 +10,9 @@ local players = game:GetService("Players")
 local moduleLoader = require(replicatedStorage:WaitForChild("Source"):WaitForChild("ModuleLoader"))
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
+local backgroundMusic = require(script.Parent.Modules.BackgroundMusic)
+
+backgroundMusic.start()
 
 -- Started first: the wool and luck values below only appear once the player's save has loaded.
 network.startClientAsync()
@@ -21,7 +24,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 local mainGui = playerGui:WaitForChild("Main")
 local woolAmountLabel = mainGui:WaitForChild("WoolAmount") :: TextLabel
 local luckAmountLabel = mainGui:WaitForChild("LuckAmount") :: TextLabel
-local sheepCountLabel = mainGui:WaitForChild("SheepCount") :: TextLabel
+local sheepCountLabel = mainGui:WaitForChild("SheepCount"):WaitForChild("Count") :: TextLabel
 local inventory = player:WaitForChild("Inventory")
 local woolAmountValue = inventory:WaitForChild("Wool") :: IntValue
 local luckAmountValue = inventory:WaitForChild("Luck") :: IntValue
@@ -45,7 +48,7 @@ end
 
 local function updateSheepCountLabel()
 	local count = player:GetAttribute("SheepShearedCount")
-	sheepCountLabel.Text = `Sheep Sheared: {formatWithCommas(if type(count) == "number" then count else 0)}`
+	sheepCountLabel.Text = formatWithCommas(if type(count) == "number" then count else 0)
 end
 
 updateWoolAmountLabel()

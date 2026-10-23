@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Wool upgrades: +1 sheep capacity, More Wool, Faster Speed and Shear Damage levels. Bought from the UpgradeShop UI (opened at the
+	Wool upgrades: +1 sheep capacity, More Wool, Faster Speed, Shear Damage and Faster Respawn levels. Bought from the UpgradeShop UI (opened at the
 	plot's UpgradePlotShack or the HUD button) through the PurchaseUpgrade remote; each card's state is pushed with UpgradeState.
 
 	Location: ServerScriptService.Modules.Controllers.UpgradeHandler
@@ -18,6 +18,7 @@ local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
+local PlotHandler = require(script.Parent.PlotHandler)
 
 --// Instances
 local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
@@ -25,7 +26,7 @@ local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 --// Configs
 local PURCHASE_COOLDOWN = 0.25
 local STATE_REQUEST_COOLDOWN = 0.5
-local STATE_KEYS = { MaxSheep = true, MoreWoolLevel = true, SpeedLevel = true, DamageLevel = true, ShearId = true } -- data the cards show
+local STATE_KEYS = { MaxSheep = true, MoreWoolLevel = true, SpeedLevel = true, DamageLevel = true, RespawnLevel = true, ShearId = true } -- data the cards show
 
 -- One card in the UpgradeShop. `after` and `cost` are nil once the upgrade is maxed.
 export type CardState = {
@@ -57,6 +58,8 @@ local function getBoughtLevel(player: Player, id: string): number
 		return getNumber(player, "SpeedLevel")
 	elseif id == "ShearDamage" then
 		return getNumber(player, "DamageLevel")
+	elseif id == "FasterRespawn" then
+		return getNumber(player, "RespawnLevel")
 	end
 	return 0
 end
@@ -81,13 +84,16 @@ local function getShearBaseDamage(player: Player): number
 	return shear.damage
 end
 
--- Sets the character's walk speed from the player's Faster Speed level.
-local function applyWalkSpeed(player: Player)
+-- Sets the character's walk speed from the player's Faster Speed level, times any active ability's boost.
+function UpgradeHandler.applyWalkSpeed(player: Player)
 	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
-		humanoid.WalkSpeed = UpgradeData.getWalkSpeed(getNumber(player, "SpeedLevel"))
+		local boost = player:GetAttribute("AbilitySpeedMultiplier")
+		humanoid.WalkSpeed = UpgradeData.getWalkSpeed(getNumber(player, "SpeedLevel")) * (if type(boost) == "number" then boost else 1)
 	end
 end
+
+local applyWalkSpeed = UpgradeHandler.applyWalkSpeed
 
 local function applyUpgrade(player: Player, id: string, level: number)
 	if id == "Capacity" then
@@ -98,10 +104,16 @@ local function applyUpgrade(player: Player, id: string, level: number)
 		PlayerDataHandler.set(player, "SpeedLevel", level + 1)
 	elseif id == "ShearDamage" then
 		PlayerDataHandler.set(player, "DamageLevel", level + 1)
+	elseif id == "FasterRespawn" then
+		PlayerDataHandler.set(player, "RespawnLevel", level + 1)
 	end
 end
 
 --// Card state ----------------------------------------------------------------------------
+
+local function formatSeconds(value: number): string
+	return string.format("%.1fs", value)
+end
 
 local function formatMultiplier(value: number): string
 	return "x" .. (string.format("%.2f", value):gsub("%.?0+$", ""))
@@ -121,6 +133,10 @@ local function getValues(player: Player, id: string, level: number?): (string, s
 		local baseDamage = getShearBaseDamage(player)
 		return tostring(UpgradeData.getShearDamage(baseDamage, current)),
 			tostring(UpgradeData.getShearDamage(baseDamage, current + 1))
+	elseif id == "FasterRespawn" then
+		local current = getNumber(player, "RespawnLevel")
+		return formatSeconds(UpgradeData.getSpawnInterval(FarmData.SpawnInterval, current)),
+			formatSeconds(UpgradeData.getSpawnInterval(FarmData.SpawnInterval, current + 1))
 	else
 		local current = getNumber(player, "SpeedLevel")
 		return tostring(UpgradeData.getWalkSpeed(current)), tostring(UpgradeData.getWalkSpeed(current + 1))
@@ -186,6 +202,48 @@ function UpgradeHandler.purchase(player: Player, id: any): (boolean, string?)
 	return true, nil
 end
 
+--// Seller ------------------------------------------------------------------------
+
+local defaultLooks: { [Humanoid]: HumanoidDescription } = {} -- each seller's look from the place, put back when its plot frees up
+
+local function getSeller(plot: Instance): Humanoid?
+	local shack = plot:FindFirstChild(UpgradeData.ShackName)
+	local seller = shack and shack:FindFirstChild(UpgradeData.SellerName)
+	return seller and seller:FindFirstChildOfClass("Humanoid")
+end
+
+local function applyLook(seller: Humanoid, description: HumanoidDescription)
+	local success, err = pcall(seller.ApplyDescription, seller, description)
+	if not success then
+		warn(`UpgradeHandler: couldn't dress the seller: {err}`)
+	end
+end
+
+-- Dresses the plot's seller as its owner.
+local function dressSeller(player: Player, plot: Instance)
+	local seller = getSeller(plot)
+	if not seller then
+		return
+	end
+
+	local success, description = pcall(players.GetHumanoidDescriptionFromUserId, players, player.UserId)
+	if not success then
+		warn(`UpgradeHandler: no avatar for {player.Name}: {description}`)
+		return
+	end
+	if plot:GetAttribute("Owner") == player.UserId then -- they may have left while it loaded
+		applyLook(seller, description)
+	end
+end
+
+local function undressSeller(_player: Player, plot: Instance)
+	local seller = getSeller(plot)
+	local default = seller and defaultLooks[seller]
+	if seller and default then
+		applyLook(seller, default)
+	end
+end
+
 --// Lifecycle ---------------------------------------------------------------------
 
 local function onPlayerAdded(player: Player)
@@ -196,7 +254,8 @@ local function onPlayerAdded(player: Player)
 	applyWalkSpeed(player)
 end
 
--- Tags each plot's shack prompt so the client knows it opens the UpgradeShop (plots are built from TemplatePlot by now).
+-- Tags each plot's shack prompt so the client knows it opens the UpgradeShop (plots are built from TemplatePlot by now),
+-- and dresses each shack's seller as the plot's owner.
 function UpgradeHandler.Setup()
 	for _, plot in plotsFolder:GetChildren() do
 		local shack = plot:FindFirstChild(UpgradeData.ShackName)
@@ -205,6 +264,22 @@ function UpgradeHandler.Setup()
 			collectionService:AddTag(prompt, UpgradeData.ShopPromptTag)
 		elseif plot:IsA("Folder") then
 			warn(`UpgradeHandler: {plot.Name} has no ProximityPrompt under {UpgradeData.ShackName}.`)
+		end
+
+		local seller = getSeller(plot)
+		if seller then
+			defaultLooks[seller] = seller:GetAppliedDescription()
+		end
+	end
+
+	PlotHandler.PlotAssigned:Connect(dressSeller)
+	PlotHandler.PlotReleased:Connect(undressSeller)
+
+	-- Plots handed out before this ran.
+	for _, player in players:GetPlayers() do
+		local plot = PlotHandler.getPlayerPlot(player)
+		if plot then
+			task.spawn(dressSeller, player, plot)
 		end
 	end
 end

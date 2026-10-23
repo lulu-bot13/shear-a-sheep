@@ -44,7 +44,7 @@ sheepData.Sheep = {
 		color = rarityColors.Common,
 		chance = 500000,
 	},
-	GreySheep = {
+	Grey = {
 		id = "Grey_Sheep",
 		name = "Grey Sheep",
 		ShearHealth = 105,
@@ -55,7 +55,7 @@ sheepData.Sheep = {
 		color = rarityColors.Common,
 		chance = 250000,
 	},
-	BrownSheep = {
+	Brown = {
 		id = "Brown_Sheep",
 		name = "Brown Sheep",
 		ShearHealth = 115,
@@ -66,7 +66,7 @@ sheepData.Sheep = {
 		color = rarityColors.Uncommon,
 		chance = 150000,
 	},
-	BlackSheep = {
+	Black = {
 		id = "Black_Sheep",
 		name = "Black Sheep",
 		ShearHealth = 130,
@@ -77,7 +77,7 @@ sheepData.Sheep = {
 		color = rarityColors.Uncommon,
 		chance = 60000,
 	},
-	FluffySheep = {
+	Fluffy = {
 		id = "Fluffy_Sheep",
 		name = "Fluffy Sheep",
 		ShearHealth = 145,
@@ -88,7 +88,7 @@ sheepData.Sheep = {
 		color = rarityColors.Rare,
 		chance = 30000,
 	},
-	GoldenSheep = {
+	Golden = {
 		id = "Golden_Sheep",
 		name = "Golden Sheep",
 		ShearHealth = 175,
@@ -99,7 +99,7 @@ sheepData.Sheep = {
 		color = rarityColors.Epic,
 		chance = 7500,
 	},
-	EmeraldSheep = {
+	Emerald = {
 		id = "Emerald_Sheep",
 		name = "Emerald Sheep",
 		ShearHealth = 190,
@@ -110,7 +110,18 @@ sheepData.Sheep = {
 		color = rarityColors.Epic,
 		chance = 2000,
 	},
-	SpottedSheep = {
+	Lucky = {
+		id = "Luck_Sheep",
+		name = "Luck Sheep",
+		ShearHealth = 200,
+		WoolAmount = 150,
+		LuckAmount = 125,
+		IndexLuck = 456,
+		rarity = "Epic",
+		color = rarityColors.Epic,
+		chance = 2100,
+	},
+	Spotted = {
 		id = "Spotted_Sheep",
 		name = "Spotted Sheep",
 		ShearHealth = 215,
@@ -121,7 +132,7 @@ sheepData.Sheep = {
 		color = rarityColors.Legendary,
 		chance = 400,
 	},
-	DiamondSheep = {
+	Diamond = {
 		id = "Diamond_Sheep",
 		name = "Diamond Sheep",
 		ShearHealth = 250,
@@ -132,6 +143,67 @@ sheepData.Sheep = {
 		color = rarityColors.Mythic,
 		chance = 100,
 	},
+	Pumpkin = {
+		id = "Pumpkin_Sheep",
+		name = "Pumpkin Sheep",
+		ShearHealth = 150,
+		WoolAmount = 40,
+		LuckAmount = 6,
+		rarity = "Rare",
+		color = rarityColors.Rare,
+		chance = 25000,
+	},
+	Ice = {
+		id = "Ice_Sheep",
+		name = "Ice Sheep",
+		ShearHealth = 160,
+		WoolAmount = 42,
+		LuckAmount = 7,
+		rarity = "Rare",
+		color = rarityColors.Rare,
+		chance = 20000,
+	},
+	Mummy = {
+		id = "Mummy_Sheep",
+		name = "Mummy Sheep",
+		ShearHealth = 185,
+		WoolAmount = 55,
+		LuckAmount = 11,
+		rarity = "Epic",
+		color = rarityColors.Epic,
+		chance = 5000,
+	},
+	Ruby = {
+		id = "Ruby_Sheep",
+		name = "Ruby Sheep",
+		ShearHealth = 230,
+		WoolAmount = 85,
+		LuckAmount = 35,
+		rarity = "Legendary",
+		color = rarityColors.Legendary,
+		chance = 300,
+	},
+	Vampire = {
+		id = "Vampire_Sheep",
+		name = "Vampire Sheep",
+		ShearHealth = 240,
+		WoolAmount = 95,
+		LuckAmount = 45,
+		rarity = "Legendary",
+		color = rarityColors.Legendary,
+		chance = 200,
+	},
+	Obsidian = {
+		id = "Obsidian_Sheep",
+		name = "Obsidian Sheep",
+		ShearHealth = 270,
+		WoolAmount = 120,
+		LuckAmount = 80,
+		rarity = "Mythic",
+		color = rarityColors.Mythic,
+		chance = 60,
+	},
+
 } :: { [string]: SheepInfo }
 
 --[[

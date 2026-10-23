@@ -61,6 +61,7 @@ local function resetProgress(player: Player, rebirths: number)
 	PlayerDataHandler.set(player, "MoreWoolLevel", 0)
 	PlayerDataHandler.set(player, "SpeedLevel", 0)
 	PlayerDataHandler.set(player, "DamageLevel", 0)
+	PlayerDataHandler.set(player, "RespawnLevel", 0)
 	SheepSpawnHandler.resetFarm(player)
 end
 

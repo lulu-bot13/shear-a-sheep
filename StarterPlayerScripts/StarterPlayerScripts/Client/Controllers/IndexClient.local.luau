@@ -1,6 +1,6 @@
 --[[
 	The sheep Index (StarterGui.Index): the HUD's Index button opens it and every sheep type gets a card cloned from the Template.
-	Selecting a card fills the InfoFrame and RewardsFrame; found sheep are claimed there (or all at once); IndexHandler decides everything.
+	Selecting a card spins its sheep and fills the InfoFrame and RewardsFrame; found sheep are claimed there; IndexHandler decides everything.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.IndexClient
 ]]--
@@ -8,10 +8,13 @@
 --// Services
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
+local runService = game:GetService("RunService")
 local tweenService = game:GetService("TweenService")
+local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
 local player = players.LocalPlayer
@@ -24,12 +27,12 @@ local indexGui = playerGui:WaitForChild("Index") :: ScreenGui
 local mainFrame = indexGui:WaitForChild("Main") :: GuiObject
 local cardTemplate = mainFrame:FindFirstChild("Template", true) :: GuiObject
 local cardContainer = cardTemplate.Parent :: GuiObject
-local closeButton = (mainFrame:FindFirstChild("Exit", true) or mainFrame:FindFirstChild("Close", true)) :: GuiButton?
 
 -- The selected sheep's details.
 local infoFrame = mainFrame:WaitForChild("InfoFrame")
 local infoName = infoFrame:WaitForChild("SheepName") :: TextLabel
 local infoRarity = infoFrame:WaitForChild("Rarity") :: TextLabel
+local infoChances = infoFrame:WaitForChild("Chances") :: TextLabel
 local infoViewport = infoFrame:WaitForChild("ViewportFrame") :: ViewportFrame
 
 local rewardsFrame = mainFrame:FindFirstChild("RewardsFrame", true) :: GuiObject
@@ -41,17 +44,20 @@ local claimAllButton = claimAllFrame:WaitForChild("Claim") :: TextButton
 local claimAllAmount = claimAllFrame:WaitForChild("RewardAmount") :: TextLabel
 local claimAllMultiplier = claimAllFrame:WaitForChild("Multiplier") :: TextLabel
 
+--// Sounds
+local cashInSound = soundService:WaitForChild("UISounds"):FindFirstChild("Cash")
+
 --// Configs
-local OPEN_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-local PULSE_TWEEN = TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
 local CLAIM_COLOR = Color3.fromRGB(255, 200, 40)
 local CLAIMED_COLOR = Color3.fromRGB(90, 90, 90) -- "Claimed" text and the unusable Claim button
 local LOCKED_TINT = Color3.new(0, 0, 0) -- undiscovered sheep show as a silhouette
 local LOCKED_TEXT = "???"
 local ALERT_COLOR = Color3.fromRGB(235, 50, 50)
-local CAMERA_YAW = math.rad(35)
+local MODEL_FRONT_YAW = 0 -- turn this if a sheep model's face isn't on its front (-Z) side
 local CAMERA_PITCH = math.rad(15)
 local CAMERA_FOV = 40
+local SPIN_SPEED = math.rad(60) -- per second, for the selected sheep
+local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so card sizes aren't measured
 
 type Card = {
 	id: string,
@@ -59,24 +65,32 @@ type Card = {
 	nameLabel: TextLabel,
 	rarityLabel: TextLabel,
 	viewport: ViewportFrame?,
-	stroke: UIStroke?,
-	strokeColor: Color3,
-	strokeThickness: number,
-	pulse: Tween?,
 	entry: any,
+}
+
+type Preview = {
+	model: Model,
+	center: Vector3, -- spun around (the model's pivot sits at the origin)
 }
 
 --// State
 local cards: { [string]: Card } = {}
 local entries: { any } = {} -- the last IndexState from the server
 local selectedId: string? = nil
+local previews: { [ViewportFrame]: Preview } = {}
+local spinConnection: RBXScriptConnection? = nil
+local spinAngle = 0
 
 local rewardAmountColor = rewardAmount.TextColor3
 local claimButtonText = claimButton.Text
 local claimButtonColor = claimButton.BackgroundColor3
 
-local openScale = Instance.new("UIScale")
-openScale.Parent = mainFrame
+-- Scale on Y inside a ScrollingFrame is relative to the canvas, so these are turned into pixels of the visible window.
+local layout = cardContainer:FindFirstChildWhichIsA("UIGridStyleLayout")
+local cardSize = cardTemplate.Size
+local listPadding = if layout and layout:IsA("UIListLayout") then layout.Padding else nil
+local gridCellSize = if layout and layout:IsA("UIGridLayout") then layout.CellSize else nil
+local gridCellPadding = if layout and layout:IsA("UIGridLayout") then layout.CellPadding else nil
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -135,29 +149,76 @@ local function pop(gui: GuiObject)
 	tweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 end
 
--- Sizes a scrolling container's canvas to fit its layout plus padding.
-local function updateCanvasSize()
-	if not cardContainer:IsA("ScrollingFrame") then
+local function playCashSound()
+	if cashInSound and cashInSound:IsA("Sound") then
+		cashInSound:Play()
+	end
+end
+
+--// Card sizing -------------------------------------------------------------------
+
+local function toWindowPixels(size: UDim, windowHeight: number): UDim
+	return UDim.new(0, math.floor(size.Offset + size.Scale * windowHeight))
+end
+
+-- The card window's visible height in Offset pixels; nil when it doesn't scroll or is shrunk by the close tween.
+local function getWindowHeight(): (number?, number)
+	local factor = windowsManager.getScaleFactor(cardContainer)
+	if not cardContainer:IsA("ScrollingFrame") or factor <= MIN_SCALE_FACTOR then
+		return nil, factor
+	end
+	return cardContainer.AbsoluteWindowSize.Y / factor, factor
+end
+
+-- Sizes the cards (and the layout's gaps) from the window height so a taller canvas can't stretch them thin.
+local function updateCardSizes()
+	local windowHeight = getWindowHeight()
+	if not windowHeight then
 		return
 	end
-	local layout = cardContainer:FindFirstChildWhichIsA("UIGridStyleLayout")
-	if not layout then
+
+	if gridCellSize and gridCellPadding then
+		local grid = layout :: UIGridLayout
+		grid.CellSize = UDim2.new(gridCellSize.X, toWindowPixels(gridCellSize.Y, windowHeight))
+		grid.CellPadding = UDim2.new(gridCellPadding.X, toWindowPixels(gridCellPadding.Y, windowHeight))
+		return
+	end
+
+	local height = toWindowPixels(cardSize.Y, windowHeight)
+	for _, card in cards do
+		card.frame.Size = UDim2.new(cardSize.X, height)
+	end
+	if listPadding then
+		(layout :: UIListLayout).Padding = toWindowPixels(listPadding, windowHeight)
+	end
+end
+
+-- Only when the cards don't fit does the canvas get taller (in pixels) so the player can scroll to the rest.
+local function updateCanvasSize()
+	local windowHeight, factor = getWindowHeight()
+	if not windowHeight or not layout then
 		return
 	end
 
 	local padding = cardContainer:FindFirstChildOfClass("UIPadding")
 	local paddingY = 0
 	if padding then
-		local height = cardContainer.AbsoluteSize.Y
-		paddingY = padding.PaddingTop.Offset + padding.PaddingTop.Scale * height
-			+ padding.PaddingBottom.Offset + padding.PaddingBottom.Scale * height
+		paddingY = padding.PaddingTop.Offset + padding.PaddingTop.Scale * windowHeight
+			+ padding.PaddingBottom.Offset + padding.PaddingBottom.Scale * windowHeight
 	end
-	cardContainer.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + paddingY)
+
+	local needed = math.ceil(layout.AbsoluteContentSize.Y / factor + paddingY)
+	local canvasSize = UDim2.fromOffset(0, if needed > windowHeight then needed else 0)
+	local scrollingFrame = cardContainer :: ScrollingFrame
+	if scrollingFrame.CanvasSize ~= canvasSize then
+		scrollingFrame.CanvasSize = canvasSize
+	end
 end
 
 --// Previews ----------------------------------------------------------------------
 
 local function clearPreview(viewport: ViewportFrame)
+	previews[viewport] = nil
 	for _, child in viewport:GetChildren() do
 		if child:IsA("Model") or child:IsA("Camera") then
 			child:Destroy()
@@ -165,7 +226,16 @@ local function clearPreview(viewport: ViewportFrame)
 	end
 end
 
--- Puts a still, scriptless copy of the sheep model in a ViewportFrame, framed from the front-side.
+-- Turns a preview's sheep round its middle; 0 faces the camera.
+local function setPreviewAngle(viewport: ViewportFrame, angle: number)
+	local preview = previews[viewport]
+	if preview then
+		local center = preview.center
+		preview.model:PivotTo(CFrame.new(center) * CFrame.Angles(0, angle, 0) * CFrame.new(-center))
+	end
+end
+
+-- Puts a scriptless copy of the sheep model in a ViewportFrame, facing the camera.
 local function buildPreview(viewport: ViewportFrame, sheepType: string)
 	clearPreview(viewport)
 
@@ -190,11 +260,43 @@ local function buildPreview(viewport: ViewportFrame, sheepType: string)
 	camera.Parent = viewport
 	viewport.CurrentCamera = camera
 
+	-- The camera sits off the model's front (-Z), a little above, looking back at it.
 	local boxCFrame, boxSize = model:GetBoundingBox()
 	local center = boxCFrame.Position
 	local distance = (boxSize.Magnitude * 0.5) / math.tan(math.rad(CAMERA_FOV / 2))
-	local direction = (CFrame.Angles(0, CAMERA_YAW, 0) * CFrame.Angles(-CAMERA_PITCH, 0, 0)).LookVector
+	local direction = (CFrame.Angles(0, math.pi + MODEL_FRONT_YAW, 0) * CFrame.Angles(-CAMERA_PITCH, 0, 0)).LookVector
 	camera.CFrame = CFrame.lookAt(center - direction * distance, center)
+
+	previews[viewport] = { model = model, center = center }
+end
+
+--// Spinning the selected sheep -------------------------------------------------------
+
+local function onSpin(deltaTime: number)
+	local card = if selectedId then cards[selectedId] else nil
+	if not card then
+		return
+	end
+
+	spinAngle = (spinAngle + deltaTime * SPIN_SPEED) % (math.pi * 2)
+	setPreviewAngle(infoViewport, spinAngle)
+	if card.viewport then
+		setPreviewAngle(card.viewport, spinAngle)
+	end
+end
+
+-- Only runs while the Index is open with a sheep selected.
+local function startSpin()
+	if not spinConnection and selectedId then
+		spinConnection = runService.RenderStepped:Connect(onSpin)
+	end
+end
+
+local function stopSpin()
+	if spinConnection then
+		spinConnection:Disconnect()
+		spinConnection = nil
+	end
 end
 
 --// Info panel --------------------------------------------------------------------
@@ -202,6 +304,7 @@ end
 local function setInfoVisible(visible: boolean)
 	infoName.Visible = visible
 	infoRarity.Visible = visible
+	infoChances.Visible = visible
 	infoViewport.Visible = visible
 	rewardsFrame.Visible = visible
 end
@@ -222,6 +325,7 @@ local function renderInfo()
 	infoName.Text = if locked then LOCKED_TEXT else entry.name
 	infoRarity.Text = if locked then LOCKED_TEXT else entry.rarity
 	infoRarity.TextColor3 = if locked then CLAIMED_COLOR else entry.color
+	infoChances.Text = `1 in {formatWithCommas(entry.odds)}`
 	infoViewport.ImageColor3 = if locked then LOCKED_TINT else Color3.new(1, 1, 1)
 
 	if status == "Claimed" then
@@ -238,12 +342,20 @@ local function renderInfo()
 	claimButton.Text = if status == "Claimed" then "Claimed" elseif status == "Locked" then "Locked" else claimButtonText
 end
 
+-- The newly selected sheep starts spinning from facing the camera; the one it replaces turns back to face it.
 local function selectCard(card: Card)
 	if selectedId ~= card.id then
+		local previous = if selectedId then cards[selectedId] else nil
+		if previous and previous.viewport then
+			setPreviewAngle(previous.viewport, 0)
+		end
+
 		selectedId = card.id
+		spinAngle = 0
 		buildPreview(infoViewport, card.id)
 	end
 	renderInfo()
+	startSpin()
 end
 
 -- Shows ClaimAllFrame while more than one sheep is waiting to be claimed.
@@ -269,11 +381,6 @@ local function refreshCard(card: Card)
 	local entry = card.entry
 	local status = entry.status
 
-	if card.pulse then
-		card.pulse:Cancel()
-		card.pulse = nil
-	end
-
 	local locked = status == "Locked"
 	card.nameLabel.Text = if locked then LOCKED_TEXT else entry.name
 	if card.viewport then
@@ -290,20 +397,6 @@ local function refreshCard(card: Card)
 		card.rarityLabel.Text = entry.rarity
 		card.rarityLabel.TextColor3 = entry.color
 	end
-
-	local stroke = card.stroke
-	if stroke then
-		stroke.Thickness = card.strokeThickness
-		if status == "Found" then
-			stroke.Color = CLAIM_COLOR
-			card.pulse = tweenService:Create(stroke, PULSE_TWEEN, { Thickness = card.strokeThickness + 2 })
-			card.pulse:Play()
-		elseif status == "Claimed" then
-			stroke.Color = entry.color
-		else
-			stroke.Color = card.strokeColor
-		end
-	end
 end
 
 local function createCard(entry: any, order: number): Card
@@ -312,18 +405,18 @@ local function createCard(entry: any, order: number): Card
 	frame.LayoutOrder = order
 	frame.Visible = true
 
+	local windowHeight = getWindowHeight()
+	if windowHeight and not gridCellSize then
+		frame.Size = UDim2.new(cardSize.X, toWindowPixels(cardSize.Y, windowHeight))
+	end
+
 	local viewport = frame:FindFirstChildOfClass("ViewportFrame")
-	local stroke = frame:FindFirstChildOfClass("UIStroke")
 	local card: Card = {
 		id = entry.id,
 		frame = frame,
 		nameLabel = frame:WaitForChild("ItemName") :: TextLabel,
 		rarityLabel = frame:WaitForChild("Rarity") :: TextLabel,
 		viewport = viewport,
-		stroke = stroke,
-		strokeColor = if stroke then stroke.Color else Color3.new(1, 1, 1),
-		strokeThickness = if stroke then stroke.Thickness else 0,
-		pulse = nil,
 		entry = entry,
 	}
 
@@ -370,53 +463,34 @@ local function render()
 	task.defer(updateCanvasSize)
 end
 
---// Open / close -----------------------------------------------------------------------
-
-local function closeIndex()
-	mainFrame.Visible = false
-end
-
-local function openIndex()
-	if mainFrame.Visible then
-		return
-	end
-
-	network.fireServer(network.RemoteEvents.RequestIndexState)
-
-	openScale.Scale = 0.85
-	mainFrame.Visible = true
-	tweenService:Create(openScale, OPEN_TWEEN, { Scale = 1 }):Play()
-end
-
 --// Setup -------------------------------------------------------------------------------
 
--- Kept across respawns: a reset would swap in a fresh copy and leave this script driving the destroyed one.
-indexGui.ResetOnSpawn = false
-indexGui.Enabled = true
-mainFrame.Visible = false
+windowsManager.register("Index", {
+	gui = indexGui,
+	frame = mainFrame,
+	openButton = openButton,
+	onOpen = function()
+		network.fireServer(network.RemoteEvents.RequestIndexState)
+		startSpin()
+	end,
+	onClose = stopSpin,
+})
+
 cardTemplate.Visible = false
 claimAllFrame.Visible = false
 alertBadge.Visible = false
 setInfoVisible(false)
 
 if cardContainer:IsA("ScrollingFrame") then
-	cardContainer.AutomaticCanvasSize = Enum.AutomaticSize.None
-	local layout = cardContainer:FindFirstChildWhichIsA("UIGridStyleLayout")
+	cardContainer.AutomaticCanvasSize = Enum.AutomaticSize.None -- updateCanvasSize sizes it instead
 	if layout then
 		layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvasSize)
 	end
-end
-
-openButton.MouseButton1Click:Connect(function()
-	if mainFrame.Visible then
-		closeIndex()
-	else
-		openIndex()
-	end
-end)
-
-if closeButton then
-	closeButton.MouseButton1Click:Connect(closeIndex)
+	cardContainer:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(function()
+		updateCardSizes()
+		updateCanvasSize()
+	end)
+	updateCardSizes()
 end
 
 claimButton.Activated:Connect(function()
@@ -443,6 +517,7 @@ network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string,
 	if id == "All" then
 		if success then
 			pop(claimAllFrame)
+			playCashSound()
 		else
 			shake(claimAllButton)
 		end
@@ -455,6 +530,7 @@ network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string,
 	end
 	if success then
 		pop(card.frame)
+		playCashSound()
 	else
 		shake(claimButton)
 	end

@@ -27,8 +27,8 @@ local shearToolAnim = replicatedStorage.Assets.Animations.ShearTool
 local shearRigAnim = replicatedStorage.Assets.Animations.ShearRig
 
 --// Sound Effects
-local uiSounds = soundService:FindFirstChild("UISounds")
-local shearSound = uiSounds and uiSounds:FindFirstChild("Shear") :: Sound?
+local uiSounds = soundService:WaitForChild("UISounds")
+local shearSound = uiSounds:WaitForChild("Shear", 10) :: Sound?
 
 --// Configs
 local RANGE_ATTRIBUTE = "ShearRange" -- set on every shear Tool by ShearShopHandler

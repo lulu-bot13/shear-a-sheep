@@ -225,6 +225,17 @@ function shearShopHandler.getHeldTool(player: Player): Tool?
 	return if tool and tool:IsA("Tool") then tool else nil
 end
 
+-- The equipped shear's Tool wherever it is (held out or in the Backpack), else nil.
+function shearShopHandler.getTool(player: Player): Tool?
+	local currentId = getShearId(player)
+	for _, tool in getShearTools(player) do
+		if tool.Name == currentId then
+			return tool
+		end
+	end
+	return nil
+end
+
 -- Bumps the equipped shear's "Snips" attribute on every hit; clients watch it to play snip effects for everyone.
 function shearShopHandler.registerSnip(player: Player)
 	local currentId = getShearId(player)

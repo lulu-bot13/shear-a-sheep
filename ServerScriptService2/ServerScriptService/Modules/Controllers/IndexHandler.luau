@@ -29,6 +29,7 @@ export type EntryState = {
 	rarity: string,
 	color: Color3,
 	indexLuck: number,
+	odds: number, -- N in "1 in N" at base Luck
 	status: string, -- "Locked", "Found" or "Claimed"
 }
 
@@ -61,6 +62,7 @@ function IndexHandler.getState(player: Player): { EntryState }
 			rarity = info.rarity,
 			color = info.color,
 			indexLuck = SheepData.getIndexLuck(sheepType),
+			odds = SheepData.getOdds(sheepType, 0) or 1,
 			status = index[sheepType] or "Locked",
 		})
 	end

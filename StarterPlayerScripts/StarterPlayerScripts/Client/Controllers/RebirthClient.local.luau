@@ -13,6 +13,7 @@ local tweenService = game:GetService("TweenService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
+local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 local DEBUG = true -- TODO: set to false once the rebirth button works
 
@@ -30,32 +31,35 @@ local playerGui = player:WaitForChild("PlayerGui")
 local hudButtons = playerGui:WaitForChild("Main"):WaitForChild("Buttons")
 local openButton = hudButtons:WaitForChild("Rebirth") :: GuiButton
 local alertBadge = openButton:FindFirstChild("Alert", true) :: GuiObject? -- optional badge on the HUD button
+local hudProgress = openButton:WaitForChild("Progress") :: TextLabel
 
 local rebirthGui = playerGui:WaitForChild("RebirthScreen") :: ScreenGui
 local mainFrame = rebirthGui:WaitForChild("Main") :: Frame
-local exitButton = mainFrame:WaitForChild("Exit") :: GuiButton
 local rebirthButton = mainFrame:WaitForChild("Rebirth") :: GuiButton
 
 local requirementBar = mainFrame:WaitForChild("RequirementBar") :: Frame
 local requirementProgress = requirementBar:WaitForChild("Progress") :: Frame
 local woolCount = requirementBar:WaitForChild("WoolCount") :: TextLabel
 
--- The before -> after row built in Studio.
+-- The before -> after labels built in Studio.
 local rewardsFrame = mainFrame:WaitForChild("RewardsFrame") :: Frame
-local rewardRow = rewardsFrame:WaitForChild("Template") :: Frame
-local luckBefore = rewardRow:WaitForChild("Before"):WaitForChild("Amount") :: TextLabel
-local luckAfter = rewardRow:WaitForChild("After"):WaitForChild("Amount") :: TextLabel
+local luckBefore = rewardsFrame:WaitForChild("BeforeAmount") :: TextLabel
+local luckAfter = rewardsFrame:WaitForChild("AfterAmount") :: TextLabel
 
 debugLog(`found the UI (Rebirth button is a {rebirthButton.ClassName}, open button is a {openButton.ClassName})`)
 
 --// Configs
-local OPEN_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local BAR_TWEEN = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local LUCK_BEFORE_COLOR = Color3.fromRGB(170, 170, 170)
 local LUCK_AFTER_COLOR = Color3.fromRGB(170, 235, 170)
 
+-- The HUD button wiggles every few seconds while a rebirth is ready.
+local ALERT_SHAKE_SECONDS = 3
+local ALERT_SHAKE_ANGLES = { -10, 10, -8, 8, -4, 4, 0 }
+local CLICK_SHAKE_ANGLES = { -3, 3, -2, 2, 0 }
+
 -- Luck icons falling down the screen after a rebirth. Spawning + the slowest fall add up to EFFECT_SECONDS.
-local LUCK_ICON_IMAGE = "rbxassetid://86611651520562" -- "rbxassetid://..."; empty uses the icon in the rebirth screen's Luck row
+local LUCK_ICON_IMAGE = "rbxassetid://86611651520562" -- "rbxassetid://..."; empty uses the first icon in the rebirth screen's RewardsFrame
 local EFFECT_SECONDS = 3.5
 local FALL_ICON_COUNT = 40
 local FALL_SPAWN_SECONDS = 1.5
@@ -66,9 +70,7 @@ local FALL_MAX_SIZE = 72
 
 --// State
 local state: any = nil -- the last RebirthState from the server
-
-local openScale = Instance.new("UIScale")
-openScale.Parent = mainFrame
+local rebirthButtonText = if rebirthButton:IsA("TextButton") then rebirthButton.Text else ""
 
 local effectGui = Instance.new("ScreenGui")
 effectGui.Name = "RebirthEffectGui"
@@ -94,10 +96,12 @@ local function formatLuck(luck: number, factor: number): string
 	return `{formatMultiplier(factor)} ({formatWithCommas(luck)})`
 end
 
-local function shake(button: GuiObject)
+-- Wiggles around the button's current angle, so it ends where it started.
+local function shake(button: GuiObject, angles: { number })
 	task.spawn(function()
-		for _, angle in { -3, 3, -2, 2, 0 } do
-			tweenService:Create(button, TweenInfo.new(0.04), { Rotation = angle }):Play()
+		local baseRotation = button.Rotation
+		for _, angle in angles do
+			tweenService:Create(button, TweenInfo.new(0.04), { Rotation = baseRotation + angle }):Play()
 			task.wait(0.04)
 		end
 	end)
@@ -109,7 +113,7 @@ local function getLuckIconImage(): string
 	if LUCK_ICON_IMAGE ~= "" then
 		return LUCK_ICON_IMAGE
 	end
-	local rowIcon = rewardRow:FindFirstChildWhichIsA("ImageLabel", true)
+	local rowIcon = rewardsFrame:FindFirstChildWhichIsA("ImageLabel")
 	return if rowIcon then rowIcon.Image else ""
 end
 
@@ -162,6 +166,14 @@ end
 
 --// Rendering --------------------------------------------------------------------------
 
+-- How far the player's wool is towards the next rebirth, 0 to 1.
+local function getProgress(): number
+	if state.maxed or state.woolCost <= 0 then
+		return 1
+	end
+	return math.clamp(state.wool / state.woolCost, 0, 1)
+end
+
 local function render()
 	if not state then
 		return
@@ -171,67 +183,58 @@ local function render()
 	luckAfter.Text = formatLuck(state.nextLuck, state.nextLuckFactor)
 
 	-- Requirement bar: fills with wool towards the next rebirth's cost.
-	local ratio = if state.maxed or state.woolCost <= 0 then 1 else math.clamp(state.wool / state.woolCost, 0, 1)
+	local ratio = getProgress()
 	local size = requirementProgress.Size
 	tweenService:Create(requirementProgress, BAR_TWEEN, { Size = UDim2.new(ratio, 0, size.Y.Scale, size.Y.Offset) }):Play()
 	woolCount.Text = if state.maxed
 		then "MAX"
-		else `{numberFormatter:Format(math.floor(state.wool), 1)}/{numberFormatter:Format(state.woolCost, 1)} Wool`
+		else `{numberFormatter:Format(math.floor(state.wool), 1)}/{numberFormatter:Format(state.woolCost, 1)}`
 
-	-- The button shows the server's real wool cost, so it never disagrees with what Studio's text says.
+	-- The wool needed is already on the requirement bar, so the button keeps its Studio text until it's ready.
 	if rebirthButton:IsA("TextButton") then
 		rebirthButton.Text = if state.maxed
 			then "Max Rebirths"
 			elseif state.canRebirth then "Rebirth!"
-			else `Need {numberFormatter:Format(state.woolCost, 1)} Wool`
+			else rebirthButtonText
 	end
 end
 
--- The HUD button's "Alert" badge shows while a rebirth is ready.
-local function updateAlert()
+-- The HUD button's "Alert" badge shows while a rebirth is ready, and Progress shows the wool percentage.
+local function updateHud()
 	if alertBadge then
 		alertBadge.Visible = state ~= nil and state.canRebirth == true
 	end
-end
-
---// Open / close -----------------------------------------------------------------------
-
-local function closeScreen()
-	rebirthGui.Enabled = false
-end
-
-local function openScreen()
-	if rebirthGui.Enabled then
-		return
+	if state then
+		-- Rounded down, so 100% only shows once the rebirth is actually affordable.
+		hudProgress.Text = if state.maxed then "MAX" else `{math.floor(getProgress() * 100)}%`
 	end
-
-	render()
-	network.fireServer(network.RemoteEvents.RequestRebirthState)
-
-	openScale.Scale = 0.85
-	rebirthGui.Enabled = true
-	tweenService:Create(openScale, OPEN_TWEEN, { Scale = 1 }):Play()
 end
 
 --// Setup -------------------------------------------------------------------------------
 
+local window = windowsManager.register("Rebirth", {
+	gui = rebirthGui,
+	frame = mainFrame,
+	openButton = openButton,
+	onOpen = function()
+		render()
+		network.fireServer(network.RemoteEvents.RequestRebirthState)
+	end,
+})
+
 luckBefore.TextColor3 = LUCK_BEFORE_COLOR
 luckAfter.TextColor3 = LUCK_AFTER_COLOR
+hudProgress.Text = "0%"
+updateHud()
 
--- Without this, respawning swaps in a fresh RebirthScreen that this script isn't connected to.
-rebirthGui.ResetOnSpawn = false
-rebirthGui.Enabled = false
-updateAlert()
-
-openButton.MouseButton1Click:Connect(function()
-	if rebirthGui.Enabled then
-		closeScreen()
-	else
-		openScreen()
+task.spawn(function()
+	while true do
+		task.wait(ALERT_SHAKE_SECONDS)
+		if state and state.canRebirth and not window.isOpen() then
+			shake(openButton, ALERT_SHAKE_ANGLES)
+		end
 	end
 end)
-
-exitButton.MouseButton1Click:Connect(closeScreen)
 
 rebirthButton.MouseButton1Click:Connect(function()
 	if not state then
@@ -242,7 +245,7 @@ rebirthButton.MouseButton1Click:Connect(function()
 		network.fireServer(network.RemoteEvents.RequestRebirth)
 	else
 		debugLog(`clicked Rebirth, not ready: wool {state.wool}/{state.woolCost}, canRebirth {state.canRebirth}, maxed {state.maxed}`)
-		shake(rebirthButton)
+		shake(rebirthButton, CLICK_SHAKE_ANGLES)
 	end
 end)
 
@@ -252,8 +255,8 @@ network.waitUntilReadyAsync()
 network.connectEvent(network.RemoteEvents.RebirthState, function(newState: any)
 	debugLog(`got state: rebirths {newState.rebirths}, wool {newState.wool}/{newState.woolCost}, canRebirth {newState.canRebirth}`)
 	state = newState
-	updateAlert()
-	if rebirthGui.Enabled then
+	updateHud()
+	if window.isOpen() then
 		render()
 	end
 end)
@@ -263,7 +266,7 @@ network.connectEvent(network.RemoteEvents.RebirthResult, function(success: boole
 	if success then
 		playLuckRain()
 	else
-		shake(rebirthButton)
+		shake(rebirthButton, CLICK_SHAKE_ANGLES)
 	end
 end)
 

@@ -12,6 +12,7 @@ local players = game:GetService("Players")
 
 --// Modules
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
+local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local PlotHandler = require(script.Parent.PlotHandler)
 local SheepHandler = require(script.Parent.SheepHandler)
@@ -53,6 +54,12 @@ local function getMaxSheep(player: Player): number
 	return if type(maxSheep) == "number" then math.min(maxSheep, FarmData.MaxSheepCap) else 0
 end
 
+-- Seconds between refills, shortened by the player's Faster Respawn level.
+local function getSpawnInterval(player: Player): number
+	local level = PlayerDataHandler.get(player, "RespawnLevel")
+	return UpgradeData.getSpawnInterval(FarmData.SpawnInterval, if type(level) == "number" then level else 0)
+end
+
 local function spawnOne(player: Player): boolean
 	local plot = activePlots[player]
 	local position = plot and SheepWanderHandler.getSpawnPosition(plot)
@@ -87,7 +94,7 @@ local function runFarm(player: Player)
 	updateCapacityLabel(player)
 
 	while activePlots[player] do
-		task.wait(FarmData.SpawnInterval)
+		task.wait(getSpawnInterval(player))
 		if activePlots[player] and SheepHandler.getSheepCount(player) < getMaxSheep(player) then
 			spawnOne(player)
 		end

@@ -11,10 +11,12 @@ local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local tweenService = game:GetService("TweenService")
+local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
+local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
 local player = players.LocalPlayer
@@ -24,19 +26,26 @@ local shopGui = playerGui:WaitForChild("UpgradeShop") :: ScreenGui
 local mainFrame = shopGui:WaitForChild("Main") :: Frame
 local scrollFrame = mainFrame:WaitForChild("ScrollingFrame") :: ScrollingFrame
 local cardTemplate = scrollFrame:WaitForChild("Template") :: Frame
-local closeButton = (mainFrame:FindFirstChild("Close") or mainFrame:FindFirstChild("Exit")) :: GuiButton?
 local hudButtons = playerGui:WaitForChild("Main"):FindFirstChild("Buttons")
 local hudButton = hudButtons and hudButtons:FindFirstChild("Upgrades") :: GuiButton? -- optional: the shack prompts work without it
 local alertBadge = hudButton and hudButton:FindFirstChild("Alert", true) :: GuiObject? -- optional badge on the HUD button
 local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
 
+--// Sounds
+local cashInSound = soundService:FindFirstChild("UISounds"):FindFirstChild("Cash")
+local errorSound = soundService:FindFirstChild("UISounds"):FindFirstChild("Error")
+
 --// Configs
 local SHOP_PROMPT_TAG = "UpgradeShop"
+local SHACK_NAME = "UpgradePlotShack" -- matches UpgradeData.ShackName on the server
+local SHACK_LABEL_NAME = "Upgrades" -- the TextLabel over each shack
 local CLOSE_DISTANCE_EXTRA = 6 -- studs past the prompt's activation range before the shop closes itself
 local DISTANCE_CHECK_SECONDS = 0.25
 local MESSAGE_SECONDS = 1.3
 local AFTER_COLOR = "#1EFF3C" -- the "after" number in the Upgrade text
 local MAX_COLOR = "#FFD54A"
+local DISABLED_COLOR = Color3.fromRGB(130, 130, 130) -- the Purchase button while the upgrade can't be bought
+local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so card sizes aren't measured
 
 local REASON_TEXT = {
 	NoWool = "Not enough wool",
@@ -51,6 +60,7 @@ type Card = {
 	upgrade: TextLabel,
 	level: TextLabel,
 	purchase: GuiButton,
+	purchaseColor: Color3,
 	icon: GuiObject?,
 	state: any,
 	messageToken: number,
@@ -102,9 +112,20 @@ local function toWindowPixels(size: UDim, windowHeight: number): UDim
 	return UDim.new(0, math.floor(size.Offset + size.Scale * windowHeight))
 end
 
+-- Nil while the window is shrunk to (almost) nothing by its close tween.
+local function getScaleFactor(): number?
+	local factor = windowsManager.getScaleFactor(scrollFrame)
+	return if factor > MIN_SCALE_FACTOR then factor else nil
+end
+
 -- Sizes the cards (and the layout's gaps) from the window height so a taller canvas can't make them grow.
 local function updateCardSizes()
-	local windowHeight = scrollFrame.AbsoluteWindowSize.Y
+	local factor = getScaleFactor()
+	if not factor then
+		return
+	end
+
+	local windowHeight = scrollFrame.AbsoluteWindowSize.Y / factor
 	local height = toWindowPixels(cardSize.Y, windowHeight)
 	for _, card in cards do
 		card.frame.Size = UDim2.new(cardSize.X, height)
@@ -122,18 +143,19 @@ end
 
 -- Only when the cards don't fit does the canvas get taller (in pixels) so the player can scroll to the rest.
 local function updateCanvasSize()
-	if not layout then
+	local factor = getScaleFactor()
+	if not layout or not factor then
 		return
 	end
 
-	local windowHeight = scrollFrame.AbsoluteWindowSize.Y
+	local windowHeight = scrollFrame.AbsoluteWindowSize.Y / factor
 	local paddingY = 0
 	if framePadding then
 		paddingY = framePadding.PaddingTop.Offset + framePadding.PaddingTop.Scale * windowHeight
 			+ framePadding.PaddingBottom.Offset + framePadding.PaddingBottom.Scale * windowHeight
 	end
 
-	local needed = math.ceil(layout.AbsoluteContentSize.Y + paddingY)
+	local needed = math.ceil(layout.AbsoluteContentSize.Y / factor + paddingY)
 	local canvasSize = UDim2.fromOffset(0, if needed > windowHeight then needed else 0)
 	if scrollFrame.CanvasSize ~= canvasSize then
 		scrollFrame.CanvasSize = canvasSize
@@ -158,6 +180,13 @@ local function renderCard(card: Card)
 	end
 end
 
+-- Greys out the Purchase button while the player can't afford the upgrade (or it's maxed).
+local function updatePurchaseButton(card: Card)
+	local cost = card.state.cost
+	local canBuy = card.state.after ~= nil and cost ~= nil and wool.Value >= cost
+	card.purchase.BackgroundColor3 = if canBuy then card.purchaseColor else DISABLED_COLOR
+end
+
 -- Shows a short message in the card's Price, then goes back to the price.
 local function flashMessage(card: Card, text: string)
 	card.messageToken += 1
@@ -176,17 +205,19 @@ local function createCard(state: any, order: number): Card
 	local frame = cardTemplate:Clone()
 	frame.Name = state.id
 	frame.LayoutOrder = order
-	frame.Size = UDim2.new(cardSize.X, toWindowPixels(cardSize.Y, scrollFrame.AbsoluteWindowSize.Y))
+	frame.Size = UDim2.new(cardSize.X, toWindowPixels(cardSize.Y, scrollFrame.AbsoluteWindowSize.Y / (getScaleFactor() or 1)))
 	frame.Visible = true
 
 	local shearImage = frame:FindFirstChild("ShearImage")
+	local purchase = frame:WaitForChild("Purchase") :: GuiButton
 	local card: Card = {
 		frame = frame,
 		title = frame:WaitForChild("Title") :: TextLabel,
 		price = frame:WaitForChild("Price") :: TextLabel,
 		upgrade = frame:WaitForChild("Upgrade") :: TextLabel,
 		level = frame:WaitForChild("Level") :: TextLabel,
-		purchase = frame:WaitForChild("Purchase") :: GuiButton,
+		purchase = purchase,
+		purchaseColor = purchase.BackgroundColor3,
 		icon = if shearImage then shearImage:FindFirstChild("Icon") :: GuiObject? else nil,
 		state = state,
 		messageToken = 0,
@@ -238,6 +269,7 @@ local function applyState(states: { any })
 		card.state = state
 		card.messageToken += 1 -- a pending message must not overwrite the fresh price
 		renderCard(card)
+		updatePurchaseButton(card)
 	end
 	updateAlert()
 end
@@ -254,33 +286,29 @@ local function getPromptPosition(prompt: ProximityPrompt): Vector3?
 	return nil
 end
 
-local function closeShop()
-	if not shopGui.Enabled then
-		return
-	end
+local window = windowsManager.register("UpgradeShop", {
+	gui = shopGui,
+	frame = mainFrame,
+	openButton = hudButton,
+	onOpen = function()
+		openToken += 1
+		network.fireServer(network.RemoteEvents.RequestUpgradeState)
+	end,
+	onClose = function()
+		openToken += 1
+		activePrompt = nil
+	end,
+})
 
-	openToken += 1
-	activePrompt = nil
-	shopGui.Enabled = false
-end
-
--- `prompt` is the shack it was opened from; nil when opened from the HUD button (it then stays open wherever you go).
-local function openShop(prompt: ProximityPrompt?)
+-- Opened from a shack's prompt; the HUD button opens it through the window instead (and it then stays open wherever you go).
+local function openShop(prompt: ProximityPrompt)
 	activePrompt = prompt
-	if shopGui.Enabled then
+	if window.isOpen() then
 		return
 	end
 
-	openToken += 1
+	window.open()
 	local token = openToken
-
-	network.fireServer(network.RemoteEvents.RequestUpgradeState)
-
-	shopGui.Enabled = true
-
-	if not prompt then
-		return
-	end
 
 	-- Walk away from the shack and the shop closes itself.
 	task.spawn(function()
@@ -289,12 +317,12 @@ local function openShop(prompt: ProximityPrompt?)
 			local current = activePrompt
 			local promptPosition = if current then getPromptPosition(current) else nil
 			if not rootPart or not current or not promptPosition then
-				closeShop()
+				window.close()
 				return
 			end
 
 			if (rootPart.Position - promptPosition).Magnitude > current.MaxActivationDistance + CLOSE_DISTANCE_EXTRA then
-				closeShop()
+				window.close()
 				return
 			end
 			task.wait(DISTANCE_CHECK_SECONDS)
@@ -321,24 +349,40 @@ local function connectPrompt(instance: Instance)
 			return
 		end
 
-		if shopGui.Enabled then
-			closeShop()
+		if window.isOpen() then
+			window.close()
 		else
 			openShop(instance)
 		end
 	end)
 end
 
+-- The "Upgrades" text over a shack only shows (for this player) on their own plot; follows the plot changing hands.
+local function connectShackLabel(plot: Instance)
+	local shack = plot:WaitForChild(SHACK_NAME, 10)
+	local label = shack and shack:FindFirstChild(SHACK_LABEL_NAME, true)
+	if not label or not label:IsA("TextLabel") then
+		return
+	end
+
+	local function update()
+		label.Visible = plot:GetAttribute("Owner") == player.UserId
+	end
+	plot:GetAttributeChangedSignal("Owner"):Connect(update)
+	update()
+end
+
 --// Setup ---------------------------------------------------------------------------
 
--- Kept across respawns: a reset would swap in a fresh copy and leave this script opening the destroyed one.
-shopGui.ResetOnSpawn = false
-mainFrame.Visible = true
 cardTemplate.Visible = false
 scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.None -- updateCanvasSize sizes it instead
-shopGui.Enabled = false
 updateAlert()
-wool.Changed:Connect(updateAlert)
+wool.Changed:Connect(function()
+	updateAlert()
+	for _, card in cards do
+		updatePurchaseButton(card)
+	end
+end)
 
 if layout then
 	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvasSize)
@@ -350,24 +394,15 @@ end)
 updateCardSizes()
 updateCanvasSize()
 
-if closeButton then
-	closeButton.Activated:Connect(closeShop)
-end
-
-if hudButton then
-	hudButton.Activated:Connect(function()
-		if shopGui.Enabled then
-			closeShop()
-		else
-			openShop(nil)
-		end
-	end)
-end
-
 for _, instance in collectionService:GetTagged(SHOP_PROMPT_TAG) do
 	connectPrompt(instance)
 end
 collectionService:GetInstanceAddedSignal(SHOP_PROMPT_TAG):Connect(connectPrompt)
+
+for _, plot in plotsFolder:GetChildren() do
+	task.spawn(connectShackLabel, plot)
+end
+plotsFolder.ChildAdded:Connect(connectShackLabel)
 
 network.waitUntilReadyAsync()
 
@@ -381,6 +416,14 @@ network.connectEvent(network.RemoteEvents.UpgradeResult, function(id: any, succe
 
 	if not success then
 		flashMessage(card, REASON_TEXT[reason or ""] or "Can't buy")
+
+		if errorSound and errorSound:IsA("Sound") then
+			errorSound:Play()
+		end
+	else
+		if cashInSound and cashInSound:IsA("Sound") then
+			cashInSound:Play()
+		end
 	end
 end)
 
