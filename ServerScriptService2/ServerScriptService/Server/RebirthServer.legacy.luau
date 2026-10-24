@@ -20,7 +20,7 @@ local RebirthHandler = require(serverScriptService.Modules.Controllers.RebirthHa
 local POLL_SECONDS = 0.5
 local REBIRTH_COOLDOWN_SECONDS = 1.5
 local STATE_REQUEST_COOLDOWN_SECONDS = 0.5
-local DEBUG = true -- TODO: set to false once the rebirth button works
+local DEBUG = false
 
 local function debugLog(message: string)
 	if DEBUG then

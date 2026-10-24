@@ -17,7 +17,7 @@ local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 local alerts = require(script.Parent.Parent.Modules.Alerts)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
-local DEBUG = true -- TODO: set to false once the rebirth button works
+local DEBUG = false
 
 local function debugLog(message: string)
 	if DEBUG then

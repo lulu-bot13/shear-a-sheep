@@ -29,6 +29,10 @@ local shearRigAnim = replicatedStorage.Assets.Animations.ShearRig
 --// Sound Effects
 local uiSounds = soundService:WaitForChild("UISounds")
 local shearSound = uiSounds:WaitForChild("Shear", 10) :: Sound?
+local shearCompleteSound = soundService:WaitForChild("SoundGroup"):WaitForChild("ShearComplete", 10) :: Sound?
+
+--// VFX
+local poofTemplate = replicatedStorage.Assets.VFX.PoofAttachment :: Attachment
 
 --// Configs
 local RANGE_ATTRIBUTE = "ShearRange" -- set on every shear Tool by ShearShopHandler
@@ -48,6 +52,7 @@ local DAMAGE_RISE = 2.5 -- studs the number floats up
 local DAMAGE_SECONDS = 0.7
 local DAMAGE_HEIGHT = 3 -- studs above the sheep's root the number starts
 local ELECTRIC_BURST_COUNT = 18
+local POOF_DEFAULT_EMIT_COUNT = 20 -- used when an emitter in the poof has no "EmitCount" attribute
 
 --// Torso flash
 local WOOL_PART_NAME = "Torso" -- the sheep's wool mesh
@@ -544,22 +549,45 @@ local function showDamage(position: Vector3, damage: number)
 	debris:AddItem(anchor, DAMAGE_SECONDS + 0.1)
 end
 
+-- Bursts a copy of the poof attachment's emitters where a sheep was sheared bare.
+local function playPoof(position: Vector3)
+	local poof = poofTemplate:Clone()
+	poof.Parent = workspace.Terrain
+	poof.WorldPosition = position
+
+	local lifetime = 0
+	for _, descendant in poof:GetDescendants() do
+		if descendant:IsA("ParticleEmitter") then
+			local emitCount = descendant:GetAttribute("EmitCount")
+			descendant:Emit(if type(emitCount) == "number" then emitCount else POOF_DEFAULT_EMIT_COUNT)
+			lifetime = math.max(lifetime, descendant.Lifetime.Max)
+		end
+	end
+	debris:AddItem(poof, lifetime + 0.5)
+end
+
 local function onShearHit(hits: { { sheep: Model?, position: Vector3, damage: number, color: Color3 } })
+	local finishedAny = false
 	for _, hit in hits do
 		showDamage(hit.position, hit.damage)
 
-		-- No sheep means this blow sheared it bare (it is already gone), so it gets the bigger burst.
+		-- No sheep means this blow sheared it bare (it is already gone), so it gets the bigger burst and the poof.
 		local sheep = hit.sheep
 		if sheep and sheep:IsDescendantOf(workspace) then
 			flashTorso(sheep)
 			throwWool(hit.position, hit.color, WOOL_CHUNKS_PER_HIT)
 		else
 			throwWool(hit.position, hit.color, WOOL_CHUNKS_FINISH)
+			playPoof(hit.position)
+			finishedAny = true
 		end
 	end
 
 	if shearSound then
 		shearSound:Play()
+	end
+	if finishedAny and shearCompleteSound then
+		shearCompleteSound:Play()
 	end
 
 	-- Electric shears crackle on every hit (other players see it through the tool's "Snips" attribute).

@@ -68,6 +68,17 @@ local function getWoolReward(player: Player, sheep: Model): number
 	return math.floor((if type(baseWool) == "number" then baseWool else 0) * multiplier)
 end
 
+-- Wool one swing of the equipped shear takes off, with the Shear Damage upgrade.
+local function getShearDamage(player: Player): number
+	local shear = ShearShopHandler.getShear(player)
+	return UpgradeData.getShearDamage(shear.damage, getNumber(player, "DamageLevel"))
+end
+
+-- Mirrored for the client, so the tutorial can count the swings a sheep needs.
+local function updateDamageAttribute(player: Player)
+	player:SetAttribute("ShearDamage", getShearDamage(player))
+end
+
 -- How much of `total` has been earned once the sheep is down to `health`; each hit pays the difference, so the hits add up to `total`.
 local function getEarnedShare(total: number, maxHealth: number, health: number): number
 	return math.floor(total * (maxHealth - health) / maxHealth)
@@ -159,8 +170,7 @@ function ShearHandler.shearAround(player: Player, rangeMultiplier: number?, dama
 	end
 
 	local shear = ShearShopHandler.getShear(player)
-	local shearDamage = UpgradeData.getShearDamage(shear.damage, getNumber(player, "DamageLevel"))
-	shearDamage = math.max(math.floor(shearDamage * (damageMultiplier or 1)), 1)
+	local shearDamage = math.max(math.floor(getShearDamage(player) * (damageMultiplier or 1)), 1)
 	local range = shear.range * (rangeMultiplier or 1) + ShearData.RangeTolerance
 	local hits: { Hit } = {}
 	local drops: { Drop } = {}
@@ -227,6 +237,18 @@ function ShearHandler.Start()
 	network.waitUntilReadyAsync()
 
 	network.connectEvent(network.RemoteEvents.ShearSwing, onShearSwing)
+
+	PlayerDataHandler.Loaded:Connect(updateDamageAttribute)
+	PlayerDataHandler.Changed:Connect(function(player: Player, key: string)
+		if key == "ShearId" or key == "DamageLevel" then
+			updateDamageAttribute(player)
+		end
+	end)
+	for _, player in players:GetPlayers() do
+		if PlayerDataHandler.getData(player) then
+			updateDamageAttribute(player)
+		end
+	end
 
 	players.PlayerRemoving:Connect(function(player: Player)
 		lastSwing[player] = nil
