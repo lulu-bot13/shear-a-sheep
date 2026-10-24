@@ -49,6 +49,33 @@ local function clampToArea(localPoint: Vector3, size: Vector3): Vector3
 	return Vector3.new(math.clamp(localPoint.X, -halfX, halfX), localPoint.Y, math.clamp(localPoint.Z, -halfZ, halfZ))
 end
 
+-- The plot a sheep belongs to (sheep live in Plot.Sheeps).
+local function getPlot(sheep: Model): Instance?
+	local folder = sheep.Parent
+	return if folder then folder.Parent else nil
+end
+
+-- Pulls a sheep that got pushed or slid out of its SheepArea back inside it.
+local function keepInArea(sheep: Model, root: BasePart)
+	local plot = getPlot(sheep)
+	local boxCFrame, size
+	if plot then
+		boxCFrame, size = getAreaBox(plot)
+	end
+	if not boxCFrame or not size then
+		return
+	end
+
+	local localPos = boxCFrame:PointToObjectSpace(root.Position)
+	if math.abs(localPos.X) <= size.X / 2 and math.abs(localPos.Z) <= size.Z / 2 then
+		return
+	end
+
+	local inside = boxCFrame:PointToWorldSpace(clampToArea(localPos, size))
+	sheep:PivotTo(sheep:GetPivot() + Vector3.new(inside.X - root.Position.X, 0, inside.Z - root.Position.Z))
+	root.AssemblyLinearVelocity = Vector3.zero
+end
+
 -- The ground under a point, ignoring sheep, players and non-collidable zone parts.
 local function findGround(plot: Instance, point: Vector3): Vector3?
 	local params = RaycastParams.new()
@@ -102,12 +129,6 @@ local function cancelGraze(sheep: Model)
 end
 
 --// Walking ---------------------------------------------------------------------------
-
--- The plot a sheep belongs to (sheep live in Plot.Sheeps).
-local function getPlot(sheep: Model): Instance?
-	local folder = sheep.Parent
-	return if folder then folder.Parent else nil
-end
 
 local function startWalk(sheep: Model, humanoid: Humanoid, root: BasePart, now: number)
 	local plot = getPlot(sheep)
@@ -163,6 +184,7 @@ local function updateSheep(sheep: Model, now: number)
 	if not humanoid or not root or not root:IsA("BasePart") or root.Anchored then
 		return
 	end
+	keepInArea(sheep, root)
 
 	-- A new sheep waits a moment before its first walk.
 	local due = nextMoveAt[sheep]

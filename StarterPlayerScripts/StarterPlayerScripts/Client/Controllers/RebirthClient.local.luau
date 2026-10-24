@@ -9,6 +9,7 @@
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local tweenService = game:GetService("TweenService")
+local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
@@ -37,6 +38,7 @@ local hudProgress = openButton:WaitForChild("Progress") :: TextLabel
 local rebirthGui = playerGui:WaitForChild("RebirthScreen") :: ScreenGui
 local mainFrame = rebirthGui:WaitForChild("Main") :: Frame
 local rebirthButton = mainFrame:WaitForChild("Rebirth") :: GuiButton
+local rebirthCount = mainFrame:WaitForChild("RebirthCount") :: TextLabel
 
 local requirementBar = mainFrame:WaitForChild("RequirementBar") :: Frame
 local requirementProgress = requirementBar:WaitForChild("Progress") :: Frame
@@ -46,6 +48,9 @@ local woolCount = requirementBar:WaitForChild("WoolCount") :: TextLabel
 local rewardsFrame = mainFrame:WaitForChild("RewardsFrame") :: Frame
 local luckBefore = rewardsFrame:WaitForChild("BeforeAmount") :: TextLabel
 local luckAfter = rewardsFrame:WaitForChild("AfterAmount") :: TextLabel
+
+--// Sounds
+local rebirthedSound = soundService:WaitForChild("UISounds"):FindFirstChild("Rebirthed") :: Sound?
 
 debugLog(`found the UI (Rebirth button is a {rebirthButton.ClassName}, open button is a {openButton.ClassName})`)
 
@@ -58,6 +63,7 @@ local LUCK_AFTER_COLOR = Color3.fromRGB(170, 235, 170)
 local ALERT_SHAKE_SECONDS = 3
 local ALERT_SHAKE_ANGLES = { -10, 10, -8, 8, -4, 4, 0 }
 local CLICK_SHAKE_ANGLES = { -3, 3, -2, 2, 0 }
+local READY_ALERT_Y = 0.35 -- screen height (scale) of the "Rebirth available" alert
 
 local REASON_TEXT = {
 	NotReady = "Not enough wool to rebirth",
@@ -77,6 +83,7 @@ local FALL_MAX_SIZE = 72
 
 --// State
 local state: any = nil -- the last RebirthState from the server
+local wasReady = false -- so the "Rebirth available" alert shows once each time the bar reaches 100%
 local rebirthButtonText = if rebirthButton:IsA("TextButton") then rebirthButton.Text else ""
 
 local effectGui = Instance.new("ScreenGui")
@@ -186,6 +193,7 @@ local function render()
 		return
 	end
 
+	rebirthCount.Text = `Rebirths: {state.rebirths}`
 	luckBefore.Text = formatLuck(state.luck, state.luckFactor)
 	luckAfter.Text = formatLuck(state.nextLuck, state.nextLuckFactor)
 
@@ -263,6 +271,11 @@ network.waitUntilReadyAsync()
 network.connectEvent(network.RemoteEvents.RebirthState, function(newState: any)
 	debugLog(`got state: rebirths {newState.rebirths}, wool {newState.wool}/{newState.woolCost}, canRebirth {newState.canRebirth}`)
 	state = newState
+	local ready = newState.canRebirth == true and not newState.maxed
+	if ready and not wasReady then
+		alerts.showCenter("Rebirth available", nil, READY_ALERT_Y)
+	end
+	wasReady = ready
 	updateHud()
 	if window.isOpen() then
 		render()
@@ -273,6 +286,9 @@ network.connectEvent(network.RemoteEvents.RebirthResult, function(success: boole
 	debugLog(`rebirth result: success {success}, reason {reason}`)
 	if success then
 		alerts.showCenter("REBIRTHED", `Rebirth {rebirths or "?"}`)
+		if rebirthedSound then
+			rebirthedSound:Play()
+		end
 		playLuckRain()
 	else
 		alerts.show(REASON_TEXT[reason or ""] or "Can't rebirth", "error")

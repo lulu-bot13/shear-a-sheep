@@ -18,7 +18,7 @@ local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 
 --// Configs
-local DATASTORE_NAME = "PlayerData_Temp_v1"
+local DATASTORE_NAME = "PlayerData_Temp_v2"
 local KEY_PREFIX = "Player_"
 local LOAD_ATTEMPTS = 3
 local RETRY_SECONDS = 1

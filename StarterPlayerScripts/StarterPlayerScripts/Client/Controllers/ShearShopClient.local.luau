@@ -1,7 +1,7 @@
 --[[
 	The shear shop UI (StarterGui.Shop).
 
-	Pressing any ProximityPrompt tagged "ShearShop" opens the shop. Each shear in
+	Touching the ShearShopHitbox in the CenterPlaza opens the shop; walking away closes it. Each shear in
 	ShearShopUIData gets a card cloned from the Template: name, speed / damage, a spinning
 	3D preview and a purchase button. Buying is validated by the server (ShearShopHandler);
 	the cards update from the player's "ShearId" / "OwnedShears" attributes and wool. A shear that is
@@ -15,10 +15,10 @@
 ]]--
 
 --// Services
-local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
+local soundService = game:GetService("SoundService")
 local tweenService = game:GetService("TweenService")
 
 --// Modules
@@ -36,10 +36,14 @@ local mainFrame = shopGui:WaitForChild("Main") :: Frame
 local scrollFrame = mainFrame:WaitForChild("ScrollingFrame") :: ScrollingFrame
 local cardTemplate = scrollFrame:WaitForChild("Template") :: Frame
 local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
+local shopHitbox = workspace:WaitForChild("Base"):WaitForChild("CenterPlaza"):WaitForChild("ShearShop")
+	:WaitForChild("Shack"):WaitForChild("ShearShopHitbox") :: BasePart
+
+--// Sounds
+local purchaseSound = soundService:WaitForChild("UISounds"):FindFirstChild("Cash") :: Sound?
 
 --// Configs
-local SHOP_PROMPT_TAG = "ShearShop"
-local CLOSE_DISTANCE_EXTRA = 6 -- studs past the prompt's activation range before the shop closes itself
+local CLOSE_DISTANCE = 6 -- studs outside the hitbox before the shop closes itself
 local DISTANCE_CHECK_SECONDS = 0.25
 local MESSAGE_SECONDS = 1.3
 
@@ -67,10 +71,10 @@ type Card = {
 local cards: { Card } = {}
 local cardById: { [string]: Card } = {}
 local previewsBuilt = false
-local activePrompt: ProximityPrompt? = nil
+local nearShop = false
 local renderConnection: RBXScriptConnection? = nil
-local openToken = 0
 local spinAngle = 0
+local pendingPurchaseId: string? = nil -- equips reply on the same event, so only this id plays the purchase sound
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -230,6 +234,7 @@ local function createCards()
 		purchase.MouseButton1Click:Connect(function()
 			local state = getState(card)
 			if state == "ready" then
+				pendingPurchaseId = info.id
 				network.fireServer(network.RemoteEvents.PurchaseShear, info.id)
 			elseif state == "owned" then
 				network.fireServer(network.RemoteEvents.EquipShear, info.id)
@@ -340,28 +345,27 @@ end
 
 --// Open / close ------------------------------------------------------------------
 
-local function getPromptPosition(prompt: ProximityPrompt): Vector3?
-	local holder = prompt.Parent
-	if holder and holder:IsA("BasePart") then
-		return holder.Position
-	elseif holder and holder:IsA("Attachment") then
-		return holder.WorldPosition
-	end
-	return nil
+-- Studs from the position to the hitbox's surface (0 when inside it).
+local function getHitboxDistance(position: Vector3): number
+	local offset = shopHitbox.CFrame:PointToObjectSpace(position)
+	local half = shopHitbox.Size / 2
+	local clamped = Vector3.new(
+		math.clamp(offset.X, -half.X, half.X),
+		math.clamp(offset.Y, -half.Y, half.Y),
+		math.clamp(offset.Z, -half.Z, half.Z)
+	)
+	return (offset - clamped).Magnitude
 end
 
 local window = windowsManager.register("ShearShop", {
 	gui = shopGui,
 	frame = mainFrame,
 	onOpen = function()
-		openToken += 1
 		buildPreviews()
 		refreshAll()
 		renderConnection = runService.RenderStepped:Connect(onRender)
 	end,
 	onClose = function()
-		openToken += 1
-		activePrompt = nil
 		if renderConnection then
 			renderConnection:Disconnect()
 			renderConnection = nil
@@ -369,53 +373,23 @@ local window = windowsManager.register("ShearShop", {
 	end,
 })
 
-local function closeShop()
-	window.close()
-end
-
-local function openShop(prompt: ProximityPrompt)
-	activePrompt = prompt
-	if window.isOpen() then
-		return
-	end
-
+-- Opens the shop, then closes it once the player walks away. Closed by hand, it stays shut until they leave and come back.
+local function enterShop()
+	nearShop = true
 	window.open()
-	local token = openToken
 
-	-- Walk away from the NPC and the shop closes itself.
-	task.spawn(function()
-		while token == openToken do
-			local rootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
-			local current = activePrompt
-			local promptPosition = if current then getPromptPosition(current) else nil
-			if not rootPart or not current or not promptPosition then
-				closeShop()
-				return
-			end
-
-			if (rootPart.Position - promptPosition).Magnitude > current.MaxActivationDistance + CLOSE_DISTANCE_EXTRA then
-				closeShop()
-				return
-			end
-			task.wait(DISTANCE_CHECK_SECONDS)
+	while true do
+		task.wait(DISTANCE_CHECK_SECONDS)
+		local rootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+		if not rootPart or getHitboxDistance(rootPart.Position) > CLOSE_DISTANCE then
+			break
 		end
-	end)
-end
-
-local function connectPrompt(instance: Instance)
-	if not instance:IsA("ProximityPrompt") then
-		return
 	end
 
-	instance.Triggered:Connect(function(triggeringPlayer: Player)
-		if triggeringPlayer == player then
-			if window.isOpen() then
-				closeShop()
-			else
-				openShop(instance)
-			end
-		end
-	end)
+	nearShop = false
+	if window.isOpen() then
+		window.close()
+	end
 end
 
 --// Setup ---------------------------------------------------------------------------
@@ -436,10 +410,11 @@ for _, attribute in { "ShearId", "OwnedShears", "SheepShearedCount" } do
 	end)
 end
 
-for _, instance in collectionService:GetTagged(SHOP_PROMPT_TAG) do
-	connectPrompt(instance)
-end
-collectionService:GetInstanceAddedSignal(SHOP_PROMPT_TAG):Connect(connectPrompt)
+shopHitbox.Touched:Connect(function(hit: BasePart)
+	if not nearShop and player.Character and hit:IsDescendantOf(player.Character) then
+		task.spawn(enterShop)
+	end
+end)
 
 network.waitUntilReadyAsync()
 
@@ -449,8 +424,16 @@ network.connectEvent(network.RemoteEvents.ShearPurchaseResult, function(id: stri
 		return
 	end
 
+	local wasPurchase = id == pendingPurchaseId
+	if wasPurchase then
+		pendingPurchaseId = nil
+	end
+
 	if success then
 		refreshAll()
+		if wasPurchase and purchaseSound then
+			purchaseSound:Play()
+		end
 		local scale = card.frame:FindFirstChildOfClass("UIScale")
 		if not scale then
 			scale = Instance.new("UIScale")

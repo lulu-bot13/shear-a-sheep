@@ -1,10 +1,13 @@
 --[[
 	Starts the client network and keeps the Main HUD's wool, luck and sheep sheared labels updated.
+	Pops a "+N" next to the sheep sheared count whenever it goes up.
 ]]--
 
 --// Services
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local players = game:GetService("Players")
+local tweenService = game:GetService("TweenService")
+local debris = game:GetService("Debris")
 
 --// Modules
 local moduleLoader = require(replicatedStorage:WaitForChild("Source"):WaitForChild("ModuleLoader"))
@@ -43,15 +46,63 @@ local function updateLuckAmountLabel()
 	luckAmountLabel.Text = `Luck: {numberFormatter:Format(getShown(luckAmountValue, "LuckLabelHold"), 1)}`
 end
 
--- 32932 -> "32,932"
 local function formatWithCommas(value: number): string
 	local digits = tostring(math.floor(value))
 	return (digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^(-?),", "%1"))
 end
 
+-- Sits just right of the end of the Count text itself (not the frame), vertically centred on it.
+local function getSheepCountPopupPosition(): UDim2
+	local labelPosition, labelSize = sheepCountLabel.AbsolutePosition, sheepCountLabel.AbsoluteSize
+	local textWidth = sheepCountLabel.TextBounds.X
+	local alignment = sheepCountLabel.TextXAlignment
+	local textRight = if alignment == Enum.TextXAlignment.Left
+		then labelPosition.X + textWidth
+		elseif alignment == Enum.TextXAlignment.Right then labelPosition.X + labelSize.X
+		else labelPosition.X + (labelSize.X + textWidth) / 2
+
+	local mainPosition = mainGui.AbsolutePosition
+	return UDim2.fromOffset(textRight - mainPosition.X + 4, labelPosition.Y + labelSize.Y / 2 - mainPosition.Y)
+end
+
+local function showShearedPopup(amount: number)
+	local frame = mainGui.SheepCount :: GuiObject
+	local target = getSheepCountPopupPosition()
+
+	local popup = Instance.new("TextLabel")
+	popup.Name = "ShearedPopup"
+	popup.BackgroundTransparency = 1
+	popup.AnchorPoint = Vector2.new(0, 0.5)
+	popup.Size = UDim2.fromOffset(frame.AbsoluteSize.X * 0.5, sheepCountLabel.AbsoluteSize.Y)
+	popup.Position = target + UDim2.fromOffset(0, 12)
+	popup.Font = Enum.Font.SourceSansBold
+	popup.Text = `+{formatWithCommas(amount)}`
+	popup.TextColor3 = Color3.new(1, 1, 1)
+	popup.TextTransparency = 0.15
+	popup.TextScaled = true
+	popup.TextXAlignment = Enum.TextXAlignment.Left
+	popup.ZIndex = frame.ZIndex + 1
+	popup.Parent = mainGui
+
+	tweenService:Create(popup, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = target }):Play()
+	task.delay(0.125, function()
+		tweenService:Create(popup, TweenInfo.new(0.125), { TextTransparency = 1 }):Play()
+	end)
+	debris:AddItem(popup, 0.25)
+end
+
+local lastSheepCount: number? = nil
+
 local function updateSheepCountLabel()
 	local count = player:GetAttribute("SheepShearedCount")
-	sheepCountLabel.Text = formatWithCommas(if type(count) == "number" then count else 0)
+	count = if type(count) == "number" then count else 0
+	sheepCountLabel.Text = formatWithCommas(count)
+
+	-- Skips the first value so loading a save doesn't pop up the whole total.
+	if lastSheepCount and count > lastSheepCount then
+		showShearedPopup(count - lastSheepCount)
+	end
+	lastSheepCount = count
 end
 
 updateWoolAmountLabel()

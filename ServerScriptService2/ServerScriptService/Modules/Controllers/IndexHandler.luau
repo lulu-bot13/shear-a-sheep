@@ -31,6 +31,7 @@ export type EntryState = {
 	indexLuck: number,
 	odds: number, -- N in "1 in N" at base Luck
 	status: string, -- "Locked", "Found" or "Claimed"
+	tier: string, -- the Index tab it's listed under: "Baby" or "Normal"
 }
 
 local IndexHandler = {}
@@ -64,6 +65,7 @@ function IndexHandler.getState(player: Player): { EntryState }
 			indexLuck = SheepData.getIndexLuck(sheepType),
 			odds = SheepData.getOdds(sheepType, 0) or 1,
 			status = index[sheepType] or "Locked",
+			tier = if info.baby then "Baby" else "Normal",
 		})
 	end
 	return state
@@ -74,13 +76,15 @@ function IndexHandler.getClaimedLuck(player: Player): number
 	return SheepData.getClaimedIndexLuck(getIndex(player))
 end
 
--- Marks the type as found the first time the player shears one bare.
+-- Marks the type as found the first time the player shears one bare, and shows them the unlock popup.
 function IndexHandler.discover(player: Player, sheepType: any)
 	if type(sheepType) ~= "string" or not SheepData.Sheep[sheepType] or not PlayerDataHandler.getData(player) then
 		return
 	end
 	if getIndex(player)[sheepType] == nil then
 		setStatus(player, sheepType, FOUND)
+		local info = SheepData.Sheep[sheepType]
+		network.fireClient(network.RemoteEvents.SheepUnlocked, player, sheepType, info.name, info.rarity, info.color)
 	end
 end
 

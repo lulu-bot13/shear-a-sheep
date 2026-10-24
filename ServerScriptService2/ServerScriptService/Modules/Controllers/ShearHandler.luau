@@ -141,11 +141,11 @@ local function payHit(player: Player, sheep: Model, health: number, newHealth: n
 	}
 end
 
--- The sheep is bare: count it, add it to the Index and remove it.
+-- The sheep is bare: count it, add it to the Index and have it vanish a second later.
 local function finishSheep(player: Player, sheep: Model, sheepId: number)
 	local sheepType = sheep:GetAttribute("SheepType")
 
-	SheepHandler.removeSheep(sheepId)
+	SheepHandler.vanishSheep(sheepId)
 	updateBestFind(player, sheepType)
 	IndexHandler.discover(player, sheepType)
 	PlayerDataHandler.increment(player, "SheepShearedCount", 1)

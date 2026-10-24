@@ -6,7 +6,6 @@
 ]]--
 
 --// Services
-local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -57,6 +56,14 @@ local function addOwned(player: Player, id: string)
 	updateOwnedAttribute(player)
 end
 
+local function getShopHitbox(): BasePart?
+	local hitbox = workspace:FindFirstChild("Base")
+	for _, name in { "CenterPlaza", "ShearShop", "Shack", "ShearShopHitbox" } do
+		hitbox = hitbox and hitbox:FindFirstChild(name)
+	end
+	return if hitbox and hitbox:IsA("BasePart") then hitbox else nil
+end
+
 local function isNearShop(player: Player): boolean
 	local character = player.Character
 	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
@@ -64,21 +71,20 @@ local function isNearShop(player: Player): boolean
 		return false
 	end
 
-	for _, prompt in collectionService:GetTagged(ShearData.ShopPromptTag) do
-		local holder = prompt.Parent
-		local position: Vector3? = nil
-		if holder and holder:IsA("BasePart") then
-			position = holder.Position
-		elseif holder and holder:IsA("Attachment") then
-			position = holder.WorldPosition
-		end
-
-		if position and (rootPart.Position - position).Magnitude <= ShearData.PurchaseRange then
-			return true
-		end
+	local hitbox = getShopHitbox()
+	if not hitbox then
+		return false
 	end
 
-	return false
+	-- Distance to the hitbox's surface, so the hitbox's size doesn't matter.
+	local offset = hitbox.CFrame:PointToObjectSpace(rootPart.Position)
+	local half = hitbox.Size / 2
+	local clamped = Vector3.new(
+		math.clamp(offset.X, -half.X, half.X),
+		math.clamp(offset.Y, -half.Y, half.Y),
+		math.clamp(offset.Z, -half.Z, half.Z)
+	)
+	return (offset - clamped).Magnitude <= ShearData.PurchaseRange
 end
 
 -- Every shear Tool the player holds or carries (any container).

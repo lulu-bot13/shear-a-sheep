@@ -14,7 +14,7 @@ local MAX_BANNERS = 4
 local CENTER_SECONDS = 2.5
 local FADE_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local POP_TWEEN = TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-local FONT = Enum.Font.FredokaOne
+local FONT = Enum.Font.SourceSansBold
 
 local COLORS = {
 	success = Color3.fromRGB(80, 230, 100),
@@ -119,7 +119,8 @@ function Alerts.show(text: string, kind: Kind?)
 end
 
 -- A big title in the middle of the screen with a smaller line under it; a new one replaces the last.
-function Alerts.showCenter(title: string, subtitle: string?)
+-- yScale moves it up or down the screen (0.4 by default).
+function Alerts.showCenter(title: string, subtitle: string?, yScale: number?)
 	centerToken += 1
 	local token = centerToken
 
@@ -132,10 +133,10 @@ function Alerts.showCenter(title: string, subtitle: string?)
 	holder.Name = "Center"
 	holder.BackgroundTransparency = 1
 	holder.AnchorPoint = Vector2.new(0.5, 0.5)
-	holder.Position = UDim2.fromScale(0.5, 0.4)
+	holder.Position = UDim2.fromScale(0.5, yScale or 0.4)
 	holder.Size = UDim2.fromScale(0.7, 0.25)
 
-	local titleLabel = makeLabel(title, Color3.fromRGB(255, 213, 74), 4)
+	local titleLabel = makeLabel(title, Color3.fromRGB(230, 230, 230), 5)
 	titleLabel.Size = UDim2.fromScale(1, 0.65)
 	titleLabel.Parent = holder
 

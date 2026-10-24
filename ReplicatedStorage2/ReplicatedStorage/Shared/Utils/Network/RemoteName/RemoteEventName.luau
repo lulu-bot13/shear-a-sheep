@@ -29,6 +29,7 @@ export type EnumType = "ShearSwing"
 	| "IndexClaimResult"
 	| "RequestIndexState"
 	| "IndexState"
+	| "SheepUnlocked"
 	| "UseAbility"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
@@ -52,6 +53,7 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	IndexClaimResult = "IndexClaimResult",
 	RequestIndexState = "RequestIndexState",
 	IndexState = "IndexState",
+	SheepUnlocked = "SheepUnlocked",
 	UseAbility = "UseAbility",
 }
 

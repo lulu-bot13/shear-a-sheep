@@ -1,14 +1,15 @@
 --[[
-	Uses the player's ability on E, then plays its animation and spins the character while AbilityHandler keeps it active.
+	Uses the player's ability on E or by tapping the Ability ui, then plays its animation and spins the character while AbilityHandler keeps it active.
 	Counts the ability's cooldown down on the Main gui's Ability.Cooldown label.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AbilityClient
 ]]--
 
 --// Services
+local contextActionService = game:GetService("ContextActionService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
-local userInputService = game:GetService("UserInputService")
+local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
@@ -18,8 +19,12 @@ local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local abilityAnimations = replicatedStorage:WaitForChild("Assets"):WaitForChild("Animations"):WaitForChild("Abilities")
 
+--// Sounds
+local abilityStartSound = soundService:WaitForChild("UISounds"):FindFirstChild("ShearAbilityStart")
+
 --// Configs
 local ABILITY_KEY = Enum.KeyCode.E
+local ABILITY_ACTION = "UseAbility"
 local ACTIVE_ATTRIBUTE = "ActiveAbility" -- set by AbilityHandler while an ability runs
 local READY_AT_ATTRIBUTE = "AbilityReadyAt" -- server time the ability can be used again
 local SPIN_SPEED = math.rad(900) -- radians per second the character turns while spinning
@@ -109,6 +114,10 @@ local function startAbility(abilityId: string)
 		return
 	end
 
+	if abilityStartSound and abilityStartSound:IsA("Sound") then
+		abilityStartSound:Play()
+	end
+
 	local animator = humanoid:FindFirstChildOfClass("Animator")
 	local animation = getAnimation(abilityId)
 	if animator and animation then
@@ -151,8 +160,48 @@ onReadyAtChanged()
 
 network.waitUntilReadyAsync()
 
-userInputService.InputBegan:Connect(function(input: InputObject, gameProcessed: boolean)
-	if not gameProcessed and input.KeyCode == ABILITY_KEY then
-		network.fireServer(network.RemoteEvents.UseAbility)
+local function useAbility()
+	network.fireServer(network.RemoteEvents.UseAbility)
+end
+
+-- Tapping or clicking the Ability ui uses it too, so touch players aren't stuck without an E key.
+local boundAbilityUi: GuiObject? = nil
+
+local function bindAbilityUi(main: Instance)
+	local ability = main:WaitForChild("Ability", 10)
+	if not ability or ability == boundAbilityUi then
+		return
+	end
+
+	if ability:IsA("GuiButton") then
+		boundAbilityUi = ability
+		ability.Activated:Connect(useAbility)
+	elseif ability:IsA("GuiObject") then
+		boundAbilityUi = ability
+		ability.Active = true
+		ability.InputBegan:Connect(function(input: InputObject)
+			if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+				useAbility()
+			end
+		end)
+	end
+end
+
+playerGui.ChildAdded:Connect(function(child: Instance)
+	if child.Name == "Main" then
+		bindAbilityUi(child)
 	end
 end)
+local main = playerGui:FindFirstChild("Main")
+if main then
+	task.spawn(bindAbilityUi, main)
+end
+
+-- No CAS touch button: the Main gui's Ability ui already covers touch.
+contextActionService:BindAction(ABILITY_ACTION, function(_, inputState: Enum.UserInputState)
+	if inputState ~= Enum.UserInputState.Begin then
+		return Enum.ContextActionResult.Pass
+	end
+	useAbility()
+	return Enum.ContextActionResult.Sink
+end, false, ABILITY_KEY)

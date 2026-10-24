@@ -14,6 +14,7 @@ export type SheepInfo = {
 	LuckAmount: number, -- Luck the player earns for shearing it bare
 	IndexLuck: number?, -- permanent Luck for claiming it in the Index once; nil = worked out from its odds
 	luckDrops: boolean?, -- shearing it only drops Luck on the ground (its wool still pays out)
+	baby: boolean?, -- its model lives in Assets.Models.Sheeps.BabySheeps
 	rarity: string,
 	color: Color3,
 	chance: number, -- base spawn weight (before luck)
@@ -151,9 +152,9 @@ sheepData.Sheep = {
 		ShearHealth = 150,
 		WoolAmount = 40,
 		LuckAmount = 6,
-		rarity = "Rare",
-		color = rarityColors.Rare,
-		chance = 25000,
+		rarity = "Legendary",
+		color = rarityColors.Legendary,
+		chance = 500,
 	},
 	Ice = {
 		id = "Ice_Sheep",
@@ -205,8 +206,70 @@ sheepData.Sheep = {
 		color = rarityColors.Mythic,
 		chance = 60,
 	},
+	Stone = {
+		id = "Stone_Sheep",
+		name = "Stone Sheep",
+		ShearHealth = 225,
+		WoolAmount = 32,
+		LuckAmount = 2,
+		rarity = "Epic",
+		color = rarityColors.Epic,
+		chance = 5050,
+	},
+	CottonCandy = {
+		id = "CottonCandy_Sheep",
+		name = "Cotton Candy Sheep",
+		ShearHealth = 155,
+		WoolAmount = 38,
+		LuckAmount = 6,
+		rarity = "Rare",
+		color = rarityColors.Rare,
+		chance = 22000,
+	},
+	Rainbow = {
+		id = "Rainbow_Sheep",
+		name = "Rainbow Sheep",
+		ShearHealth = 260,
+		WoolAmount = 110,
+		LuckAmount = 70,
+		rarity = "Mythic",
+		color = rarityColors.Mythic,
+		chance = 80,
+	},
 
 } :: { [string]: SheepInfo }
+
+--[[
+	Baby sheep: every "Baby<Type>" model in Assets.Models.Sheeps.BabySheeps becomes a copy of <Type>.
+	The type's spawn weight is split between them, so its overall odds stay the same: BABY_SHARE of the time it's the baby.
+]]
+sheepData.BABY_SHARE = 0.6
+
+local babyModels = game:GetService("ReplicatedStorage").Assets.Models.Sheeps:FindFirstChild("BabySheeps")
+if babyModels then
+	for _, model in babyModels:GetChildren() do
+		local baseKey = string.match(model.Name, "^Baby(.+)$")
+		local base = baseKey and sheepData.Sheep[baseKey]
+		if not model:IsA("Model") or not base or base.baby then
+			warn(`SheepData: '{model.Name}' in BabySheeps doesn't match a sheep type (expected Baby<Type>).`)
+			continue
+		end
+
+		sheepData.Sheep[model.Name] = {
+			id = `Baby_{base.id}`,
+			name = `Baby {base.name}`,
+			ShearHealth = base.ShearHealth,
+			WoolAmount = base.WoolAmount,
+			LuckAmount = base.LuckAmount,
+			luckDrops = base.luckDrops,
+			baby = true,
+			rarity = base.rarity,
+			color = base.color,
+			chance = base.chance * sheepData.BABY_SHARE,
+		}
+		base.chance *= 1 - sheepData.BABY_SHARE
+	end
+end
 
 --[[
 	Luck boosts every tier above Common: a sheep's weight is multiplied by luckFactor ^ (tier index),

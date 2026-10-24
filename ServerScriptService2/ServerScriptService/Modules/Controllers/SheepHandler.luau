@@ -30,9 +30,12 @@ local SHEEPS_FOLDER_NAME = "Sheeps" -- lives inside each plot
 local SHEEP_TAG = "Sheep"
 local SHEEP_COLLISION_GROUP = "Sheep"
 local OWNER_ATTRIBUTE = "OwnerId"
-local WOOL_PART_NAME = "Torso" -- the mesh that is the sheep's wool
+local WOOL_PART_NAME = "Torso" -- the mesh that is the sheep's wool, unless it has a separate Wool part
+local SEPARATE_WOOL_NAME = "Wool" -- optional wool part over the Torso
 local WOOL_BASE_SIZE = "WoolBaseSize" -- the wool's untouched look, remembered on the part itself
 local WOOL_BASE_COLOR = "WoolBaseColor"
+local WOOL_BASE_TRANSPARENCY = "WoolBaseTransparency"
+local BASE_SCALE = "BaseScale" -- the model's scale as built in Studio, restored after it shrinks away
 local HEALTH_HUD_NAME = "HealthHUD"
 local HEALTH_HUD_SIZE = Vector2.new(4.5, 1.3) -- studs
 local HEALTH_FULL_COLOR = Color3.fromRGB(110, 220, 120)
@@ -95,34 +98,50 @@ end
 
 --// Wool look --------------------------------------------------------------------------
 
-local function getWoolPart(sheep: Instance): BasePart?
+-- The sheep's wool: its own "Wool" part when it has one (the second result is then true), else the Torso.
+local function getWoolPart(sheep: Instance): (BasePart?, boolean)
+	local separate = sheep:FindFirstChild(SEPARATE_WOOL_NAME)
+	if separate and separate:IsA("BasePart") then
+		return separate, true
+	end
 	local part = sheep:FindFirstChild(WOOL_PART_NAME)
-	return if part and part:IsA("BasePart") then part else nil
+	return if part and part:IsA("BasePart") then part else nil, false
 end
 
--- The wool's full size and colour, recorded the first time this model is used.
-local function getWoolBase(wool: BasePart): (Vector3, Color3)
+-- The wool's full size, colour and transparency, recorded the first time this model is used.
+local function getWoolBase(wool: BasePart): (Vector3, Color3, number)
 	local size = wool:GetAttribute(WOOL_BASE_SIZE)
 	local color = wool:GetAttribute(WOOL_BASE_COLOR)
-	if typeof(size) ~= "Vector3" or typeof(color) ~= "Color3" then
-		size, color = wool.Size, wool.Color
+	local transparency = wool:GetAttribute(WOOL_BASE_TRANSPARENCY)
+	if typeof(size) ~= "Vector3" or typeof(color) ~= "Color3" or type(transparency) ~= "number" then
+		size, color, transparency = wool.Size, wool.Color, wool.Transparency
 		wool:SetAttribute(WOOL_BASE_SIZE, size)
 		wool:SetAttribute(WOOL_BASE_COLOR, color)
+		wool:SetAttribute(WOOL_BASE_TRANSPARENCY, transparency)
 	end
-	return size :: Vector3, color :: Color3
+	return size :: Vector3, color :: Color3, transparency :: number
 end
 
--- Shrinks the wool and fades it towards bare skin as the sheep's ShearHealth drops (seen by everyone).
+--[[
+	Follows the sheep's ShearHealth (seen by everyone). A separate Wool part shrinks and is gone at 0, leaving
+	the Torso; without one, the Torso itself shrinks and fades to pink.
+]]
 local function updateWoolVisual(sheep: Model)
-	local wool = getWoolPart(sheep)
+	local wool, separate = getWoolPart(sheep)
 	local health = sheep:GetAttribute("ShearHealth")
 	local maxHealth = sheep:GetAttribute("MaxShearHealth")
 	if not wool or type(health) ~= "number" or type(maxHealth) ~= "number" or maxHealth <= 0 then
 		return
 	end
 
-	local baseSize, baseColor = getWoolBase(wool)
+	local baseSize, baseColor, baseTransparency = getWoolBase(wool)
 	local shorn = 1 - math.clamp(health / maxHealth, 0, 1)
+	if separate then
+		wool.Size = baseSize * Vector3.new(1, 1, 1):Lerp(WoolData.ShornWoolScale, shorn)
+		wool.Transparency = if health <= 0 then 1 else baseTransparency
+		return
+	end
+
 	wool.Size = baseSize * Vector3.new(1, 1, 1):Lerp(WoolData.ShornTorsoScale, shorn)
 	wool.Color = baseColor:Lerp(WoolData.ShornColor, shorn * WoolData.ShornColorBlend)
 end
@@ -233,11 +252,17 @@ end
 --// Pooling -------------------------------------------------------------------------------
 
 local function resetSheepForPool(sheep: Instance)
+	local baseScale = sheep:GetAttribute(BASE_SCALE)
+	if sheep:IsA("Model") and type(baseScale) == "number" and sheep:GetScale() ~= baseScale then
+		sheep:ScaleTo(baseScale)
+	end
+
 	local wool = getWoolPart(sheep)
 	if wool then
-		local baseSize, baseColor = getWoolBase(wool)
+		local baseSize, baseColor, baseTransparency = getWoolBase(wool)
 		wool.Size = baseSize
 		wool.Color = baseColor
+		wool.Transparency = baseTransparency
 	end
 
 	sheep:SetAttribute(OWNER_ATTRIBUTE, nil)
@@ -259,15 +284,14 @@ local function resetSheepForPool(sheep: Instance)
 	end
 end
 
--- Removes the sheep from the registry and returns its Model to the pool. Returns its owner's id.
-local function releaseSheep(id: number): number?
+-- Takes the sheep out of the registry so nothing shears or walks it any more. Returns it and its owner's id.
+local function unregisterSheep(id: number): (Model?, number?)
 	local sheep = sheepById[id]
 	if not sheep then
-		return nil
+		return nil, nil
 	end
 
 	sheepById[id] = nil
-	local ownerId = SheepHandler.getOwnerId(sheep)
 
 	local woolConnection = woolConnections[id]
 	if woolConnection then
@@ -275,22 +299,69 @@ local function releaseSheep(id: number): number?
 		woolConnections[id] = nil
 	end
 
+	return sheep, SheepHandler.getOwnerId(sheep)
+end
+
+local function poolSheep(sheep: Model)
 	local sheepType = sheep:GetAttribute("SheepType")
 	if type(sheepType) == "string" then
 		ObjectPool.release(SHEEP_POOL, sheepType, sheep, resetSheepForPool)
 	else
 		sheep:Destroy()
 	end
+end
 
+-- Removes the sheep from the registry and returns its Model to the pool. Returns its owner's id.
+local function releaseSheep(id: number): number?
+	local sheep, ownerId = unregisterSheep(id)
+	if sheep then
+		poolSheep(sheep)
+	end
 	return ownerId
 end
 
--- Removes a sheep (sheared bare or broke out); its owner's sheep count drops by one.
+-- Shows the sheep bare and pink with no billboards, holds it still for a moment, then it vanishes.
+local function playVanish(sheep: Model, onDone: () -> ())
+	updateWoolVisual(sheep)
+	SheepHandler.setHudVisible(sheep, false)
+
+	local root = sheep:FindFirstChild("HumanoidRootPart")
+	local healthHud = root and root:FindFirstChild(HEALTH_HUD_NAME)
+	if healthHud and healthHud:IsA("BillboardGui") then
+		healthHud.Enabled = false
+	end
+	if not root or not root:IsA("BasePart") then
+		onDone()
+		return
+	end
+
+	root.Anchored = true
+	collectionService:RemoveTag(sheep, SHEEP_TAG) -- client effects (grazing etc.) let go of it
+
+	task.delay(WoolData.VanishDelay, onDone)
+end
+
+-- Removes a sheep that broke out; its owner's sheep count drops by one.
 function SheepHandler.removeSheep(id: number)
 	local ownerId = releaseSheep(id)
 	if ownerId then
 		setCount(ownerId, (countByOwner[ownerId] or 1) - 1)
 	end
+end
+
+-- Removes a sheep sheared bare: it stands naked for a moment before going back to the pool. The count drops right away.
+function SheepHandler.vanishSheep(id: number)
+	local sheep, ownerId = unregisterSheep(id)
+	if not sheep then
+		return
+	end
+	if ownerId then
+		setCount(ownerId, (countByOwner[ownerId] or 1) - 1)
+	end
+
+	playVanish(sheep, function()
+		poolSheep(sheep)
+	end)
 end
 
 -- Removes every sheep the player owns without counting it as a loss (they left, or rebirthed).
@@ -331,6 +402,7 @@ end
 	inside the sheep while shearing (the groups don't collide), so collidable body parts yanked the camera around.
 ]]
 local function prepareNewModel(sheepModel: Model, root: BasePart)
+	sheepModel:SetAttribute(BASE_SCALE, sheepModel:GetScale())
 	for _, descendant in sheepModel:GetDescendants() do
 		if descendant:IsA("BasePart") then
 			descendant.CollisionGroup = SHEEP_COLLISION_GROUP
@@ -347,9 +419,10 @@ local function acquireModel(sheepType: string): Model?
 		return pooled :: Model
 	end
 
-	local template = sheepModels:FindFirstChild(sheepType)
+	local babyModels = sheepModels:FindFirstChild("BabySheeps")
+	local template = sheepModels:FindFirstChild(sheepType) or (babyModels and babyModels:FindFirstChild(sheepType))
 	if not template or not template:IsA("Model") then
-		warn(`SheepHandler: '{sheepType}' is not a model in Assets.Models.Sheeps.`)
+		warn(`SheepHandler: '{sheepType}' is not a model in Assets.Models.Sheeps or Sheeps.BabySheeps.`)
 		return nil
 	end
 

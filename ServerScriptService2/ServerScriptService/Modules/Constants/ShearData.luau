@@ -37,8 +37,7 @@ shearData.MaxHeightDifference = 6 -- studs a sheep may be above or below the cha
 
 --// Shop ----------------------------------------------------------------------------------
 
-shearData.PurchaseRange = 25 -- studs from the shop prompt a player may still buy
-shearData.ShopPromptTag = "ShearShop"
+shearData.PurchaseRange = 12 -- studs outside the shop hitbox a player may still buy (the client closes the shop at 6)
 
 --// Lookups -------------------------------------------------------------------------------
 

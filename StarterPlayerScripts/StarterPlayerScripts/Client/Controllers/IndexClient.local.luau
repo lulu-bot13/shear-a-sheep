@@ -44,8 +44,12 @@ local claimAllButton = claimAllFrame:WaitForChild("Claim") :: TextButton
 local claimAllAmount = claimAllFrame:WaitForChild("RewardAmount") :: TextLabel
 local claimAllMultiplier = claimAllFrame:WaitForChild("Multiplier") :: TextLabel
 
+-- Tier tabs under the Index: every button in TierTabs with a "Tier" attribute is a page showing only that tier's sheep.
+local tierTabs = mainFrame:FindFirstChild("TierTabs")
+local emptyTierLabel = mainFrame:FindFirstChild("EmptyTierLabel") :: TextLabel?
+
 --// Sounds
-local cashInSound = soundService:WaitForChild("UISounds"):FindFirstChild("Cash")
+local luckClaimedSound = soundService:WaitForChild("UISounds"):FindFirstChild("LuckClaimed")
 
 --// Configs
 local CLAIM_COLOR = Color3.fromRGB(255, 200, 40)
@@ -58,6 +62,8 @@ local CAMERA_PITCH = math.rad(15)
 local CAMERA_FOV = 40
 local SPIN_SPEED = math.rad(60) -- per second, for the selected sheep
 local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so card sizes aren't measured
+local DEFAULT_TIER = "Normal" -- the page the Index opens on
+local INACTIVE_TAB_DARKEN = 0.4 -- how much darker the tabs that aren't open are
 
 type Card = {
 	id: string,
@@ -80,6 +86,9 @@ local selectedId: string? = nil
 local previews: { [ViewportFrame]: Preview } = {}
 local spinConnection: RBXScriptConnection? = nil
 local spinAngle = 0
+local tierButtons: { [string]: GuiButton } = {}
+local tierButtonColors: { [GuiButton]: Color3 } = {}
+local currentTier: string? = nil -- nil = no tabs, so every sheep shows
 
 local rewardAmountColor = rewardAmount.TextColor3
 local claimButtonText = claimButton.Text
@@ -149,9 +158,17 @@ local function pop(gui: GuiObject)
 	tweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 end
 
-local function playCashSound()
-	if cashInSound and cashInSound:IsA("Sound") then
-		cashInSound:Play()
+-- The Index tab a sheep is listed under (the server sends it; Baby<Type> ids fall back to "Baby").
+local function getTier(entry: any): string
+	if type(entry.tier) == "string" then
+		return entry.tier
+	end
+	return if string.match(entry.id, "^Baby") then "Baby" else "Normal"
+end
+
+local function playLuckClaimedSound()
+	if luckClaimedSound and luckClaimedSound:IsA("Sound") then
+		luckClaimedSound:Play()
 	end
 end
 
@@ -239,7 +256,8 @@ end
 local function buildPreview(viewport: ViewportFrame, sheepType: string)
 	clearPreview(viewport)
 
-	local template = sheepModels:FindFirstChild(sheepType)
+	local babyModels = sheepModels:FindFirstChild("BabySheeps")
+	local template = sheepModels:FindFirstChild(sheepType) or (babyModels and babyModels:FindFirstChild(sheepType))
 	if not template or not template:IsA("Model") then
 		return
 	end
@@ -358,6 +376,53 @@ local function selectCard(card: Card)
 	startSpin()
 end
 
+--// Tier pages ---------------------------------------------------------------------
+
+-- Shows only the open tier's cards, lights up its tab and dims the others.
+local function renderTier()
+	local shown = 0
+	for _, card in cards do
+		local visible = currentTier == nil or getTier(card.entry) == currentTier
+		card.frame.Visible = visible
+		if visible then
+			shown += 1
+		end
+	end
+
+	if emptyTierLabel then
+		emptyTierLabel.Visible = #entries > 0 and shown == 0
+	end
+
+	for tier, button in tierButtons do
+		local color = tierButtonColors[button]
+		button.BackgroundColor3 = if tier == currentTier then color else color:Lerp(Color3.new(0, 0, 0), INACTIVE_TAB_DARKEN)
+	end
+end
+
+-- Opens a tier's page; a selected sheep from another tier is let go.
+local function setTier(tier: string)
+	if tier == currentTier then
+		return
+	end
+	currentTier = tier
+
+	local selected = if selectedId then cards[selectedId] else nil
+	if selected and getTier(selected.entry) ~= tier then
+		if selected.viewport then
+			setPreviewAngle(selected.viewport, 0)
+		end
+		selectedId = nil
+		clearPreview(infoViewport)
+		renderInfo()
+	end
+
+	if cardContainer:IsA("ScrollingFrame") then
+		cardContainer.CanvasPosition = Vector2.zero
+	end
+	renderTier()
+	task.defer(updateCanvasSize)
+end
+
 -- Shows ClaimAllFrame while more than one sheep is waiting to be claimed.
 local function renderClaimAll()
 	local count, luck = 0, 0
@@ -391,7 +456,7 @@ local function refreshCard(card: Card)
 		card.rarityLabel.Text = LOCKED_TEXT
 		card.rarityLabel.TextColor3 = CLAIMED_COLOR
 	elseif status == "Found" then
-		card.rarityLabel.Text = `Claim +{formatWithCommas(entry.indexLuck)} Luck`
+		card.rarityLabel.Text = "Claim"
 		card.rarityLabel.TextColor3 = CLAIM_COLOR
 	else
 		card.rarityLabel.Text = entry.rarity
@@ -458,6 +523,7 @@ local function render()
 		refreshCard(card)
 	end
 
+	renderTier()
 	renderInfo()
 	renderClaimAll()
 	task.defer(updateCanvasSize)
@@ -477,6 +543,22 @@ windowsManager.register("Index", {
 })
 
 cardTemplate.Visible = false
+
+if tierTabs then
+	for _, button in tierTabs:GetChildren() do
+		local tier = button:GetAttribute("Tier")
+		if button:IsA("GuiButton") and type(tier) == "string" then
+			tierButtons[tier] = button
+			tierButtonColors[button] = button.BackgroundColor3
+			button.Activated:Connect(function()
+				pop(button)
+				setTier(tier)
+			end)
+		end
+	end
+	currentTier = if tierButtons[DEFAULT_TIER] then DEFAULT_TIER else next(tierButtons)
+end
+renderTier()
 claimAllFrame.Visible = false
 alertBadge.Visible = false
 setInfoVisible(false)
@@ -517,7 +599,7 @@ network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string,
 	if id == "All" then
 		if success then
 			pop(claimAllFrame)
-			playCashSound()
+			playLuckClaimedSound()
 		else
 			shake(claimAllButton)
 		end
@@ -530,7 +612,7 @@ network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string,
 	end
 	if success then
 		pop(card.frame)
-		playCashSound()
+		playLuckClaimedSound()
 	else
 		shake(claimButton)
 	end

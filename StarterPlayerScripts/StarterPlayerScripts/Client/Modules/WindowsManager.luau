@@ -7,12 +7,22 @@
 
 --// Services
 local tweenService = game:GetService("TweenService")
+local lighting = game:GetService("Lighting")
 
 --// Configs
 local EXIT_BUTTON_NAME = "Exit"
 local OPEN_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local CLOSE_TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+local BLUR_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local OPEN_FROM_SCALE = 0.85 -- of the frame's own scale
+
+--// Blur
+-- Its Studio Size is the blur shown while any window is open.
+local blur = lighting:WaitForChild("Blur") :: BlurEffect
+local blurSize = blur.Size
+local blurTween: Tween? = nil
+blur.Enabled = false
+blur.Size = 0
 
 export type WindowOptions = {
 	gui: ScreenGui,
@@ -34,6 +44,36 @@ export type Window = {
 local windows: { [string]: Window } = {}
 
 local WindowsManager = {}
+
+local function anyWindowOpen(): boolean
+	for _, window in windows do
+		if window.isOpen() then
+			return true
+		end
+	end
+	return false
+end
+
+local function updateBlur()
+	local shown = anyWindowOpen()
+	if blurTween then
+		blurTween:Cancel()
+	end
+	if shown then
+		blur.Enabled = true
+	end
+
+	local newTween = tweenService:Create(blur, BLUR_TWEEN, { Size = if shown then blurSize else 0 })
+	blurTween = newTween
+	newTween:Play()
+	if not shown then
+		newTween.Completed:Once(function(state)
+			if state == Enum.PlaybackState.Completed then
+				blur.Enabled = false
+			end
+		end)
+	end
+end
 
 function WindowsManager.closeAll(except: Window?)
 	for _, window in windows do
@@ -104,6 +144,7 @@ function WindowsManager.register(name: string, options: WindowOptions): Window
 		gui.Enabled = true
 		frame.Visible = true
 		playTween(OPEN_TWEEN, baseScale)
+		updateBlur()
 
 		if options.onOpen then
 			options.onOpen()
@@ -125,6 +166,7 @@ function WindowsManager.register(name: string, options: WindowOptions): Window
 				uiScale.Scale = baseScale
 			end
 		end)
+		updateBlur()
 
 		if options.onClose then
 			options.onClose()
