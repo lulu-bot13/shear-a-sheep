@@ -1,5 +1,5 @@
 --[[
-	First-play tutorial: go to a sheep, shear it, buy More Wool and +1 Sheep, farm wool, then rebirth.
+	First-play tutorial: go to a sheep, shear 3, buy More Wool, close the shop, gain wool, then rebirth.
 	Each step is worked out from the player's progress, so it resumes after a rejoin and ends at the first rebirth.
 ]]--
 
@@ -9,11 +9,11 @@ local guiService = game:GetService("GuiService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
+local tweenService = game:GetService("TweenService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
-local alerts = require(script.Parent.Parent.Modules.Alerts)
 local spotlightUI = require(script.Parent.Parent.Modules.SpotlightUI)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
@@ -21,13 +21,21 @@ local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local tutorialGui = playerGui:WaitForChild("Tutorial") :: ScreenGui
-local tutorialText = tutorialGui:WaitForChild("Main"):WaitForChild("TutorialFrame"):WaitForChild("TutorialText1") :: TextLabel
+local tutorialMain = tutorialGui:WaitForChild("Main") :: GuiObject
+local tutorialFrame = tutorialMain:WaitForChild("TutorialFrame") :: GuiObject
+local tutorialText = tutorialFrame:WaitForChild("TutorialText") :: TextLabel
+local spotlightFrame = tutorialGui:WaitForChild("Spotlight") :: GuiObject
+local darkOverlay = tutorialGui:WaitForChild("DarkOverlay") :: GuiObject
+local completedLabel = tutorialGui:WaitForChild("TutorialCompletedLabel") :: GuiObject
+local tip = tutorialGui:WaitForChild("Tip") :: GuiObject
 local mainGui = playerGui:WaitForChild("Main")
 local pointer = mainGui:WaitForChild("Pointer") :: GuiObject
 local hudButtons = mainGui:WaitForChild("Buttons")
 local upgradesButton = hudButtons:WaitForChild("Upgrades") :: GuiButton
 local rebirthHudButton = hudButtons:WaitForChild("Rebirth") :: GuiButton
-local upgradeCards = playerGui:WaitForChild("UpgradeShop"):WaitForChild("Main"):WaitForChild("ScrollingFrame")
+local upgradeShopMain = playerGui:WaitForChild("UpgradeShop"):WaitForChild("Main")
+local upgradeCards = upgradeShopMain:WaitForChild("ScrollingFrame")
+local upgradeShopExit = upgradeShopMain:FindFirstChild("Exit", true) :: GuiObject? -- found the same way WindowsManager wires it
 local rebirthButton = playerGui:WaitForChild("RebirthScreen"):WaitForChild("Main"):WaitForChild("Rebirth") :: GuiButton
 local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
 
@@ -40,6 +48,12 @@ local ALWAYS_IN_STUDIO = true -- TODO: set to false once the tutorial is tested;
 local TICK_SECONDS = 0.1
 local DISPLAY_ORDER = 90 -- the text, spotlight and pointer draw over every window (Alerts are 100)
 local STATE_REQUEST_SECONDS = 2 -- re-asks the server for upgrade / rebirth state until it arrives
+local COMPLETED_SECONDS = 3 -- how long the completed label stays up
+local SHEEP_TO_SHEAR = 3
+local MORE_WOOL_ID = "MoreWool"
+local KEEP_HUD_BUTTONS = { Upgrades = true, Rebirth = true } -- the only HUD buttons shown until the tutorial ends
+local POP_IN = TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local POP_OUT = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In)
 
 local HIGHLIGHT_COLOR = Color3.fromRGB(255, 230, 90)
 local BEAM_COLOR = Color3.fromRGB(255, 230, 90)
@@ -51,17 +65,13 @@ local POINTER_GAP = 6 -- pixels between the pointer and the top of its target
 local POINTER_BOB_PIXELS = 12
 local POINTER_BOB_SPEED = 5
 
--- Bought in this order during the Upgrades step.
-local UPGRADE_STEPS = {
-	{ id = "MoreWool", text = "Buy More Wool" },
-	{ id = "Capacity", text = "Buy +1 Sheep" },
-}
-
-type Stage = "GoToSheep" | "Shear" | "Upgrades" | "Rebirth" | "Done"
+type Stage = "GoToSheep" | "Shear" | "Upgrades" | "CloseUpgrades" | "Rebirth" | "Done"
 
 --// State
 local stage: Stage = "GoToSheep"
-local shearedAtStageStart = 0
+local shearedBaseline = 0 -- SheepShearedCount the "Shear 3 Sheep" progress counts up from
+local hiddenHudButtons: { GuiObject } = {}
+local popFullScales: { [UIScale]: number } = {} -- each popped object's full size, read before its first pop
 local upgradeStates: { [string]: any }? = nil -- UpgradeState cards by id
 local rebirthCost: number? = nil
 local nextStateRequest = 0
@@ -255,7 +265,6 @@ end
 
 local function setStage(newStage: Stage)
 	stage = newStage
-	shearedAtStageStart = getNumberAttribute("SheepShearedCount")
 	clearSheepGuides()
 	point(nil)
 end
@@ -271,7 +280,7 @@ end
 
 -- "Go to a Sheep": every sheep is outlined and a beam leads to one of them.
 local function updateGoToSheep()
-	setText("Go to a Sheep")
+	setText("Walk to a Sheep")
 	local sheepList = getOwnSheep()
 	setHighlights(sheepList)
 
@@ -293,29 +302,14 @@ local function updateGoToSheep()
 	end
 end
 
--- The sheep being sheared: the one with the least wool left, then the nearest.
-local function getShearTarget(): Model?
-	local playerRoot = getRoot(player.Character)
-	local best: Model?, bestRatio, bestDistance = nil, math.huge, math.huge
-	for _, sheep in getOwnSheep() do
-		local health = sheep:GetAttribute("ShearHealth")
-		local maxHealth = sheep:GetAttribute("MaxShearHealth")
-		if type(health) ~= "number" or type(maxHealth) ~= "number" or maxHealth <= 0 then
-			continue
-		end
-
-		local ratio = health / maxHealth
-		local distance = if playerRoot then getFlatDistance(playerRoot.Position, (getRoot(sheep) :: BasePart).Position) else 0
-		if ratio < bestRatio or (ratio == bestRatio and distance < bestDistance) then
-			best, bestRatio, bestDistance = sheep, ratio, distance
-		end
-	end
-	return best
-end
-
--- "Click to Shear 1/5": swings landed on the sheep / swings it takes to shear it bare.
+-- "Shear Sheep for Wool 1/3": sheep shorn bare since the tutorial started.
 local function updateShear()
-	if getNumberAttribute("SheepShearedCount") > shearedAtStageStart then
+	local count = getNumberAttribute("SheepShearedCount")
+	if count < shearedBaseline then
+		shearedBaseline = count -- the data was reset (e.g. /resetdata), so count from the new total
+	end
+	local sheared = count - shearedBaseline
+	if sheared >= SHEEP_TO_SHEAR then
 		setStage("Upgrades")
 		return
 	end
@@ -323,73 +317,63 @@ local function updateShear()
 		setText("Equip your Shears")
 		return
 	end
-
-	local sheep = getShearTarget()
-	local damage = getNumberAttribute("ShearDamage")
-	if not sheep or damage <= 0 then
-		setText("Click to Shear")
-		return
-	end
-
-	local total = math.ceil((sheep:GetAttribute("MaxShearHealth") :: number) / damage)
-	local left = math.ceil((sheep:GetAttribute("ShearHealth") :: number) / damage)
-	setText(`Click to Shear {total - left}/{total}`)
+	setText(`Shear Sheep for Wool {sheared}/{SHEEP_TO_SHEAR}`)
 end
 
--- Opens the shop, then buys More Wool and +1 Sheep; asks for wool first if the next one isn't affordable.
+-- Opens the shop and buys More Wool; asks for wool first if it isn't affordable.
 local function updateUpgrades()
-	local states = upgradeStates
-	if not states then
+	local card = upgradeStates and upgradeStates[MORE_WOOL_ID]
+	if not card then
 		requestState(network.RemoteEvents.RequestUpgradeState)
-		setText("Open Upgrades")
+		setText("Spend Wool on Upgrades")
 		point(upgradesButton)
 		return
 	end
-
-	local step, card = nil, nil
-	for _, upgradeStep in UPGRADE_STEPS do
-		local state = states[upgradeStep.id]
-		if state and state.cost and (state.level or 0) == 0 then
-			step, card = upgradeStep, state
-			break
-		end
-	end
-	if not step or not card then
-		setStage("Rebirth")
+	if (card.level or 0) > 0 or not card.cost then
+		setStage("CloseUpgrades")
 		return
 	end
 
-	if wool.Value < card.cost then
+	if not isWindowOpen("UpgradeShop") then
+		setText("Spend Wool on Upgrades")
+		point(upgradesButton)
+	elseif wool.Value < card.cost then
 		setText(`Shear sheep for Wool {formatWool(wool.Value)}/{formatWool(card.cost)}`)
 		point(nil)
-	elseif not isWindowOpen("UpgradeShop") then
-		setText("Open Upgrades")
-		point(upgradesButton)
 	else
-		local cardFrame = upgradeCards:FindFirstChild(step.id)
+		local cardFrame = upgradeCards:FindFirstChild(MORE_WOOL_ID)
 		local purchase = cardFrame and cardFrame:FindFirstChild("Purchase")
-		setText(step.text)
+		setText("Buy More Wool to earn faster")
 		point(if purchase and purchase:IsA("GuiObject") then purchase else nil)
 	end
 end
 
--- Farms wool up to the first rebirth's cost, then opens the rebirth screen and presses Rebirth.
+local function updateCloseUpgrades()
+	if not isWindowOpen("UpgradeShop") then
+		setStage("Rebirth")
+		return
+	end
+	setText("Close Upgrades")
+	point(upgradeShopExit)
+end
+
+-- Gains wool up to the first rebirth's cost, then opens the rebirth screen and presses Rebirth.
 local function updateRebirth()
 	local cost = rebirthCost
 	if not cost then
 		requestState(network.RemoteEvents.RequestRebirthState)
-		setText("Farm Wool to Rebirth")
+		setText("Gain Wool")
 		return
 	end
 
 	if wool.Value < cost then
-		setText(`Farm Wool to Rebirth {formatWool(wool.Value)}/{formatWool(cost)}`)
+		setText(`Gain {formatWool(cost)} Wool to Rebirth {formatWool(wool.Value)}/{formatWool(cost)}`)
 		point(nil)
 	elseif not isWindowOpen("Rebirth") then
 		setText("Open Rebirths")
 		point(rebirthHudButton)
 	else
-		setText("Press Rebirth!")
+		setText("Rebirth for a permanent Wool boost!")
 		point(rebirthButton)
 	end
 end
@@ -398,10 +382,28 @@ local UPDATERS: { [Stage]: () -> () } = {
 	GoToSheep = updateGoToSheep,
 	Shear = updateShear,
 	Upgrades = updateUpgrades,
+	CloseUpgrades = updateCloseUpgrades,
 	Rebirth = updateRebirth,
 }
 
 --// Lifecycle ---------------------------------------------------------------------------
+
+-- Hides every HUD button the tutorial doesn't use; showHudButtons puts them back.
+local function hideHudButtons()
+	for _, button in hudButtons:GetChildren() do
+		if button:IsA("GuiObject") and button.Visible and not KEEP_HUD_BUTTONS[button.Name] then
+			button.Visible = false
+			table.insert(hiddenHudButtons, button)
+		end
+	end
+end
+
+local function showHudButtons()
+	for _, button in hiddenHudButtons do
+		button.Visible = true
+	end
+	table.clear(hiddenHudButtons)
+end
 
 local function stop()
 	stage = "Done"
@@ -417,6 +419,64 @@ local function stop()
 	end
 	pointer.Visible = false
 	pointer.Parent = pointerParent
+	tutorialMain.Visible = false
+	spotlightFrame.Visible = false
+	tutorialGui.Enabled = false
+	showHudButtons()
+end
+
+-- The object's UIScale and the size it pops up to; a Studio-built UIScale keeps its value as the full size, otherwise one is added at 1.
+local function getPopScale(guiObject: GuiObject): (UIScale, number)
+	local scale = guiObject:FindFirstChildOfClass("UIScale")
+	if not scale then
+		scale = Instance.new("UIScale")
+		scale.Parent = guiObject
+	end
+	local uiScale = scale :: UIScale
+	local fullScale = popFullScales[uiScale] or uiScale.Scale
+	popFullScales[uiScale] = fullScale
+	return uiScale, fullScale
+end
+
+local function popIn(guiObject: GuiObject)
+	local uiScale, fullScale = getPopScale(guiObject)
+	uiScale.Scale = 0
+	guiObject.Visible = true
+	tweenService:Create(uiScale, POP_IN, { Scale = fullScale }):Play()
+end
+
+-- Yields until the object has shrunk away, then hides it.
+local function popOut(guiObject: GuiObject)
+	local uiScale, fullScale = getPopScale(guiObject)
+	local tween = tweenService:Create(uiScale, POP_OUT, { Scale = 0 })
+	tween:Play()
+	tween.Completed:Wait()
+	guiObject.Visible = false
+	uiScale.Scale = fullScale
+end
+
+-- Pops the completed label in over the dimmed screen, holds it, then pops it out; the Tip stays up until the next rebirth.
+local function showCompleted()
+	tutorialGui.Enabled = true
+	darkOverlay.Visible = true
+	popIn(completedLabel)
+	popIn(tip)
+	task.wait(COMPLETED_SECONDS)
+
+	popOut(completedLabel)
+	darkOverlay.Visible = false
+
+	-- The Tip stays up until the player's next rebirth.
+	local rebirths = getNumberAttribute("Rebirths")
+	while true do
+		player:GetAttributeChangedSignal("Rebirths"):Wait()
+		local newRebirths = getNumberAttribute("Rebirths")
+		if newRebirths > rebirths then
+			break
+		end
+		rebirths = newRebirths -- the data was reset, so the next rebirth still hides it
+	end
+	popOut(tip)
 	tutorialGui.Enabled = false
 end
 
@@ -425,18 +485,25 @@ local function start(firstStage: Stage)
 	tutorialGui.ResetOnSpawn = false
 	tutorialGui.DisplayOrder = DISPLAY_ORDER
 	tutorialGui.Enabled = true
+	tutorialMain.Visible = true
+	tutorialFrame.Visible = true
+	tutorialText.Visible = true
 	pointer.AnchorPoint = Vector2.new(0.5, 0.5)
 	pointer.Rotation = POINTER_ROTATION
 	pointer.Visible = false
 	pointer.Parent = tutorialGui
+	hideHudButtons()
 
 	setStage(firstStage)
 	renderConnection = runService.RenderStepped:Connect(updatePointer)
 
 	while stage ~= "Done" do
-		if getNumberAttribute("Rebirths") > startRebirths then
+		local rebirths = getNumberAttribute("Rebirths")
+		if rebirths < startRebirths then
+			startRebirths = rebirths -- the data was reset, so the next rebirth still ends the tutorial
+		elseif rebirths > startRebirths then
 			stop()
-			alerts.show("Tutorial complete!", "success")
+			showCompleted()
 			return
 		end
 		UPDATERS[stage]()
@@ -446,6 +513,10 @@ end
 
 tutorialGui.Enabled = false
 pointer.Visible = false
+spotlightFrame.Visible = false -- FocusUI shows it when there's a button to point at
+darkOverlay.Visible = false
+completedLabel.Visible = false
+tip.Visible = false
 
 network.waitUntilReadyAsync()
 
@@ -469,10 +540,11 @@ end
 local forced = ALWAYS_IN_STUDIO and runService:IsStudio()
 if forced then
 	print("[TutorialClient] running from the start (ALWAYS_IN_STUDIO)")
+	shearedBaseline = getNumberAttribute("SheepShearedCount")
 	start("GoToSheep")
 elseif getNumberAttribute("Rebirths") >= 1 then
 	print(`[TutorialClient] skipped: this save has {getNumberAttribute("Rebirths")} rebirth(s)`)
 	stop()
 else
-	start(if getNumberAttribute("SheepShearedCount") > 0 then "Upgrades" else "GoToSheep")
+	start(if getNumberAttribute("SheepShearedCount") >= SHEEP_TO_SHEAR then "Upgrades" else "GoToSheep")
 end

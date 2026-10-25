@@ -17,6 +17,7 @@ local soundService = game:GetService("SoundService")
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 local alerts = require(script.Parent.Parent.Modules.Alerts)
+local alertPulse = require(script.Parent.Parent.Modules.AlertPulse)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
@@ -372,6 +373,9 @@ end
 cardTemplate.Visible = false
 scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.None -- updateCanvasSize sizes it instead
 updateAlert()
+if alertBadge then
+	alertPulse.attach(alertBadge)
+end
 wool.Changed:Connect(function()
 	updateAlert()
 	for _, card in cards do

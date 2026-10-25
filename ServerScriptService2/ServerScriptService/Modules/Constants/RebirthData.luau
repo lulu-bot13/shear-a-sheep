@@ -9,8 +9,9 @@
 local rebirthData = {}
 
 rebirthData.MAX_REBIRTHS = 25
-rebirthData.COST_BASE = 1500 -- wool for the first rebirth
-rebirthData.COST_GROWTH = 3 -- each rebirth costs this many times the one before
+rebirthData.FIRST_COST = 135 -- the tutorial's rebirth: 100 starter wool left after More Wool, plus 2 Basic sheep (18 each)
+rebirthData.COST_BASE = 1500 -- rebirth N (N >= 2) costs COST_BASE * COST_GROWTH ^ (N - 1)
+rebirthData.COST_GROWTH = 3
 rebirthData.MULTIPLIER_GROWTH = 1.5 -- wool multiplier = this ^ rebirths
 
 --[[
@@ -30,6 +31,8 @@ rebirthData.LUCK_MILESTONE_BONUS = 2
 function rebirthData.getWoolCost(rebirths: number): number?
 	if rebirths >= rebirthData.MAX_REBIRTHS then
 		return nil
+	elseif rebirths == 0 then
+		return rebirthData.FIRST_COST
 	end
 	return math.floor(rebirthData.COST_BASE * rebirthData.COST_GROWTH ^ rebirths)
 end

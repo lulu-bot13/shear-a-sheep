@@ -1,5 +1,5 @@
 --[[
-	On-screen alerts: short banners stacked at the top of the screen, and a big centered announcement (rebirths).
+	On-screen alerts: short banners stacked at the top of the screen.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Modules.Alerts
 ]]--
 
@@ -11,7 +11,6 @@ local tweenService = game:GetService("TweenService")
 local BANNER_SECONDS = 2.2
 local BANNER_HEIGHT = 44
 local MAX_BANNERS = 4
-local CENTER_SECONDS = 2.5
 local FADE_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local POP_TWEEN = TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local FONT = Enum.Font.SourceSansBold
@@ -51,7 +50,6 @@ bannerLayout.Parent = bannerHolder
 
 --// State
 local bannerOrder = 0
-local centerToken = 0
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -115,51 +113,6 @@ function Alerts.show(text: string, kind: Kind?)
 				label:Destroy()
 			end)
 		end
-	end)
-end
-
--- A big title in the middle of the screen with a smaller line under it; a new one replaces the last.
--- yScale moves it up or down the screen (0.4 by default).
-function Alerts.showCenter(title: string, subtitle: string?, yScale: number?)
-	centerToken += 1
-	local token = centerToken
-
-	local old = alertGui:FindFirstChild("Center")
-	if old then
-		old:Destroy()
-	end
-
-	local holder = Instance.new("Frame")
-	holder.Name = "Center"
-	holder.BackgroundTransparency = 1
-	holder.AnchorPoint = Vector2.new(0.5, 0.5)
-	holder.Position = UDim2.fromScale(0.5, yScale or 0.4)
-	holder.Size = UDim2.fromScale(0.7, 0.25)
-
-	local titleLabel = makeLabel(title, Color3.fromRGB(230, 230, 230), 5)
-	titleLabel.Size = UDim2.fromScale(1, 0.65)
-	titleLabel.Parent = holder
-
-	local subtitleLabel = makeLabel(subtitle or "", COLORS.info, 3)
-	subtitleLabel.Position = UDim2.fromScale(0, 0.65)
-	subtitleLabel.Size = UDim2.fromScale(1, 0.35)
-	subtitleLabel.Visible = subtitle ~= nil
-	subtitleLabel.Parent = holder
-
-	local scale = Instance.new("UIScale")
-	scale.Scale = 0.3
-	scale.Parent = holder
-	holder.Parent = alertGui
-	tweenService:Create(scale, POP_TWEEN, { Scale = 1 }):Play()
-
-	task.delay(CENTER_SECONDS, function()
-		if token ~= centerToken then
-			return
-		end
-		fadeOut(subtitleLabel, function() end)
-		fadeOut(titleLabel, function()
-			holder:Destroy()
-		end)
 	end)
 end
 

@@ -42,8 +42,10 @@ export type Window = {
 
 --// State
 local windows: { [string]: Window } = {}
+local openChanged = Instance.new("BindableEvent") -- fires with anyOpen() whenever a window opens or closes
 
 local WindowsManager = {}
+WindowsManager.openChanged = openChanged.Event
 
 local function anyWindowOpen(): boolean
 	for _, window in windows do
@@ -56,6 +58,7 @@ end
 
 local function updateBlur()
 	local shown = anyWindowOpen()
+	openChanged:Fire(shown)
 	if blurTween then
 		blurTween:Cancel()
 	end
@@ -81,6 +84,10 @@ function WindowsManager.closeAll(except: Window?)
 			window.close()
 		end
 	end
+end
+
+function WindowsManager.anyOpen(): boolean
+	return anyWindowOpen()
 end
 
 function WindowsManager.get(name: string): Window?

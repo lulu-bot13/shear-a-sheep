@@ -17,11 +17,11 @@ export type AbilityInfo = {
 
 local abilityData = {}
 
-abilityData.DefaultAbilityId = "Default"
+abilityData.DefaultAbilityId = "Spin"
 
 abilityData.Abilities = {
-	Default = {
-		id = "Default",
+	Spin = {
+		id = "Spin",
 		duration = 3,
 		cooldown = 10,
 		speedMultiplier = 1.75,

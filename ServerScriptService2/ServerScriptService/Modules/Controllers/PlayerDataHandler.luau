@@ -14,6 +14,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
 local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
+local AbilityData = require(script.Parent.Parent.Constants.AbilityData)
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 
@@ -40,6 +41,7 @@ export type Data = {
 	Rebirths: number,
 	ShearId: string,
 	OwnedShears: { string },
+	AbilityEquipped: string, -- AbilityData id of the ability used on E
 	SheepShearedCount: number, -- lifetime sheep shorn bare (kept through rebirths); unlocks shears
 	BestFind: string, -- SheepData type key of the rarest sheep ever shorn; "" = none yet
 	SheepIndex: { [string]: string }, -- sheep type -> "Found" | "Claimed" (kept through rebirths)
@@ -47,7 +49,7 @@ export type Data = {
 
 local function getDefaultData(): Data
 	return {
-		Wool = 0,
+		Wool = 100, -- starter wool: after the tutorial's More Wool upgrade it covers ~75% of the first rebirth
 		Luck = 0,
 		MaxSheep = FarmData.StartingMaxSheep,
 		SheepCount = nil,
@@ -58,6 +60,7 @@ local function getDefaultData(): Data
 		Rebirths = 0,
 		ShearId = ShearData.DefaultShearId,
 		OwnedShears = { ShearData.DefaultShearId },
+		AbilityEquipped = AbilityData.DefaultAbilityId,
 		SheepShearedCount = 0,
 		BestFind = "",
 		SheepIndex = {},
@@ -130,6 +133,9 @@ local function reconcile(saved: any): Data
 				data[key] = value
 			end
 		end
+	end
+	if not AbilityData.get(data.AbilityEquipped) then
+		data.AbilityEquipped = AbilityData.DefaultAbilityId -- e.g. an ability that was renamed or removed
 	end
 	return data :: Data
 end
@@ -220,6 +226,18 @@ function PlayerDataHandler.set(player: Player, key: string, value: any)
 	data[key] = value
 	mirror(player, key, value)
 	PlayerDataHandler.Changed:Fire(player, key, value)
+end
+
+-- Puts every field back to a brand-new player's value, firing Changed for each so other systems update.
+function PlayerDataHandler.reset(player: Player)
+	if not profiles[player] then
+		return
+	end
+
+	for key, value in getDefaultData() :: any do
+		PlayerDataHandler.set(player, key, value)
+	end
+	PlayerDataHandler.set(player, "SheepCount", nil)
 end
 
 -- Adds to a number field and returns the new value (nil if the data isn't loaded).

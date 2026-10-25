@@ -14,6 +14,8 @@ local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local alertPulse = require(script.Parent.Parent.Modules.AlertPulse)
+local luckRain = require(script.Parent.Parent.Modules.LuckRain)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
@@ -561,6 +563,7 @@ end
 renderTier()
 claimAllFrame.Visible = false
 alertBadge.Visible = false
+alertPulse.attach(alertBadge)
 setInfoVisible(false)
 
 if cardContainer:IsA("ScrollingFrame") then
@@ -600,6 +603,7 @@ network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string,
 		if success then
 			pop(claimAllFrame)
 			playLuckClaimedSound()
+			luckRain.play(indexGui)
 		else
 			shake(claimAllButton)
 		end
@@ -613,6 +617,7 @@ network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string,
 	if success then
 		pop(card.frame)
 		playLuckClaimedSound()
+		luckRain.play(indexGui)
 	else
 		shake(claimButton)
 	end

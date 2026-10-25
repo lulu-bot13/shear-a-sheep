@@ -290,6 +290,15 @@ function shearShopHandler.Start()
 		task.spawn(onPlayerAdded, player)
 	end
 
+	-- Keeps the attributes and tools right when the data is changed elsewhere (e.g. /resetdata).
+	PlayerDataHandler.Changed:Connect(function(player: Player, key: string)
+		if key == "OwnedShears" then
+			updateOwnedAttribute(player)
+		elseif key == "ShearId" then
+			syncTools(player)
+		end
+	end)
+
 	players.PlayerRemoving:Connect(function(player: Player)
 		lastPurchase[player] = nil
 	end)

@@ -1,6 +1,6 @@
 --[[
 	Uses the player's ability on E or by tapping the Ability ui, then plays its animation and spins the character while AbilityHandler keeps it active.
-	Counts the ability's cooldown down on the Main gui's Ability.Cooldown label.
+	Counts the ability's cooldown down on the Main gui's Ability.Cooldown label, greys the button out until it's ready and shows AbilityEquipped on Ability.AbilityName.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AbilityClient
 ]]--
 
@@ -13,6 +13,7 @@ local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
 local player = players.LocalPlayer
@@ -27,6 +28,8 @@ local ABILITY_KEY = Enum.KeyCode.E
 local ABILITY_ACTION = "UseAbility"
 local ACTIVE_ATTRIBUTE = "ActiveAbility" -- set by AbilityHandler while an ability runs
 local READY_AT_ATTRIBUTE = "AbilityReadyAt" -- server time the ability can be used again
+local EQUIPPED_ATTRIBUTE = "AbilityEquipped" -- mirrored from PlayerDataHandler
+local USED_COLOR = Color3.fromRGB(120, 120, 120) -- while active and cooling down
 local SPIN_SPEED = math.rad(900) -- radians per second the character turns while spinning
 local READY_TEXT = "[E] Ability"
 
@@ -35,15 +38,37 @@ local abilityTrack: AnimationTrack? = nil
 local spinConnection: RBXScriptConnection? = nil
 local spinningHumanoid: Humanoid? = nil
 local cooldownConnection: RBXScriptConnection? = nil
+local normalColors: { [GuiObject]: Color3 } = setmetatable({}, { __mode = "k" }) :: any -- each Ability ui's Studio color
 
 --// Cooldown label --------------------------------------------------------------
 
 -- Looked up each time: the Main gui may be rebuilt on respawn.
-local function getCooldownLabel(): TextLabel?
+local function getAbilityUi(): GuiObject?
 	local main = playerGui:FindFirstChild("Main")
 	local ability = main and main:FindFirstChild("Ability")
-	local label = ability and ability:FindFirstChild("Cooldown")
+	return if ability and ability:IsA("GuiObject") then ability else nil
+end
+
+local function getAbilityLabel(name: string): TextLabel?
+	local ability = getAbilityUi()
+	local label = ability and ability:FindFirstChild(name)
 	return if label and label:IsA("TextLabel") then label else nil
+end
+
+local function updateAbilityName()
+	local label = getAbilityLabel("AbilityName")
+	local abilityId = player:GetAttribute(EQUIPPED_ATTRIBUTE)
+	if label and type(abilityId) == "string" then
+		label.Text = `[{abilityId}]`
+	end
+end
+
+-- Hidden while any window is open so it doesn't sit on top of the menus.
+local function updateAbilityVisibility()
+	local abilityUi = getAbilityUi()
+	if abilityUi then
+		abilityUi.Visible = not windowsManager.anyOpen()
+	end
 end
 
 local function getSecondsLeft(): number
@@ -53,9 +78,17 @@ end
 
 local function updateCooldownLabel()
 	local secondsLeft = getSecondsLeft()
-	local label = getCooldownLabel()
+	local isActive = player:GetAttribute(ACTIVE_ATTRIBUTE) ~= nil
+	local abilityUi = getAbilityUi()
+	if abilityUi then
+		local normalColor = normalColors[abilityUi] or abilityUi.BackgroundColor3
+		normalColors[abilityUi] = normalColor
+		abilityUi.BackgroundColor3 = if isActive or secondsLeft > 0 then USED_COLOR else normalColor
+	end
+
+	local label = getAbilityLabel("Cooldown")
 	if label then
-		if player:GetAttribute(ACTIVE_ATTRIBUTE) then
+		if isActive then
 			label.Text = `{READY_TEXT} active`
 		elseif secondsLeft > 0 then
 			label.Text = `{READY_TEXT} {string.format("%.1f", secondsLeft)}s`
@@ -154,9 +187,13 @@ end
 
 player:GetAttributeChangedSignal(ACTIVE_ATTRIBUTE):Connect(onActiveAbilityChanged)
 player:GetAttributeChangedSignal(READY_AT_ATTRIBUTE):Connect(onReadyAtChanged)
+player:GetAttributeChangedSignal(EQUIPPED_ATTRIBUTE):Connect(updateAbilityName)
 player.CharacterAdded:Connect(stopAbility)
+windowsManager.openChanged:Connect(updateAbilityVisibility)
 onActiveAbilityChanged()
 onReadyAtChanged()
+updateAbilityName()
+updateAbilityVisibility()
 
 network.waitUntilReadyAsync()
 
@@ -172,6 +209,10 @@ local function bindAbilityUi(main: Instance)
 	if not ability or ability == boundAbilityUi then
 		return
 	end
+
+	updateAbilityName()
+	updateCooldownLabel()
+	updateAbilityVisibility()
 
 	if ability:IsA("GuiButton") then
 		boundAbilityUi = ability

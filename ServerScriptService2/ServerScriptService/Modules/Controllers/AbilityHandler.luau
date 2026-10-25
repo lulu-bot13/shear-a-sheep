@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Runs abilities: on UseAbility it boosts the player's speed, puts a copy of their shears in the other hand and shears every sheep around them until it ends.
+	Runs the player's AbilityEquipped ability: on UseAbility it equips their shears, boosts their speed, puts a copy of the shears in the other hand and shears every sheep around them until it ends.
 	Clients see the player's "ActiveAbility" attribute to play the animation and spin. Spare offhand shears wait in ReplicatedStorage.Assets.ShearsPool.
 	Location: ServerScriptService.Modules.Controllers.AbilityHandler
 ]]--
@@ -13,6 +13,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local AbilityData = require(script.Parent.Parent.Constants.AbilityData)
+local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local ShearHandler = require(script.Parent.ShearHandler)
 local ShearShopHandler = require(script.Parent.ShearShopHandler)
 local UpgradeHandler = require(script.Parent.UpgradeHandler)
@@ -140,6 +141,16 @@ end
 
 --// Ability ------------------------------------------------------------------------
 
+-- Puts the equipped shears in the player's main hand if they aren't already holding them.
+local function equipMainShears(player: Player)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local tool = ShearShopHandler.getTool(player)
+	if humanoid and tool and tool.Parent ~= character then
+		humanoid:EquipTool(tool)
+	end
+end
+
 -- The cooldown starts once the ability is over.
 local function endAbility(player: Player, ability: AbilityData.AbilityInfo)
 	readyAt[player] = os.clock() + ability.cooldown
@@ -154,6 +165,7 @@ local function runAbility(player: Player, ability: AbilityData.AbilityInfo)
 	player:SetAttribute(ACTIVE_ATTRIBUTE, ability.id)
 	player:SetAttribute(SPEED_ATTRIBUTE, ability.speedMultiplier)
 	UpgradeHandler.applyWalkSpeed(player)
+	equipMainShears(player)
 	equipOffhandShears(player)
 
 	local endsAt = os.clock() + ability.duration
@@ -174,7 +186,8 @@ local function onUseAbility(player: Player)
 		return
 	end
 
-	local ability = AbilityData.get(AbilityData.DefaultAbilityId)
+	local ability = AbilityData.get(PlayerDataHandler.get(player, "AbilityEquipped"))
+		or AbilityData.get(AbilityData.DefaultAbilityId)
 	if not ability then
 		return
 	end

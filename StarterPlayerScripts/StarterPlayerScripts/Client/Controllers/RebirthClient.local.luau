@@ -15,6 +15,9 @@ local soundService = game:GetService("SoundService")
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 local alerts = require(script.Parent.Parent.Modules.Alerts)
+local alertPulse = require(script.Parent.Parent.Modules.AlertPulse)
+local announcements = require(script.Parent.Parent.Modules.Announcements)
+local luckRain = require(script.Parent.Parent.Modules.LuckRain)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 local DEBUG = false
@@ -63,7 +66,6 @@ local LUCK_AFTER_COLOR = Color3.fromRGB(170, 235, 170)
 local ALERT_SHAKE_SECONDS = 3
 local ALERT_SHAKE_ANGLES = { -10, 10, -8, 8, -4, 4, 0 }
 local CLICK_SHAKE_ANGLES = { -3, 3, -2, 2, 0 }
-local READY_ALERT_Y = 0.35 -- screen height (scale) of the "Rebirth available" alert
 
 local REASON_TEXT = {
 	NotReady = "Not enough wool to rebirth",
@@ -71,27 +73,10 @@ local REASON_TEXT = {
 	Busy = "Already rebirthing",
 }
 
--- Luck icons falling down the screen after a rebirth. Spawning + the slowest fall add up to EFFECT_SECONDS.
-local LUCK_ICON_IMAGE = "rbxassetid://86611651520562" -- "rbxassetid://..."; empty uses the first icon in the rebirth screen's RewardsFrame
-local EFFECT_SECONDS = 3.5
-local FALL_ICON_COUNT = 40
-local FALL_SPAWN_SECONDS = 1.5
-local FALL_MIN_SECONDS = 1.4
-local FALL_MAX_SECONDS = EFFECT_SECONDS - FALL_SPAWN_SECONDS
-local FALL_MIN_SIZE = 36
-local FALL_MAX_SIZE = 72
-
 --// State
 local state: any = nil -- the last RebirthState from the server
-local wasReady = false -- so the "Rebirth available" alert shows once each time the bar reaches 100%
+local wasReady = false -- so the "Rebirth Available" alert shows once each time the bar reaches 100%
 local rebirthButtonText = if rebirthButton:IsA("TextButton") then rebirthButton.Text else ""
-
-local effectGui = Instance.new("ScreenGui")
-effectGui.Name = "RebirthEffectGui"
-effectGui.ResetOnSpawn = false
-effectGui.IgnoreGuiInset = true
-effectGui.DisplayOrder = rebirthGui.DisplayOrder + 1
-effectGui.Parent = playerGui
 
 --// Helpers -------------------------------------------------------------------------
 
@@ -121,63 +106,6 @@ local function shake(button: GuiObject, angles: { number })
 	end)
 end
 
---// Rebirth effect ---------------------------------------------------------------------
-
-local function getLuckIconImage(): string
-	if LUCK_ICON_IMAGE ~= "" then
-		return LUCK_ICON_IMAGE
-	end
-	local rowIcon = rewardsFrame:FindFirstChildWhichIsA("ImageLabel")
-	return if rowIcon then rowIcon.Image else ""
-end
-
-local function makeLuckIcon(image: string, size: number): GuiObject
-	local icon: GuiObject
-	if image ~= "" then
-		local imageLabel = Instance.new("ImageLabel")
-		imageLabel.Image = image
-		icon = imageLabel
-	else
-		local clover = Instance.new("TextLabel")
-		clover.Text = "🍀"
-		clover.TextScaled = true
-		icon = clover
-	end
-
-	icon.BackgroundTransparency = 1
-	icon.AnchorPoint = Vector2.new(0.5, 0.5)
-	icon.Size = UDim2.fromOffset(size, size)
-	icon.Parent = effectGui
-	return icon
-end
-
--- Luck icons rain down from above the screen at random spots, sizes and spins.
-local function playLuckRain()
-	local image = getLuckIconImage()
-
-	for _ = 1, FALL_ICON_COUNT do
-		task.delay(math.random() * FALL_SPAWN_SECONDS, function()
-			local icon = makeLuckIcon(image, math.random(FALL_MIN_SIZE, FALL_MAX_SIZE))
-			local x = math.random()
-			local drift = (math.random() - 0.5) * 0.12
-			local fallSeconds = FALL_MIN_SECONDS + math.random() * (FALL_MAX_SECONDS - FALL_MIN_SECONDS)
-
-			icon.Position = UDim2.fromScale(x, -0.1)
-			icon.Rotation = math.random(-30, 30)
-
-			local fallInfo = TweenInfo.new(fallSeconds, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-			local fall = tweenService:Create(icon, fallInfo, {
-				Position = UDim2.fromScale(x + drift, 1.1),
-				Rotation = icon.Rotation + math.random(-180, 180),
-			})
-			fall.Completed:Once(function()
-				icon:Destroy()
-			end)
-			fall:Play()
-		end)
-	end
-end
-
 --// Rendering --------------------------------------------------------------------------
 
 -- How far the player's wool is towards the next rebirth, 0 to 1.
@@ -193,7 +121,7 @@ local function render()
 		return
 	end
 
-	rebirthCount.Text = `Rebirths: {state.rebirths}`
+	rebirthCount.Text = tostring(state.rebirths)
 	luckBefore.Text = formatLuck(state.luck, state.luckFactor)
 	luckAfter.Text = formatLuck(state.nextLuck, state.nextLuckFactor)
 
@@ -241,6 +169,9 @@ luckBefore.TextColor3 = LUCK_BEFORE_COLOR
 luckAfter.TextColor3 = LUCK_AFTER_COLOR
 hudProgress.Text = "0%"
 updateHud()
+if alertBadge then
+	alertPulse.attach(alertBadge)
+end
 
 task.spawn(function()
 	while true do
@@ -273,7 +204,7 @@ network.connectEvent(network.RemoteEvents.RebirthState, function(newState: any)
 	state = newState
 	local ready = newState.canRebirth == true and not newState.maxed
 	if ready and not wasReady then
-		alerts.showCenter("Rebirth available", nil, READY_ALERT_Y)
+		announcements.show("RebirthAlert", "Rebirth Available")
 	end
 	wasReady = ready
 	updateHud()
@@ -285,11 +216,11 @@ end)
 network.connectEvent(network.RemoteEvents.RebirthResult, function(success: boolean, reason: string?, rebirths: number?)
 	debugLog(`rebirth result: success {success}, reason {reason}`)
 	if success then
-		alerts.showCenter("REBIRTHED", `Rebirth {rebirths or "?"}`)
+		announcements.show("Rebirthed", `🎊 REBIRTH {rebirths or "?"} 🎊`)
 		if rebirthedSound then
 			rebirthedSound:Play()
 		end
-		playLuckRain()
+		luckRain.play(rebirthGui)
 	else
 		alerts.show(REASON_TEXT[reason or ""] or "Can't rebirth", "error")
 		shake(rebirthButton, CLICK_SHAKE_ANGLES)
