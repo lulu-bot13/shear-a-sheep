@@ -1,7 +1,9 @@
 --!strict
 
 --[[
-	Rebirth tuning: the wool each rebirth costs, the permanent wool multiplier it gives and the Luck it grants.
+	Rebirth tuning: the wool each rebirth costs, and the luck-factor boost it gives until the next Prestige.
+	Rebirths give no wool multiplier (More Wool covers that), so costs grow gently: a rebirth every ~2-6 minutes of
+	active play, with the 10th (the first Prestige) around minute 33.
 
 	Location: ServerScriptService.Modules.Constants.RebirthData
 ]]--
@@ -9,23 +11,10 @@
 local rebirthData = {}
 
 rebirthData.MAX_REBIRTHS = 25
-rebirthData.FIRST_COST = 135 -- the tutorial's rebirth: 100 starter wool left after More Wool, plus 2 Basic sheep (18 each)
-rebirthData.COST_BASE = 1500 -- rebirth N (N >= 2) costs COST_BASE * COST_GROWTH ^ (N - 1)
-rebirthData.COST_GROWTH = 3
-rebirthData.MULTIPLIER_GROWTH = 1.5 -- wool multiplier = this ^ rebirths
-
---[[
-	Luck reward. A rebirth wipes Luck, then sets it to the total of every rebirth reward earned so far,
-	so the farm restarts luckier each time. Rebirth 1 grants about half the Luck a first run earns from sheep,
-	and each reward is LUCK_GROWTH times the last; every LUCK_MILESTONE-th rebirth pays LUCK_MILESTONE_BONUS times.
-	Rebirth:   1   2    3    4    5     10     15      20      25
-	Reward:    50  72   105  152  442   2.8k   18k     116k    746k
-	(Luck feeds a log10 odds curve in SheepData, so these big late numbers stay sane.)
-]]
-rebirthData.LUCK_BASE = 50
-rebirthData.LUCK_GROWTH = 1.45
-rebirthData.LUCK_MILESTONE = 5
-rebirthData.LUCK_MILESTONE_BONUS = 2
+rebirthData.FIRST_COST = 120 -- the tutorial's rebirth: 100 starter wool left after More Wool, then the 5th sheep sheared covers it
+rebirthData.COST_BASE = 1250 -- rebirth N (N >= 2) costs COST_BASE * COST_GROWTH ^ (N - 1)
+rebirthData.COST_GROWTH = 1.4
+rebirthData.REBIRTH_LUCK_PER = 0.04 -- luck factor is multiplied by 1 + this * rebirths
 
 -- Wool needed for the next rebirth; nil once the player has reached the maximum.
 function rebirthData.getWoolCost(rebirths: number): number?
@@ -37,33 +26,34 @@ function rebirthData.getWoolCost(rebirths: number): number?
 	return math.floor(rebirthData.COST_BASE * rebirthData.COST_GROWTH ^ rebirths)
 end
 
-function rebirthData.getMultiplier(rebirths: number): number
-	return rebirthData.MULTIPLIER_GROWTH ^ math.clamp(rebirths, 0, rebirthData.MAX_REBIRTHS)
-end
-
-function rebirthData.isMilestone(rebirth: number): boolean
-	return rebirth > 0 and rebirth % rebirthData.LUCK_MILESTONE == 0
-end
-
--- Luck granted by the `rebirth`-th rebirth (1 = the first); 0 outside 1..MAX_REBIRTHS.
-function rebirthData.getLuckReward(rebirth: number): number
-	if rebirth < 1 or rebirth > rebirthData.MAX_REBIRTHS then
-		return 0
-	end
-	local reward = rebirthData.LUCK_BASE * rebirthData.LUCK_GROWTH ^ (rebirth - 1)
-	if rebirthData.isMilestone(rebirth) then
-		reward *= rebirthData.LUCK_MILESTONE_BONUS
-	end
-	return math.floor(reward)
-end
-
--- Luck a farm starts with after `rebirths` rebirths: every reward earned so far.
-function rebirthData.getStartingLuck(rebirths: number): number
+-- Wool needed for `count` rebirths in a row starting at `rebirths`; nil if that would go past the maximum.
+function rebirthData.getTotalWoolCost(rebirths: number, count: number): number?
 	local total = 0
-	for rebirth = 1, math.min(rebirths, rebirthData.MAX_REBIRTHS) do
-		total += rebirthData.getLuckReward(rebirth)
+	for step = rebirths, rebirths + count - 1 do
+		local cost = rebirthData.getWoolCost(step)
+		if not cost then
+			return nil
+		end
+		total += cost
 	end
 	return total
+end
+
+-- The most rebirths in a row `wool` can pay for, and their total cost.
+function rebirthData.getMaxAffordable(rebirths: number, wool: number): (number, number)
+	local count, total = 0, 0
+	while true do
+		local cost = rebirthData.getWoolCost(rebirths + count)
+		if not cost or total + cost > wool then
+			return count, total
+		end
+		count += 1
+		total += cost
+	end
+end
+
+function rebirthData.getLuckMultiplier(rebirths: number): number
+	return 1 + rebirthData.REBIRTH_LUCK_PER * math.clamp(rebirths, 0, rebirthData.MAX_REBIRTHS)
 end
 
 return rebirthData

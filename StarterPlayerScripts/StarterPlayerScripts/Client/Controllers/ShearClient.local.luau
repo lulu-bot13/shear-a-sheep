@@ -114,6 +114,15 @@ ring.CanQuery = false
 ring.CanTouch = false
 ring.CastShadow = false
 
+-- A light tap felt on phones (and gamepads) when a sheep is sheared bare; nil where HapticEffect isn't supported.
+local shearCompleteHaptic: HapticEffect? = nil
+pcall(function()
+	local haptic = Instance.new("HapticEffect")
+	haptic.Type = Enum.HapticEffectType.UIClick
+	haptic.Parent = script
+	shearCompleteHaptic = haptic
+end)
+
 --// Animation ---------------------------------------------------------------------
 
 --[[
@@ -588,6 +597,9 @@ local function onShearHit(hits: { { sheep: Model?, position: Vector3, damage: nu
 	end
 	if finishedAny and shearCompleteSound then
 		shearCompleteSound:Play()
+	end
+	if finishedAny and shearCompleteHaptic then
+		shearCompleteHaptic:Play()
 	end
 
 	-- Electric shears crackle on every hit (other players see it through the tool's "Snips" attribute).

@@ -1,8 +1,8 @@
 --!strict
 
 --[[
-	Rebirth rules: spend wool to reset the farm (wool, Luck, capacity, upgrades) for a permanent wool multiplier
-	and a Luck reward the new farm starts with. Shears are kept. Costs, multipliers and rewards live in RebirthData.
+	Rebirth rules: spend wool for a luck-factor boost; nothing else on the farm is reset.
+	Rebirths last until the next Prestige. Costs and the luck boost live in RebirthData.
 
 	Location: ServerScriptService.Modules.Controllers.RebirthHandler
 ]]--
@@ -12,31 +12,33 @@ local players = game:GetService("Players")
 
 --// Modules
 local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
-local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
-local IndexHandler = require(script.Parent.IndexHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
-local SheepSpawnHandler = require(script.Parent.SheepSpawnHandler)
 
 --// Configs
 local LEADERSTATS_WAIT_SECONDS = 15
 
 export type State = {
 	rebirths: number,
+	prestiges: number,
 	maxRebirths: number,
 	maxed: boolean,
-	multiplier: number,
-	nextMultiplier: number,
 	wool: number,
 	woolCost: number,
 	canRebirth: boolean,
-	luckReward: number, -- Luck the next rebirth grants (0 when maxed)
-	luckMilestone: boolean, -- the next rebirth is a milestone (bonus Luck)
 	luck: number, -- Luck right now
-	luckFactor: number, -- the odds multiplier that Luck gives
-	nextLuck: number, -- Luck the farm starts with after the next rebirth (same as luck when maxed)
-	nextLuckFactor: number,
+	luckFactor: number, -- the odds multiplier right now
+	nextLuckFactor: number, -- the odds multiplier after the next rebirth (same as luckFactor when maxed)
+
+	-- The same, for the amount the screen has selected (woolCost and canRebirth above are always for one rebirth).
+	amount: Amount, -- the amount that was asked for
+	amountCount: number, -- how many rebirths that amount does right now (0 when "max" can't afford one)
+	amountCost: number, -- total wool for amountCount (for one rebirth when amountCount is 0)
+	amountCanRebirth: boolean,
+	amountLuckFactor: number,
 }
+
+export type Amount = number | "max"
 
 --// State
 local rebirthing: { [Player]: boolean } = {}
@@ -48,86 +50,97 @@ local function getNumber(player: Player, key: string): number
 	return if type(value) == "number" then value else 0
 end
 
--- Luck a farm starts with after `rebirths` rebirths: every rebirth reward plus the player's claimed Index Luck.
-local function getStartingLuck(player: Player, rebirths: number): number
-	return RebirthData.getStartingLuck(rebirths) + IndexHandler.getClaimedLuck(player)
-end
-
--- Puts the farm back to the start (shears and the Index are kept).
-local function resetProgress(player: Player, rebirths: number)
-	PlayerDataHandler.set(player, "Wool", 0)
-	PlayerDataHandler.set(player, "Luck", getStartingLuck(player, rebirths))
-	PlayerDataHandler.set(player, "MaxSheep", FarmData.StartingMaxSheep)
-	PlayerDataHandler.set(player, "MoreWoolLevel", 0)
-	PlayerDataHandler.set(player, "SpeedLevel", 0)
-	PlayerDataHandler.set(player, "DamageLevel", 0)
-	PlayerDataHandler.set(player, "RespawnLevel", 0)
-	SheepSpawnHandler.resetFarm(player)
-end
-
 --// Public API ------------------------------------------------------------------
 
 function RebirthHandler.getRebirths(player: Player): number
 	return getNumber(player, "Rebirths")
 end
 
--- Everything the client needs to draw the rebirth screen for this player.
-function RebirthHandler.getState(player: Player): State
+-- A whole number from 1 to MAX_REBIRTHS, or "max"; anything else the client sends counts as 1.
+function RebirthHandler.parseAmount(value: any): Amount
+	if value == "max" then
+		return "max"
+	elseif type(value) == "number" and value % 1 == 0 and value >= 1 and value <= RebirthData.MAX_REBIRTHS then
+		return value
+	end
+	return 1
+end
+
+-- Everything the client needs to draw the rebirth screen for this player, with `amount` rebirths selected.
+function RebirthHandler.getState(player: Player, amount: Amount?): State
 	local rebirths = RebirthHandler.getRebirths(player)
+	local prestiges = getNumber(player, "Prestiges")
 	local woolCost = RebirthData.getWoolCost(rebirths)
 	local wool = getNumber(player, "Wool")
 	local luck = getNumber(player, "Luck")
-	local nextLuck = if woolCost == nil then luck else getStartingLuck(player, rebirths + 1)
+
+	local selected = RebirthHandler.parseAmount(amount)
+	local rebirthsLeft = RebirthData.MAX_REBIRTHS - rebirths
+	local amountCount, amountCost
+	if selected == "max" then
+		amountCount, amountCost = RebirthData.getMaxAffordable(rebirths, wool)
+	else
+		amountCount = math.min(selected, rebirthsLeft)
+		amountCost = RebirthData.getTotalWoolCost(rebirths, amountCount) or 0
+	end
+	-- "max" with nothing affordable still previews one rebirth, so the bar and AFTER have something to show.
+	local previewCount = if amountCount == 0 and rebirthsLeft > 0 then 1 else amountCount
+	if amountCount == 0 then
+		amountCost = woolCost or 0
+	end
 
 	return {
 		rebirths = rebirths,
+		prestiges = prestiges,
 		maxRebirths = RebirthData.MAX_REBIRTHS,
 		maxed = woolCost == nil,
-		multiplier = RebirthData.getMultiplier(rebirths),
-		nextMultiplier = RebirthData.getMultiplier(rebirths + 1),
 		wool = wool,
 		woolCost = woolCost or 0,
 		canRebirth = woolCost ~= nil and wool >= woolCost,
-		luckReward = RebirthData.getLuckReward(rebirths + 1),
-		luckMilestone = RebirthData.isMilestone(rebirths + 1),
 		luck = luck,
-		luckFactor = SheepData.getLuckFactor(luck),
-		nextLuck = nextLuck,
-		nextLuckFactor = SheepData.getLuckFactor(nextLuck),
+		luckFactor = SheepData.getLuckFactor(luck, rebirths, prestiges),
+		nextLuckFactor = SheepData.getLuckFactor(luck, rebirths + 1, prestiges),
+
+		amount = selected,
+		amountCount = amountCount,
+		amountCost = amountCost,
+		amountCanRebirth = amountCount > 0 and wool >= amountCost,
+		amountLuckFactor = SheepData.getLuckFactor(luck, rebirths + previewCount, prestiges),
 	}
 end
 
 --[[
-	Tries to rebirth the player. Returns true on success, or false plus a reason the client can show
-	("Busy", "MaxRebirths" or "NotReady"). Everything is checked here, on the server.
+	Tries to rebirth the player `amount` times at once (clamped to the rebirths left). Returns true and the
+	number done on success, or false plus a reason the client can show ("Busy", "MaxRebirths" or "NotReady").
+	A fixed amount is all or nothing. Everything is checked here, on the server.
 ]]
-function RebirthHandler.rebirth(player: Player): (boolean, string?)
+function RebirthHandler.rebirth(player: Player, amount: Amount?): (boolean, string?, number?)
 	if rebirthing[player] or not PlayerDataHandler.getData(player) then
-		return false, "Busy"
+		return false, "Busy", nil
 	end
 
-	local state = RebirthHandler.getState(player)
+	local state = RebirthHandler.getState(player, amount)
 	if state.maxed then
-		return false, "MaxRebirths"
+		return false, "MaxRebirths", nil
 	end
-	if not state.canRebirth then
-		return false, "NotReady"
+	if not state.amountCanRebirth then
+		return false, "NotReady", nil
 	end
 
 	rebirthing[player] = true
 
-	-- The rebirth is counted first, so a problem while resetting can never cost the player progress for nothing.
-	PlayerDataHandler.set(player, "Rebirths", state.rebirths + 1)
+	-- The rebirths are counted first, so a problem while paying can never cost the player wool for nothing.
+	PlayerDataHandler.set(player, "Rebirths", state.rebirths + state.amountCount)
 
 	local success, err = pcall(function()
-		resetProgress(player, state.rebirths + 1)
+		PlayerDataHandler.set(player, "Wool", getNumber(player, "Wool") - state.amountCost)
 	end)
 	if not success then
-		warn(`RebirthHandler: resetting {player.Name}'s farm failed: {err}`)
+		warn(`RebirthHandler: taking {player.Name}'s rebirth cost failed: {err}`)
 	end
 
 	rebirthing[player] = nil
-	return true, nil
+	return true, nil, state.amountCount
 end
 
 --// Lifecycle ---------------------------------------------------------------------

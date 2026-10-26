@@ -46,10 +46,18 @@ local function isOwner(plot: Instance): boolean
 	return getOwnerId(plot) == player.UserId
 end
 
-local function waitForCenterGui(plot: Instance, name: string): LayerCollector?
-	local center = plot:WaitForChild(CENTER_NAME, WAIT_SECONDS)
-	local gui = center and center:WaitForChild(name, WAIT_SECONDS)
-	return if gui and gui:IsA("LayerCollector") then gui else nil
+-- Calls onGui with the plot's Center gui now and with every copy that replaces it later (the server rebuilds plots on start).
+local function watchCenterGui(plot: Instance, name: string, onGui: (LayerCollector) -> ())
+	local function check(instance: Instance)
+		local parent = instance.Parent
+		if instance.Name == name and instance:IsA("LayerCollector") and parent and parent.Name == CENTER_NAME then
+			onGui(instance)
+		end
+	end
+	plot.DescendantAdded:Connect(check)
+	for _, descendant in plot:GetDescendants() do
+		check(descendant)
+	end
 end
 
 -- Parented to nil (for this player only) when the plot isn't theirs, and put back when it is.
@@ -81,21 +89,20 @@ end
 
 -- Shows "Your Base" on this player's plot and the owner's username on everyone else's; hidden while unclaimed.
 local function connectSign(plot: Instance)
-	local sign = waitForCenterGui(plot, SIGN_NAME)
-	if not sign then
-		return
-	end
-
-	local image = sign:FindFirstChild("PlayerImage", true)
-	local label = sign:FindFirstChild("YourBase", true)
+	local currentSign: LayerCollector? = nil
 
 	local function update()
+		local sign = currentSign
+		if not sign then
+			return
+		end
 		local ownerId = getOwnerId(plot)
 		sign.Enabled = ownerId ~= nil
 		if not ownerId then
 			return
 		end
 
+		local label = sign:FindFirstChild("YourBase", true)
 		if label and label:IsA("TextLabel") then
 			local owner = players:GetPlayerByUserId(ownerId)
 			label.Text = if ownerId == player.UserId then OWN_BASE_TEXT elseif owner then owner.Name else ""
@@ -103,27 +110,35 @@ local function connectSign(plot: Instance)
 		popIn(sign)
 
 		local headshot = getHeadshot(ownerId)
+		local image = sign:FindFirstChild("PlayerImage", true)
 		if image and image:IsA("ImageLabel") and getOwnerId(plot) == ownerId then -- the plot may change hands while it loads
 			image.Image = headshot or ""
 		end
 	end
-	sign.Enabled = false
+
+	watchCenterGui(plot, SIGN_NAME, function(sign)
+		currentSign = sign
+		sign.Enabled = false
+		task.spawn(update)
+	end)
 	plot:GetAttributeChangedSignal("Owner"):Connect(update)
-	update()
 end
 
 -- The current/max sheep label is only for the plot's owner.
 local function connectCapacity(plot: Instance)
-	local capacity = waitForCenterGui(plot, CAPACITY_NAME)
-	if not capacity then
-		return
-	end
+	local currentCapacity: LayerCollector? = nil
 
 	local function update()
-		capacity.Enabled = isOwner(plot)
+		if currentCapacity then
+			currentCapacity.Enabled = isOwner(plot)
+		end
 	end
+
+	watchCenterGui(plot, CAPACITY_NAME, function(capacity)
+		currentCapacity = capacity
+		update()
+	end)
 	plot:GetAttributeChangedSignal("Owner"):Connect(update)
-	update()
 end
 
 local function connectPlot(plot: Instance)

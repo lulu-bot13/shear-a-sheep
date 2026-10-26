@@ -1,6 +1,6 @@
 --[[
-	The "new sheep" popup (StarterGui.SheepUnlocked): pops up for ~2 seconds with the unlocked sheep spinning in the Template.
-	Reuses the one Template and caches one preview model per sheep type, so nothing is cloned again on later unlocks.
+	The "new sheep" popup (StarterGui.SheepUnlocked): pops up for ~2 seconds with the unlocked sheep spinning in the Unlocked frame.
+	Each new unlock replaces the sheep shown in that one frame; one preview model per sheep type is cached, so nothing is cloned again.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.SheepUnlockClient
 ]]--
@@ -23,10 +23,10 @@ local sheepModels = replicatedStorage:WaitForChild("Assets"):WaitForChild("Model
 local unlockGui = playerGui:WaitForChild("SheepUnlocked") :: ScreenGui
 local container = unlockGui:WaitForChild("UnlockedSheepContainer") :: GuiObject
 local title = unlockGui:FindFirstChild("Title") :: GuiObject?
-local template = container:WaitForChild("Template") :: GuiObject
-local viewport = template:WaitForChild("ViewportFrame") :: ViewportFrame
-local nameLabel = template:WaitForChild("SheepName") :: TextLabel
-local rarityLabel = template:WaitForChild("Rarity") :: TextLabel
+local unlockedFrame = container:WaitForChild("Unlocked") :: GuiObject
+local viewport = unlockedFrame:WaitForChild("ViewportFrame") :: ViewportFrame
+local nameLabel = unlockedFrame:WaitForChild("SheepName") :: TextLabel
+local rarityLabel = unlockedFrame:WaitForChild("Rarity") :: TextLabel
 
 --// Sounds
 local unlockSound = soundService:WaitForChild("UISounds"):FindFirstChild("UnlockedSheep") :: Sound? -- the sound played on every unlock
@@ -157,7 +157,7 @@ local function play(unlock: Unlock)
 	nameLabel.Text = unlock.name
 	rarityLabel.Text = unlock.rarity
 	rarityLabel.TextColor3 = unlock.color
-	template.Visible = true
+	unlockedFrame.Visible = true
 	showPreview(getPreview(unlock.sheepType))
 
 	for _, uiScale in poppedScales do

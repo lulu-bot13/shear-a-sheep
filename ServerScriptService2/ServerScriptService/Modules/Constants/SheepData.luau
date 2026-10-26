@@ -6,6 +6,9 @@
 	Location: ServerScriptService.Modules.Constants.SheepData
 ]]--
 
+local PrestigeData = require(script.Parent.PrestigeData)
+local RebirthData = require(script.Parent.RebirthData)
+
 export type SheepInfo = {
 	id: string,
 	name: string,
@@ -272,18 +275,20 @@ if babyModels then
 end
 
 --[[
-	Luck boosts every tier above Common: a sheep's weight is multiplied by luckFactor ^ (tier index),
-	where luckFactor = 1 + LUCK_STRENGTH * log10(1 + luck). The log keeps exponential Luck from breaking the odds.
+	Luck boosts every tier above Common: a sheep's weight is multiplied by luckFactor ^ (tier index), where
+	luckFactor = (1 + LUCK_STRENGTH * log10(1 + luck / LUCK_SCALE)) * the rebirth and Prestige luck multipliers.
 ]]
 sheepData.LUCK_STRENGTH = 0.5
+sheepData.LUCK_SCALE = 100
 
 local tierIndex: { [string]: number } = {}
 for index, rarity in rarityOrder do
 	tierIndex[rarity] = index - 1
 end
 
-function sheepData.getLuckFactor(luck: number): number
-	return 1 + sheepData.LUCK_STRENGTH * math.log10(1 + math.max(luck, 0))
+function sheepData.getLuckFactor(luck: number, rebirths: number, prestiges: number): number
+	local luckPart = 1 + sheepData.LUCK_STRENGTH * math.log10(1 + math.max(luck, 0) / sheepData.LUCK_SCALE)
+	return luckPart * RebirthData.getLuckMultiplier(rebirths) * PrestigeData.getLuckMultiplier(prestiges)
 end
 
 local function getWeight(info: SheepInfo, luckFactor: number): number
@@ -298,9 +303,9 @@ local function getTotalWeight(luckFactor: number): number
 	return total
 end
 
--- Picks a sheep type name for a player with this much Luck.
-function sheepData.roll(luck: number, random: Random?): string?
-	local luckFactor = sheepData.getLuckFactor(luck)
+-- Picks a sheep type name for a player with this much Luck, rebirths and Prestiges.
+function sheepData.roll(luck: number, rebirths: number, prestiges: number, random: Random?): string?
+	local luckFactor = sheepData.getLuckFactor(luck, rebirths, prestiges)
 	local roll = (random or Random.new()):NextNumber() * getTotalWeight(luckFactor)
 
 	local cumulative = 0
@@ -313,24 +318,24 @@ function sheepData.roll(luck: number, random: Random?): string?
 	return nil
 end
 
--- N in "1 in N" for this sheep type at this much Luck; nil for an unknown type.
-function sheepData.getOdds(name: string, luck: number): number?
+-- N in "1 in N" for this sheep type with this Luck, rebirths and Prestiges (all 0 = base odds); nil for an unknown type.
+function sheepData.getOdds(name: string, luck: number, rebirths: number, prestiges: number): number?
 	local info = sheepData.Sheep[name]
 	if not info then
 		return nil
 	end
 
-	local luckFactor = sheepData.getLuckFactor(luck)
+	local luckFactor = sheepData.getLuckFactor(luck, rebirths, prestiges)
 	return math.max(1, math.floor(getTotalWeight(luckFactor) / getWeight(info, luckFactor) + 0.5))
 end
 
-function sheepData.getOddsText(name: string, luck: number): string
-	local odds = sheepData.getOdds(name, luck)
+function sheepData.getOddsText(name: string, luck: number, rebirths: number, prestiges: number): string
+	local odds = sheepData.getOdds(name, luck, rebirths, prestiges)
 	return if odds then `1 in {odds}` else "1 in ?"
 end
 
 --[[
-	Index Luck: a one-time, permanent reward for claiming a sheep type in the Index (rebirths keep it).
+	Index Luck: a one-time, permanent reward for claiming a sheep type in the Index (Prestiges keep it).
 	It follows the type's base "1 in N" odds: INDEX_LUCK_BASE * N ^ INDEX_LUCK_EXPONENT, so rarer sheep are worth far more.
 	Sheep:  Basic Grey Brown Black Fluffy Golden Emerald Spotted Diamond   (whole Index: 2,208)
 	Luck:   8     11   16    27    41     94     208     547     1256

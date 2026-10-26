@@ -15,6 +15,7 @@ local soundService = game:GetService("SoundService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local alertPulse = require(script.Parent.Parent.Modules.AlertPulse)
+local announcements = require(script.Parent.Parent.Modules.Announcements)
 local luckRain = require(script.Parent.Parent.Modules.LuckRain)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
@@ -46,6 +47,11 @@ local claimAllButton = claimAllFrame:WaitForChild("Claim") :: TextButton
 local claimAllAmount = claimAllFrame:WaitForChild("RewardAmount") :: TextLabel
 local claimAllMultiplier = claimAllFrame:WaitForChild("Multiplier") :: TextLabel
 
+-- How many sheep types have been unlocked out of all of them.
+local unlockBar = mainFrame:FindFirstChild("UnlockBar", true) :: GuiObject
+local unlockProgress = unlockBar:WaitForChild("Progress") :: GuiObject
+local unlockText = unlockBar:WaitForChild("ProgressText") :: TextLabel
+
 -- Tier tabs under the Index: every button in TierTabs with a "Tier" attribute is a page showing only that tier's sheep.
 local tierTabs = mainFrame:FindFirstChild("TierTabs")
 local emptyTierLabel = mainFrame:FindFirstChild("EmptyTierLabel") :: TextLabel?
@@ -64,8 +70,11 @@ local CAMERA_PITCH = math.rad(15)
 local CAMERA_FOV = 40
 local SPIN_SPEED = math.rad(60) -- per second, for the selected sheep
 local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so card sizes aren't measured
+local CELLS_PER_ROW: number? = nil -- nil = however many fit the Studio CellSize/CellPadding X scale
+local CELL_ASPECT_RATIO = 1.25 -- grid cell height / width
 local DEFAULT_TIER = "Normal" -- the page the Index opens on
 local INACTIVE_TAB_DARKEN = 0.4 -- how much darker the tabs that aren't open are
+local UNLOCK_BAR_TWEEN = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 type Card = {
 	id: string,
@@ -102,6 +111,11 @@ local cardSize = cardTemplate.Size
 local listPadding = if layout and layout:IsA("UIListLayout") then layout.Padding else nil
 local gridCellSize = if layout and layout:IsA("UIGridLayout") then layout.CellSize else nil
 local gridCellPadding = if layout and layout:IsA("UIGridLayout") then layout.CellPadding else nil
+local gridColumns = CELLS_PER_ROW
+if gridCellSize and gridCellPadding and not gridColumns then
+	local stride = gridCellSize.X.Scale + gridCellPadding.X.Scale
+	gridColumns = if stride > 0 then math.max(1, math.floor((1 + gridCellPadding.X.Scale) / stride + 1e-3)) else 4
+end
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -189,17 +203,36 @@ local function getWindowHeight(): (number?, number)
 	return cardContainer.AbsoluteWindowSize.Y / factor, factor
 end
 
--- Sizes the cards (and the layout's gaps) from the window height so a taller canvas can't stretch them thin.
+-- The card window's usable width in Offset pixels, always leaving room for the scrollbar so showing it can't reflow the grid.
+local function getWindowWidth(factor: number): number
+	local scrollingFrame = cardContainer :: ScrollingFrame
+	local width = scrollingFrame.AbsoluteSize.X / factor
+	if scrollingFrame.VerticalScrollBarInset ~= Enum.ScrollBarInset.None then
+		width -= scrollingFrame.ScrollBarThickness
+	end
+
+	local padding = cardContainer:FindFirstChildOfClass("UIPadding")
+	if padding then
+		width -= padding.PaddingLeft.Offset + padding.PaddingRight.Offset
+		width *= 1 - padding.PaddingLeft.Scale - padding.PaddingRight.Scale
+	end
+	return width
+end
+
+-- Sizes the cards (and the layout's gaps) in pixels; grid rows always hold gridColumns cells whatever the screen.
 local function updateCardSizes()
-	local windowHeight = getWindowHeight()
+	local windowHeight, factor = getWindowHeight()
 	if not windowHeight then
 		return
 	end
 
-	if gridCellSize and gridCellPadding then
+	if gridCellSize and gridCellPadding and gridColumns then
+		local width = getWindowWidth(factor)
+		local gapX = toWindowPixels(gridCellPadding.X, width).Offset
+		local cellWidth = math.max(1, math.floor((width - gapX * (gridColumns - 1)) / gridColumns))
 		local grid = layout :: UIGridLayout
-		grid.CellSize = UDim2.new(gridCellSize.X, toWindowPixels(gridCellSize.Y, windowHeight))
-		grid.CellPadding = UDim2.new(gridCellPadding.X, toWindowPixels(gridCellPadding.Y, windowHeight))
+		grid.CellSize = UDim2.fromOffset(cellWidth, math.floor(cellWidth * CELL_ASPECT_RATIO))
+		grid.CellPadding = UDim2.new(UDim.new(0, gapX), toWindowPixels(gridCellPadding.Y, windowHeight))
 		return
 	end
 
@@ -442,6 +475,22 @@ local function renderClaimAll()
 	alertBadge.Visible = count > 0
 end
 
+-- Fills the UnlockBar with the share of sheep types that aren't Locked any more.
+local function renderUnlockBar()
+	local unlocked = 0
+	for _, entry in entries do
+		if entry.status ~= "Locked" then
+			unlocked += 1
+		end
+	end
+
+	local total = #entries
+	local ratio = if total > 0 then unlocked / total else 0
+	local size = unlockProgress.Size
+	tweenService:Create(unlockProgress, UNLOCK_BAR_TWEEN, { Size = UDim2.new(ratio, 0, size.Y.Scale, size.Y.Offset) }):Play()
+	unlockText.Text = `{unlocked}/{total}`
+end
+
 --// Cards -------------------------------------------------------------------------
 
 local function refreshCard(card: Card)
@@ -528,6 +577,7 @@ local function render()
 	renderTier()
 	renderInfo()
 	renderClaimAll()
+	renderUnlockBar()
 	task.defer(updateCanvasSize)
 end
 
@@ -598,12 +648,14 @@ network.connectEvent(network.RemoteEvents.IndexState, function(newEntries: any)
 	render()
 end)
 
-network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string, success: boolean)
+network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string, success: boolean, _reason: string?, count: number?)
 	if id == "All" then
 		if success then
+			local claimed = if type(count) == "number" then count else 1
 			pop(claimAllFrame)
 			playLuckClaimedSound()
 			luckRain.play(indexGui)
+			announcements.show("ClaimAlert", if claimed > 1 then `Claimed {claimed} sheeps` else "Claimed 1 sheep")
 		else
 			shake(claimAllButton)
 		end
@@ -618,6 +670,7 @@ network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string,
 		pop(card.frame)
 		playLuckClaimedSound()
 		luckRain.play(indexGui)
+		announcements.show("ClaimAlert", "Claimed 1 sheep")
 	else
 		shake(claimButton)
 	end

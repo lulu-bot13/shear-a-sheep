@@ -487,16 +487,16 @@ local function getSheepFolder(player: Player): Folder?
 end
 
 --[[
-	Rolls a sheep type with the player's Luck and drops it at `position` on their plot.
+	Rolls a sheep type with the player's Luck, rebirths and Prestiges and drops it at `position` on their plot.
 	Returns the sheep and its id, or nil if it couldn't be spawned.
 ]]
-function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number): (Model?, number?)
+function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number, rebirths: number, prestiges: number): (Model?, number?)
 	local sheepFolder = getSheepFolder(player)
 	if not sheepFolder then
 		return nil, nil
 	end
 
-	local sheepType = SheepData.roll(luck, random)
+	local sheepType = SheepData.roll(luck, rebirths, prestiges, random)
 	local info = sheepType and SheepData.Sheep[sheepType]
 	if not sheepType or not info then
 		return nil, nil
@@ -508,7 +508,7 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 	end
 
 	local root = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
-	local oddsText = SheepData.getOddsText(sheepType, luck)
+	local oddsText = SheepData.getOddsText(sheepType, luck, rebirths, prestiges)
 
 	nextSheepId += 1
 	local id = nextSheepId

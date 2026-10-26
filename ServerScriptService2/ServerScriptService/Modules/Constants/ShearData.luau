@@ -21,12 +21,17 @@ local shearData = {}
 
 shearData.DefaultShearId = "DefaultShear"
 
+--[[
+	sheepRequired is lifetime (rebirths and Prestiges keep it). A player shears ~15-30 sheep/min at first, ~50 by
+	minute 5 and hits the farm's spawn cap (40-86/min) by about minute 15. Minutes of active / casual play to unlock:
+	Steel ~2 / 4    Large ~6 / 11    Electric ~22 / 35 (before the first Prestige)    Master ~60 / 70
+]]
 shearData.Shears = {
-	{ id = "DefaultShear",   price = 0,     sheepRequired = 0,   damage = 20, range = 6 },
-	{ id = "SteelShears",    price = 300,   sheepRequired = 25,  damage = 26, range = 7.5 },
-	{ id = "LargeShears",    price = 1200,  sheepRequired = 100, damage = 34, range = 9 },
-	{ id = "ElectricShears", price = 4000,  sheepRequired = 300, damage = 45, range = 11 },
-	{ id = "MasterShears",   price = 12000, sheepRequired = 750, damage = 60, range = 13 },
+	{ id = "DefaultShear",   price = 0,     sheepRequired = 0,    damage = 20, range = 6 },
+	{ id = "SteelShears",    price = 300,   sheepRequired = 50,   damage = 26, range = 7.5 },
+	{ id = "LargeShears",    price = 1200,  sheepRequired = 300,  damage = 34, range = 9 },
+	{ id = "ElectricShears", price = 4000,  sheepRequired = 1500, damage = 45, range = 11 },
+	{ id = "MasterShears",   price = 12000, sheepRequired = 4500, damage = 60, range = 13 },
 } :: { ShearInfo }
 
 --// Swinging ------------------------------------------------------------------------------

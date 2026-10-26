@@ -49,15 +49,18 @@ end
 
 --// Spawning -----------------------------------------------------------------------------
 
+local function getNumber(player: Player, key: string): number
+	local value = PlayerDataHandler.get(player, key)
+	return if type(value) == "number" then value else 0
+end
+
 local function getMaxSheep(player: Player): number
-	local maxSheep = PlayerDataHandler.get(player, "MaxSheep")
-	return if type(maxSheep) == "number" then math.min(maxSheep, FarmData.MaxSheepCap) else 0
+	return math.min(getNumber(player, "MaxSheep"), FarmData.MaxSheepCap)
 end
 
 -- Seconds between refills, shortened by the player's Faster Respawn level.
 local function getSpawnInterval(player: Player): number
-	local level = PlayerDataHandler.get(player, "RespawnLevel")
-	return UpgradeData.getSpawnInterval(FarmData.SpawnInterval, if type(level) == "number" then level else 0)
+	return UpgradeData.getSpawnInterval(FarmData.SpawnInterval, getNumber(player, "RespawnLevel"))
 end
 
 local function spawnOne(player: Player): boolean
@@ -67,8 +70,13 @@ local function spawnOne(player: Player): boolean
 		return false
 	end
 
-	local luck = PlayerDataHandler.get(player, "Luck")
-	local sheep = SheepHandler.spawnSheep(player, position, if type(luck) == "number" then luck else 0)
+	local sheep = SheepHandler.spawnSheep(
+		player,
+		position,
+		getNumber(player, "Luck"),
+		getNumber(player, "Rebirths"),
+		getNumber(player, "Prestiges")
+	)
 	return sheep ~= nil
 end
 
@@ -112,7 +120,7 @@ end
 
 --// Public API ------------------------------------------------------------------------
 
--- Clears the player's sheep and fills the farm back to full capacity (used after a rebirth).
+-- Clears the player's sheep and fills the farm back to full capacity (used after a Prestige).
 function SheepSpawnHandler.resetFarm(player: Player)
 	SheepHandler.clearSheep(player)
 	spawnUpTo(player, getMaxSheep(player))

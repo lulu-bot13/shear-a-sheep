@@ -1,5 +1,5 @@
 --[[
-	Pops in the announcement labels built in Studio under StarterGui.Alerts (rebirth ready, rebirthed, new title) and fades them out.
+	Pops in the announcement labels built in Studio under StarterGui.Alerts (rebirth ready, rebirthed, new title, new shear, sheep claimed) and fades them out.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Modules.Announcements
 ]]--
 
@@ -17,9 +17,11 @@ local POP_START_SCALE = 0.3
 local LAYOUT_ORDERS = {
 	RebirthAlert = 1,
 	TitleAlert = 2,
+	ShearAlert = 3,
+	ClaimAlert = 4,
 }
 
-export type Name = "RebirthAlert" | "TitleAlert" | "Rebirthed"
+export type Name = "RebirthAlert" | "TitleAlert" | "ShearAlert" | "ClaimAlert" | "Rebirthed"
 
 type Entry = {
 	label: TextLabel,

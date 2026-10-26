@@ -16,6 +16,8 @@ local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 --// Configs
 local TEMPLATE_NAME = "TemplatePlot"
 local ANCHOR_NAME = "SpawnArea"
+local CENTER_NAME = "Center"
+local OWNER_GUI_NAMES = { "PlayerBase", "SheepCapacity" } -- hidden until PlotOwnerClient shows them on a claimed plot
 
 local PlotLayoutHandler = {}
 
@@ -69,6 +71,15 @@ local function buildPlots()
 	end
 
 	template.Parent = serverStorage
+
+	-- Every plot starts unclaimed, so its owner signs start hidden.
+	local center = template:FindFirstChild(CENTER_NAME)
+	for _, name in OWNER_GUI_NAMES do
+		local gui = center and center:FindFirstChild(name)
+		if gui and gui:IsA("LayerCollector") then
+			gui.Enabled = false
+		end
+	end
 
 	for _, plot in plotsFolder:GetChildren() do
 		if plot:IsA("Folder") then

@@ -5,7 +5,7 @@
 	ShearShopUIData gets a card cloned from the Template: name, speed / damage, a spinning
 	3D preview and a purchase button. Buying is validated by the server (ShearShopHandler);
 	the cards update from the player's "ShearId" / "OwnedShears" attributes and wool. A shear that is
-	owned but not equipped switches to it when its BUY button is pressed (EquipShear).
+	owned shows EQUIP (EquipShear); the equipped one shows UNEQUIP, which switches back to the default shear.
 
 	Performance: the previews are built once (on first open), and ONE render connection
 	exists only while the shop is open. It turns each preview by moving its ViewportFrame
@@ -24,6 +24,7 @@ local tweenService = game:GetService("TweenService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local alerts = require(script.Parent.Parent.Modules.Alerts)
+local announcements = require(script.Parent.Parent.Modules.Announcements)
 local UIData = require(script.Parent.Parent.Modules.ShearShopUIData)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
@@ -44,8 +45,11 @@ local purchaseSound = soundService:WaitForChild("UISounds"):FindFirstChild("Cash
 
 --// Configs
 local CLOSE_DISTANCE = 6 -- studs outside the hitbox before the shop closes itself
+local DEFAULT_SHEAR_ID = "DefaultShear"
 local DISTANCE_CHECK_SECONDS = 0.25
 local MESSAGE_SECONDS = 1.3
+-- Main HUD children left up while the shop is open; Ability is hidden by AbilityClient whenever any window is open.
+local HUD_KEEP = { WoolAmount = true, SheepCount = true, Ability = true }
 
 local REASON_TEXT = {
 	NoWool = "Not enough wool",
@@ -59,6 +63,7 @@ type Card = {
 	info: any,
 	frame: Frame,
 	purchase: GuiButton,
+	purchaseLabel: TextLabel,
 	priceLabel: TextLabel,
 	viewport: ViewportFrame?,
 	camera: Camera?,
@@ -75,6 +80,8 @@ local nearShop = false
 local renderConnection: RBXScriptConnection? = nil
 local spinAngle = 0
 local pendingPurchaseId: string? = nil -- equips reply on the same event, so only this id plays the purchase sound
+local lastSheepSheared: number? = nil -- nil until the saved count first arrives, so joining doesn't announce old unlocks
+local hiddenHud: { GuiObject } = {}
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -91,7 +98,7 @@ end
 local function isOwned(id: string): boolean
 	local owned = player:GetAttribute("OwnedShears")
 	if type(owned) ~= "string" then
-		return id == "DefaultShear"
+		return id == DEFAULT_SHEAR_ID
 	end
 	for ownedId in string.gmatch(owned, "[^,]+") do
 		if ownedId == id then
@@ -107,7 +114,7 @@ local function getSheepSheared(): number
 end
 
 local function getState(card: Card): string
-	if card.info.id == (player:GetAttribute("ShearId") or "DefaultShear") then
+	if card.info.id == (player:GetAttribute("ShearId") or DEFAULT_SHEAR_ID) then
 		return "equipped"
 	elseif isOwned(card.info.id) then
 		return "owned"
@@ -123,16 +130,22 @@ local function refreshCard(card: Card)
 	local state = getState(card)
 	local colors = UIData.ButtonColors
 
-	card.priceLabel.Text = UIData.formatWool(card.info.price)
+	card.priceLabel.Text = if state == "locked"
+		then UIData.formatSheep(card.info.sheepRequired)
+		else UIData.formatWool(card.info.price)
 
 	if state == "equipped" then
 		card.purchase.BackgroundColor3 = colors.Equipped
+		card.purchaseLabel.Text = if card.info.id == DEFAULT_SHEAR_ID then "EQUIPPED" else "UNEQUIP"
 	elseif state == "owned" then
 		card.purchase.BackgroundColor3 = colors.Owned
+		card.purchaseLabel.Text = "EQUIP"
 	elseif state == "locked" then
 		card.purchase.BackgroundColor3 = colors.Locked
+		card.purchaseLabel.Text = "BUY"
 	else
 		card.purchase.BackgroundColor3 = if state == "ready" then colors.Ready else colors.Poor
+		card.purchaseLabel.Text = "BUY"
 	end
 
 	card.purchase:SetAttribute("State", state)
@@ -158,6 +171,26 @@ local function flashMessage(card: Card, text: string)
 			refreshCard(card)
 		end
 	end)
+end
+
+-- Pops StarterGui.Alerts.Main.ShearAlert for each shear whose sheep requirement the new count just reached.
+local function checkShearUnlocks()
+	local count = player:GetAttribute("SheepShearedCount")
+	if type(count) ~= "number" then
+		return
+	end
+
+	local previous = lastSheepSheared
+	lastSheepSheared = count
+	if not previous then
+		return
+	end
+
+	for _, info in UIData.Shears do
+		if info.sheepRequired > previous and info.sheepRequired <= count and not isOwned(info.id) then
+			announcements.show("ShearAlert", `NEW SHEAR UNLOCKED: {info.displayName}`)
+		end
+	end
 end
 
 --// Cards & previews ---------------------------------------------------------------
@@ -211,7 +244,6 @@ local function createCards()
 
 		nameLabel.Text = info.displayName
 		buffsLabel.Text = `Damage: {info.damage}\nRange: {info.range} studs`
-		purchaseLabel.Text = "BUY"
 		purchase.AutoButtonColor = true
 		if purchase:IsA("TextButton") then
 			purchase.Text = ""
@@ -221,6 +253,7 @@ local function createCards()
 			info = info,
 			frame = frame,
 			purchase = purchase,
+			purchaseLabel = purchaseLabel,
 			priceLabel = priceLabel,
 			viewport = nil,
 			camera = nil,
@@ -238,6 +271,8 @@ local function createCards()
 				network.fireServer(network.RemoteEvents.PurchaseShear, info.id)
 			elseif state == "owned" then
 				network.fireServer(network.RemoteEvents.EquipShear, info.id)
+			elseif state == "equipped" and info.id ~= DEFAULT_SHEAR_ID then
+				network.fireServer(network.RemoteEvents.EquipShear, DEFAULT_SHEAR_ID)
 			elseif state == "poor" then
 				flashMessage(card, REASON_TEXT.NoWool)
 			elseif state == "locked" then
@@ -345,6 +380,27 @@ end
 
 --// Open / close ------------------------------------------------------------------
 
+-- Hides the Main HUD (buttons, Luck, ...) apart from HUD_KEEP; showHud puts back what was showing.
+local function hideHud()
+	local hud = playerGui:FindFirstChild("Main")
+	if not hud then
+		return
+	end
+	for _, child in hud:GetChildren() do
+		if child:IsA("GuiObject") and child.Visible and not HUD_KEEP[child.Name] then
+			child.Visible = false
+			table.insert(hiddenHud, child)
+		end
+	end
+end
+
+local function showHud()
+	for _, child in hiddenHud do
+		child.Visible = true
+	end
+	table.clear(hiddenHud)
+end
+
 -- Studs from the position to the hitbox's surface (0 when inside it).
 local function getHitboxDistance(position: Vector3): number
 	local offset = shopHitbox.CFrame:PointToObjectSpace(position)
@@ -363,9 +419,11 @@ local window = windowsManager.register("ShearShop", {
 	onOpen = function()
 		buildPreviews()
 		refreshAll()
+		hideHud()
 		renderConnection = runService.RenderStepped:Connect(onRender)
 	end,
 	onClose = function()
+		showHud()
 		if renderConnection then
 			renderConnection:Disconnect()
 			renderConnection = nil
@@ -409,6 +467,9 @@ for _, attribute in { "ShearId", "OwnedShears", "SheepShearedCount" } do
 		end
 	end)
 end
+
+checkShearUnlocks()
+player:GetAttributeChangedSignal("SheepShearedCount"):Connect(checkShearUnlocks)
 
 shopHitbox.Touched:Connect(function(hit: BasePart)
 	if not nearShop and player.Character and hit:IsDescendantOf(player.Character) then

@@ -1,11 +1,10 @@
 --[[
-	First-play tutorial: go to a sheep, shear 3, buy More Wool, close the shop, gain wool, then rebirth.
+	First-play tutorial: go to a sheep, shear 3 (with every other UI hidden), buy More Wool, close the shop, gain wool, then rebirth.
 	Each step is worked out from the player's progress, so it resumes after a rejoin and ends at the first rebirth.
 ]]--
 
 --// Services
 local collectionService = game:GetService("CollectionService")
-local guiService = game:GetService("GuiService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
@@ -28,9 +27,7 @@ local spotlightFrame = tutorialGui:WaitForChild("Spotlight") :: GuiObject
 local darkOverlay = tutorialGui:WaitForChild("DarkOverlay") :: GuiObject
 local completedLabel = tutorialGui:WaitForChild("TutorialCompletedLabel") :: GuiObject
 local tip = tutorialGui:WaitForChild("Tip") :: GuiObject
-local mainGui = playerGui:WaitForChild("Main")
-local pointer = mainGui:WaitForChild("Pointer") :: GuiObject
-local hudButtons = mainGui:WaitForChild("Buttons")
+local hudButtons = playerGui:WaitForChild("Main"):WaitForChild("Buttons")
 local upgradesButton = hudButtons:WaitForChild("Upgrades") :: GuiButton
 local rebirthHudButton = hudButtons:WaitForChild("Rebirth") :: GuiButton
 local upgradeShopMain = playerGui:WaitForChild("UpgradeShop"):WaitForChild("Main")
@@ -38,32 +35,27 @@ local upgradeCards = upgradeShopMain:WaitForChild("ScrollingFrame")
 local upgradeShopExit = upgradeShopMain:FindFirstChild("Exit", true) :: GuiObject? -- found the same way WindowsManager wires it
 local rebirthButton = playerGui:WaitForChild("RebirthScreen"):WaitForChild("Main"):WaitForChild("Rebirth") :: GuiButton
 local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
+local beamTemplate = replicatedStorage:WaitForChild("Assets"):WaitForChild("VFX"):WaitForChild("TutorialBeam") :: Beam
 
 --// Configs
 local SHEEP_TAG = "Sheep"
 local OWNER_ATTRIBUTE = "OwnerId"
 local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- only shear Tools have it
 local NEAR_DISTANCE = 8 -- studs (flat) from a sheep that count as "at" it
-local ALWAYS_IN_STUDIO = true -- TODO: set to false once the tutorial is tested; runs it in Studio even on a save that has rebirthed
+local ALWAYS_IN_STUDIO = false -- runs the tutorial in Studio even on a save that has rebirthed
 local TICK_SECONDS = 0.1
-local DISPLAY_ORDER = 90 -- the text, spotlight and pointer draw over every window (Alerts are 100)
+local DISPLAY_ORDER = 90 -- the text and spotlight draw over every window (Alerts are 100)
 local STATE_REQUEST_SECONDS = 2 -- re-asks the server for upgrade / rebirth state until it arrives
 local COMPLETED_SECONDS = 3 -- how long the completed label stays up
 local SHEEP_TO_SHEAR = 3
 local MORE_WOOL_ID = "MoreWool"
 local KEEP_HUD_BUTTONS = { Upgrades = true, Rebirth = true } -- the only HUD buttons shown until the tutorial ends
+local HIDE_UI_STAGES = { GoToSheep = true, Shear = true } -- every ScreenGui but the tutorial's is off during these
 local POP_IN = TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local POP_OUT = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In)
 
 local HIGHLIGHT_COLOR = Color3.fromRGB(255, 230, 90)
-local BEAM_COLOR = Color3.fromRGB(255, 230, 90)
-local BEAM_WIDTH = 0.6
-local BEAM_TEXTURE = "" -- "rbxassetid://..." for an arrow texture; empty draws a plain beam
-
-local POINTER_ROTATION = 180
-local POINTER_GAP = 6 -- pixels between the pointer and the top of its target
-local POINTER_BOB_PIXELS = 12
-local POINTER_BOB_SPEED = 5
+local BEAM_ATTACHMENT_ROTATION = Vector3.new(0, 0, 90) -- degrees, applied to both beam ends
 
 type Stage = "GoToSheep" | "Shear" | "Upgrades" | "CloseUpgrades" | "Rebirth" | "Done"
 
@@ -71,34 +63,32 @@ type Stage = "GoToSheep" | "Shear" | "Upgrades" | "CloseUpgrades" | "Rebirth" | 
 local stage: Stage = "GoToSheep"
 local shearedBaseline = 0 -- SheepShearedCount the "Shear 3 Sheep" progress counts up from
 local hiddenHudButtons: { GuiObject } = {}
+local hiddenGuis: { ScreenGui } = {}
 local popFullScales: { [UIScale]: number } = {} -- each popped object's full size, read before its first pop
 local upgradeStates: { [string]: any }? = nil -- UpgradeState cards by id
 local rebirthCost: number? = nil
 local nextStateRequest = 0
-local beamSheep: Model? = nil
 local highlights: { [Model]: Highlight } = {}
-local pointerTarget: GuiObject? = nil
+local beamSheep: Model? = nil -- the sheep the beam leads to
+local beamConnection: RBXScriptConnection? = nil
 local focused: GuiObject? = nil -- what the spotlight was last tweened over, and where it was
 local focusedPosition, focusedSize = Vector2.zero, Vector2.zero
-local pointerParent = pointer.Parent
-local renderConnection: RBXScriptConnection? = nil
 
-local playerAttachment = Instance.new("Attachment")
-playerAttachment.Name = "TutorialBeam"
-local sheepAttachment = Instance.new("Attachment")
-sheepAttachment.Name = "TutorialBeam"
+-- One beam cloned once and reused. Its ends stay in Terrain and are moved each frame,
+-- so a respawned character or a replaced sheep can't destroy them.
+local beamStart = Instance.new("Attachment")
+beamStart.Name = "TutorialBeamStart"
+beamStart.Orientation = BEAM_ATTACHMENT_ROTATION
+beamStart.Parent = workspace.Terrain
+local beamEnd = Instance.new("Attachment")
+beamEnd.Name = "TutorialBeamEnd"
+beamEnd.Orientation = BEAM_ATTACHMENT_ROTATION
+beamEnd.Parent = workspace.Terrain
 
-local beam = Instance.new("Beam")
-beam.Name = "TutorialBeam"
-beam.Attachment0 = playerAttachment
-beam.Attachment1 = sheepAttachment
-beam.Color = ColorSequence.new(BEAM_COLOR)
-beam.Width0 = BEAM_WIDTH
-beam.Width1 = BEAM_WIDTH
-beam.FaceCamera = true
-beam.LightEmission = 1
-beam.Texture = BEAM_TEXTURE
-beam.TextureSpeed = 1
+local beam = beamTemplate:Clone()
+beam.Attachment0 = beamStart
+beam.Attachment1 = beamEnd
+beam.FaceCamera = false -- the ends' rotation sets which way the beam lies
 beam.Enabled = false
 beam.Parent = workspace.Terrain
 
@@ -167,7 +157,7 @@ local function setText(text: string)
 	tutorialText.Text = text
 end
 
---// Sheep guides ---------------------------------------------------------------------
+--// Sheep highlights -----------------------------------------------------------------
 
 -- Outlines exactly these sheep.
 local function setHighlights(sheepList: { Model })
@@ -195,42 +185,25 @@ local function setHighlights(sheepList: { Model })
 	end
 end
 
--- Draws the beam from the character to the sheep; nil hides it.
-local function setBeam(sheep: Model?)
+-- Runs every frame: draws the beam from the character to beamSheep, or hides it when either is missing.
+local function updateBeam()
 	local playerRoot = getRoot(player.Character)
-	local sheepRoot = getRoot(sheep)
+	local sheepRoot = getRoot(beamSheep)
 	if not playerRoot or not sheepRoot then
 		beam.Enabled = false
 		return
 	end
 
-	playerAttachment.Parent = playerRoot
-	sheepAttachment.Parent = sheepRoot
+	beamStart.WorldPosition = playerRoot.Position
+	beamEnd.WorldPosition = sheepRoot.Position
 	beam.Enabled = true
 end
 
-local function clearSheepGuides()
-	setHighlights({})
-	setBeam(nil)
-	beamSheep = nil
-end
+--// Spotlight ---------------------------------------------------------------------------
 
---// Pointer + spotlight ------------------------------------------------------------------
-
--- Pixels between the top of the screen and the top of the gui this instance draws in.
-local function getInsetOffset(instance: Instance): Vector2
-	local gui = if instance:IsA("ScreenGui") then instance else instance:FindFirstAncestorOfClass("ScreenGui")
-	if gui and not gui.IgnoreGuiInset then
-		local topLeft = guiService:GetGuiInset()
-		return topLeft
-	end
-	return Vector2.zero
-end
-
--- Spotlights the GuiObject and bobs the pointer over it; nil clears both.
+-- Spotlights the GuiObject; nil clears it.
 -- FocusUI only measures the target once, so it is called again whenever the target moves (e.g. a window popping in).
 local function point(target: GuiObject?)
-	pointerTarget = target
 	if target and isShown(target) then
 		if target ~= focused or target.AbsolutePosition ~= focusedPosition or target.AbsoluteSize ~= focusedSize then
 			focused, focusedPosition, focusedSize = target, target.AbsolutePosition, target.AbsoluteSize
@@ -242,31 +215,35 @@ local function point(target: GuiObject?)
 	end
 end
 
-local function updatePointer()
-	local target = pointerTarget
-	if not target or not isShown(target) then
-		pointer.Visible = false
-		return
+--// Stages ------------------------------------------------------------------------------
+
+-- Turns off every ScreenGui but the tutorial's; run each tick, since respawned or newly opened guis come back on.
+local function hideOtherGuis()
+	for _, gui in playerGui:GetChildren() do
+		if gui:IsA("ScreenGui") and gui ~= tutorialGui and gui.Enabled then
+			gui.Enabled = false
+			table.insert(hiddenGuis, gui)
+		end
 	end
-
-	-- Measured in screen pixels, since the target's ScreenGui may not share the Tutorial gui's inset.
-	local targetPosition = target.AbsolutePosition + getInsetOffset(target)
-	local bob = (math.sin(os.clock() * POINTER_BOB_SPEED) + 1) / 2 * POINTER_BOB_PIXELS
-	local center = Vector2.new(
-		targetPosition.X + target.AbsoluteSize.X / 2,
-		targetPosition.Y - POINTER_GAP - pointer.AbsoluteSize.Y / 2 - bob
-	) - getInsetOffset(tutorialGui)
-
-	pointer.Position = UDim2.fromOffset(center.X, center.Y)
-	pointer.Visible = true
 end
 
---// Stages ------------------------------------------------------------------------------
+local function showOtherGuis()
+	for _, gui in hiddenGuis do
+		gui.Enabled = true
+	end
+	table.clear(hiddenGuis)
+end
 
 local function setStage(newStage: Stage)
 	stage = newStage
-	clearSheepGuides()
+	setHighlights({})
+	beamSheep = nil
 	point(nil)
+	if HIDE_UI_STAGES[newStage] then
+		hideOtherGuis()
+	else
+		showOtherGuis()
+	end
 end
 
 -- Asks the server again for state the tutorial is still missing.
@@ -278,16 +255,14 @@ local function requestState(eventName: any)
 	end
 end
 
--- "Go to a Sheep": every sheep is outlined and a beam leads to one of them.
+-- "Go to a Sheep": every sheep is outlined and the beam leads to one of them.
 local function updateGoToSheep()
-	setText("Walk to a Sheep")
+	setText("Equip Shears then go to the Highlighted Sheep.")
 	local sheepList = getOwnSheep()
 	setHighlights(sheepList)
-
 	if not beamSheep or not table.find(sheepList, beamSheep) then
 		beamSheep = if #sheepList > 0 then sheepList[math.random(#sheepList)] else nil
 	end
-	setBeam(beamSheep)
 
 	local playerRoot = getRoot(player.Character)
 	if not playerRoot then
@@ -373,7 +348,7 @@ local function updateRebirth()
 		setText("Open Rebirths")
 		point(rebirthHudButton)
 	else
-		setText("Rebirth for a permanent Wool boost!")
+		setText("Rebirth for more Luck!")
 		point(rebirthButton)
 	end
 end
@@ -407,22 +382,20 @@ end
 
 local function stop()
 	stage = "Done"
-	clearSheepGuides()
+	setHighlights({})
 	point(nil)
-	beam:Destroy()
-	playerAttachment:Destroy()
-	sheepAttachment:Destroy()
-
-	if renderConnection then
-		renderConnection:Disconnect()
-		renderConnection = nil
+	if beamConnection then
+		beamConnection:Disconnect()
+		beamConnection = nil
 	end
-	pointer.Visible = false
-	pointer.Parent = pointerParent
+	beam:Destroy()
+	beamStart:Destroy()
+	beamEnd:Destroy()
 	tutorialMain.Visible = false
 	spotlightFrame.Visible = false
 	tutorialGui.Enabled = false
 	showHudButtons()
+	showOtherGuis()
 end
 
 -- The object's UIScale and the size it pops up to; a Studio-built UIScale keeps its value as the full size, otherwise one is added at 1.
@@ -455,7 +428,7 @@ local function popOut(guiObject: GuiObject)
 	uiScale.Scale = fullScale
 end
 
--- Pops the completed label in over the dimmed screen, holds it, then pops it out; the Tip stays up until the next rebirth.
+-- Pops the completed label and Tip in over the dimmed screen, holds them, then pops them out.
 local function showCompleted()
 	tutorialGui.Enabled = true
 	darkOverlay.Visible = true
@@ -463,20 +436,9 @@ local function showCompleted()
 	popIn(tip)
 	task.wait(COMPLETED_SECONDS)
 
+	task.spawn(popOut, tip)
 	popOut(completedLabel)
 	darkOverlay.Visible = false
-
-	-- The Tip stays up until the player's next rebirth.
-	local rebirths = getNumberAttribute("Rebirths")
-	while true do
-		player:GetAttributeChangedSignal("Rebirths"):Wait()
-		local newRebirths = getNumberAttribute("Rebirths")
-		if newRebirths > rebirths then
-			break
-		end
-		rebirths = newRebirths -- the data was reset, so the next rebirth still hides it
-	end
-	popOut(tip)
 	tutorialGui.Enabled = false
 end
 
@@ -488,14 +450,10 @@ local function start(firstStage: Stage)
 	tutorialMain.Visible = true
 	tutorialFrame.Visible = true
 	tutorialText.Visible = true
-	pointer.AnchorPoint = Vector2.new(0.5, 0.5)
-	pointer.Rotation = POINTER_ROTATION
-	pointer.Visible = false
-	pointer.Parent = tutorialGui
 	hideHudButtons()
 
 	setStage(firstStage)
-	renderConnection = runService.RenderStepped:Connect(updatePointer)
+	beamConnection = runService.RenderStepped:Connect(updateBeam)
 
 	while stage ~= "Done" do
 		local rebirths = getNumberAttribute("Rebirths")
@@ -507,12 +465,14 @@ local function start(firstStage: Stage)
 			return
 		end
 		UPDATERS[stage]()
+		if HIDE_UI_STAGES[stage] then
+			hideOtherGuis()
+		end
 		task.wait(TICK_SECONDS)
 	end
 end
 
 tutorialGui.Enabled = false
-pointer.Visible = false
 spotlightFrame.Visible = false -- FocusUI shows it when there's a button to point at
 darkOverlay.Visible = false
 completedLabel.Visible = false
@@ -542,8 +502,8 @@ if forced then
 	print("[TutorialClient] running from the start (ALWAYS_IN_STUDIO)")
 	shearedBaseline = getNumberAttribute("SheepShearedCount")
 	start("GoToSheep")
-elseif getNumberAttribute("Rebirths") >= 1 then
-	print(`[TutorialClient] skipped: this save has {getNumberAttribute("Rebirths")} rebirth(s)`)
+elseif getNumberAttribute("Rebirths") >= 1 or getNumberAttribute("Prestiges") >= 1 then
+	print(`[TutorialClient] skipped: this save has {getNumberAttribute("Rebirths")} rebirth(s), {getNumberAttribute("Prestiges")} Prestige(s)`)
 	stop()
 else
 	start(if getNumberAttribute("SheepShearedCount") >= SHEEP_TO_SHEAR then "Upgrades" else "GoToSheep")

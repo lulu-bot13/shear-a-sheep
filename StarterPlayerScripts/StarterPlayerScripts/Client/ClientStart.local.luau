@@ -77,18 +77,26 @@ local function showShearedPopup(amount: number)
 	popup.Position = target + UDim2.fromOffset(0, 12)
 	popup.Font = Enum.Font.SourceSansBold
 	popup.Text = `+{formatWithCommas(amount)}`
-	popup.TextColor3 = Color3.new(1, 1, 1)
-	popup.TextTransparency = 0.15
+	popup.TextColor3 = Color3.fromRGB(255, 220, 120)
+	popup.TextTransparency = 0
 	popup.TextScaled = true
 	popup.TextXAlignment = Enum.TextXAlignment.Left
 	popup.ZIndex = frame.ZIndex + 1
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(60, 40, 15)
+	stroke.Thickness = 2
+	stroke.Parent = popup
+
 	popup.Parent = mainGui
 
-	tweenService:Create(popup, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = target }):Play()
-	task.delay(0.125, function()
-		tweenService:Create(popup, TweenInfo.new(0.125), { TextTransparency = 1 }):Play()
+	tweenService:Create(popup, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = target }):Play()
+	task.delay(0.6, function()
+		local fadeInfo = TweenInfo.new(0.25)
+		tweenService:Create(popup, fadeInfo, { TextTransparency = 1 }):Play()
+		tweenService:Create(stroke, fadeInfo, { Transparency = 1 }):Play()
 	end)
-	debris:AddItem(popup, 0.25)
+	debris:AddItem(popup, 0.85)
 end
 
 local lastSheepCount: number? = nil

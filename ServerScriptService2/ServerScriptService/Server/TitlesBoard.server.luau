@@ -8,9 +8,14 @@ local serverScriptService = game:GetService("ServerScriptService")
 --// Modules
 local TitleHandler = require(serverScriptService.Modules.Controllers.TitleHandler)
 
-local list = workspace:WaitForChild("Folder"):WaitForChild("Titles"):WaitForChild("Face")
-	:WaitForChild("SurfaceGui"):WaitForChild("Frame"):WaitForChild("Frame") :: GuiObject
-local template = list:WaitForChild("Template") :: Frame
+local leaderboards = workspace:WaitForChild("Base"):WaitForChild("CenterPlaza"):WaitForChild("Leaderboards")
+local board = leaderboards:WaitForChild("Titles", 15)
+local template = board and board:FindFirstChild("Template", true) :: Frame?
+if not template then
+	warn(`TitlesBoard: no Titles board with a Template row in {leaderboards:GetFullName()}.`)
+	return
+end
+local list = template.Parent :: GuiObject
 local listLayout = list:FindFirstChildOfClass("UIListLayout")
 template.Visible = false
 

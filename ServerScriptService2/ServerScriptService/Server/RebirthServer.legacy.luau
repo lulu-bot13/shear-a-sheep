@@ -2,7 +2,7 @@
 
 --[[
 	Connects the rebirth screen to RebirthHandler: answers state and rebirth requests,
-	and pushes fresh state on its own whenever the player's wool, luck or rebirths change.
+	and pushes fresh state on its own whenever the player's wool, luck, rebirths or Prestiges change.
 
 	Location: ServerScriptService.Server.RebirthServer
 ]]--
@@ -30,14 +30,15 @@ end
 
 --// State
 local lastSignature: { [Player]: string } = {}
+local selectedAmount: { [Player]: RebirthHandler.Amount } = {} -- the amount the screen last asked about, so pushes keep using it
 
 -- A short fingerprint of the state, so an unchanged state is never sent twice.
 local function getSignature(state: RebirthHandler.State): string
-	return `{state.rebirths}|{state.wool}|{state.canRebirth}|{state.luck}|{state.nextLuck}`
+	return `{state.rebirths}|{state.prestiges}|{state.wool}|{state.canRebirth}|{state.luck}|{state.amount}`
 end
 
 local function pushState(player: Player, force: boolean)
-	local state = RebirthHandler.getState(player)
+	local state = RebirthHandler.getState(player, selectedAmount[player])
 	local signature = getSignature(state)
 	if not force and lastSignature[player] == signature then
 		return
@@ -51,21 +52,24 @@ network.waitUntilReadyAsync()
 
 debugLog("network ready, listening for rebirth requests")
 
-network.connectEvent(network.RemoteEvents.RequestRebirthState, function(player: Player)
-	debugLog(`{player.Name} asked for their rebirth state`)
+network.connectEvent(network.RemoteEvents.RequestRebirthState, function(player: Player, amount: any)
+	selectedAmount[player] = RebirthHandler.parseAmount(amount)
+	debugLog(`{player.Name} asked for their rebirth state (amount {selectedAmount[player]})`)
 	pushState(player, true)
 end, { network.Middleware.RateLimit(STATE_REQUEST_COOLDOWN_SECONDS) })
 
-network.connectEvent(network.RemoteEvents.RequestRebirth, function(player: Player)
-	local before = RebirthHandler.getState(player)
-	local success, reason = RebirthHandler.rebirth(player)
-	debugLog(`{player.Name} rebirth: success {success}, reason {reason}, wool {before.wool}/{before.woolCost}, rebirths {before.rebirths}`)
-	network.fireClient(network.RemoteEvents.RebirthResult, player, success, reason, RebirthHandler.getRebirths(player))
+network.connectEvent(network.RemoteEvents.RequestRebirth, function(player: Player, amount: any)
+	selectedAmount[player] = RebirthHandler.parseAmount(amount)
+	local before = RebirthHandler.getState(player, selectedAmount[player])
+	local success, reason, count = RebirthHandler.rebirth(player, selectedAmount[player])
+	debugLog(`{player.Name} rebirth x{before.amount}: success {success}, reason {reason}, count {count}, wool {before.wool}/{before.amountCost}, rebirths {before.rebirths}`)
+	network.fireClient(network.RemoteEvents.RebirthResult, player, success, reason, RebirthHandler.getRebirths(player), count)
 	pushState(player, true)
 end, { network.Middleware.RateLimit(REBIRTH_COOLDOWN_SECONDS) })
 
 players.PlayerRemoving:Connect(function(player: Player)
 	lastSignature[player] = nil
+	selectedAmount[player] = nil
 end)
 
 players.PlayerAdded:Connect(function(player: Player)

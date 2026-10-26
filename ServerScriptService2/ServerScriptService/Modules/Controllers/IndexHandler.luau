@@ -2,7 +2,7 @@
 
 --[[
 	The sheep Index: shearing a sheep type bare the first time finds it, and claiming it in the Index UI grants its IndexLuck.
-	Claimed Luck is permanent: rebirths add it back on top of their own Luck.
+	Claimed Luck is permanent: a Prestige resets Luck back to it. Each card shows the player's own odds.
 
 	Location: ServerScriptService.Modules.Controllers.IndexHandler
 ]]--
@@ -29,7 +29,7 @@ export type EntryState = {
 	rarity: string,
 	color: Color3,
 	indexLuck: number,
-	odds: number, -- N in "1 in N" at base Luck
+	odds: number, -- N in "1 in N" with the player's Luck, rebirths and Prestiges
 	status: string, -- "Locked", "Found" or "Claimed"
 	tier: string, -- the Index tab it's listed under: "Baby" or "Normal"
 }
@@ -37,6 +37,11 @@ export type EntryState = {
 local IndexHandler = {}
 
 --// Helpers ---------------------------------------------------------------------------
+
+local function getNumber(player: Player, key: string): number
+	local value = PlayerDataHandler.get(player, key)
+	return if type(value) == "number" then value else 0
+end
 
 local function getIndex(player: Player): { [string]: string }
 	local index = PlayerDataHandler.get(player, "SheepIndex")
@@ -54,6 +59,7 @@ end
 -- Every sheep type's card, commonest first.
 function IndexHandler.getState(player: Player): { EntryState }
 	local index = getIndex(player)
+	local luck, rebirths, prestiges = getNumber(player, "Luck"), getNumber(player, "Rebirths"), getNumber(player, "Prestiges")
 	local state: { EntryState } = {}
 	for _, sheepType in SheepData.IndexOrder do
 		local info = SheepData.Sheep[sheepType]
@@ -63,7 +69,7 @@ function IndexHandler.getState(player: Player): { EntryState }
 			rarity = info.rarity,
 			color = info.color,
 			indexLuck = SheepData.getIndexLuck(sheepType),
-			odds = SheepData.getOdds(sheepType, 0) or 1,
+			odds = SheepData.getOdds(sheepType, luck, rebirths, prestiges) or 1,
 			status = index[sheepType] or "Locked",
 			tier = if info.baby then "Baby" else "Normal",
 		})
@@ -71,7 +77,7 @@ function IndexHandler.getState(player: Player): { EntryState }
 	return state
 end
 
--- Total Luck from every claimed type; rebirths keep this much on top of their own.
+-- Total Luck from every claimed type; a Prestige keeps this much.
 function IndexHandler.getClaimedLuck(player: Player): number
 	return SheepData.getClaimedIndexLuck(getIndex(player))
 end
@@ -151,10 +157,10 @@ function IndexHandler.Start()
 		network.fireClient(network.RemoteEvents.IndexClaimResult, player, sheepType, success, reason)
 	end, { network.Middleware.RateLimit(CLAIM_COOLDOWN) })
 
-	-- Answered with IndexClaimResult under the id "All".
+	-- Answered with IndexClaimResult under the id "All", plus how many were claimed.
 	network.connectEvent(network.RemoteEvents.ClaimAllIndexRewards, function(player: Player)
 		local claimed = IndexHandler.claimAll(player)
-		network.fireClient(network.RemoteEvents.IndexClaimResult, player, "All", claimed > 0, if claimed > 0 then nil else "NotFound")
+		network.fireClient(network.RemoteEvents.IndexClaimResult, player, "All", claimed > 0, if claimed > 0 then nil else "NotFound", claimed)
 	end, { network.Middleware.RateLimit(CLAIM_COOLDOWN) })
 
 	network.connectEvent(network.RemoteEvents.RequestIndexState, pushState, {
@@ -163,7 +169,8 @@ function IndexHandler.Start()
 
 	PlayerDataHandler.Loaded:Connect(pushState)
 	PlayerDataHandler.Changed:Connect(function(player: Player, key: string)
-		if key == "SheepIndex" then
+		-- Luck changes every hit, so its odds refresh when the Index is opened instead.
+		if key == "SheepIndex" or key == "Rebirths" or key == "Prestiges" then
 			pushState(player)
 		end
 	end)

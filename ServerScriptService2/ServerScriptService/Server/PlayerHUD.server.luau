@@ -64,7 +64,7 @@ end
 local function getBestFindText(player: Player): string
 	local bestFind = player:GetAttribute("BestFind")
 	local info = if type(bestFind) == "string" then SheepData.Sheep[bestFind] else nil
-	local odds = if info then SheepData.getOdds(bestFind, 0) else nil
+	local odds = if info then SheepData.getOdds(bestFind, 0, 0, 0) else nil
 	if not info or not odds then
 		return "Best Find: None"
 	end

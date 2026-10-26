@@ -29,6 +29,7 @@ local ABILITY_ACTION = "UseAbility"
 local ACTIVE_ATTRIBUTE = "ActiveAbility" -- set by AbilityHandler while an ability runs
 local READY_AT_ATTRIBUTE = "AbilityReadyAt" -- server time the ability can be used again
 local EQUIPPED_ATTRIBUTE = "AbilityEquipped" -- mirrored from PlayerDataHandler
+local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- set on every shear Tool by ShearShopHandler
 local USED_COLOR = Color3.fromRGB(120, 120, 120) -- while active and cooling down
 local SPIN_SPEED = math.rad(900) -- radians per second the character turns while spinning
 local READY_TEXT = "[E] Ability"
@@ -63,11 +64,24 @@ local function updateAbilityName()
 	end
 end
 
--- Hidden while any window is open so it doesn't sit on top of the menus.
+local function isHoldingShear(): boolean
+	local character = player.Character
+	if not character then
+		return false
+	end
+	for _, child in character:GetChildren() do
+		if child:IsA("Tool") and child:GetAttribute(SHEAR_RANGE_ATTRIBUTE) ~= nil then
+			return true
+		end
+	end
+	return false
+end
+
+-- Shown only while a shear is held, and hidden while any window is open so it doesn't sit on top of the menus.
 local function updateAbilityVisibility()
 	local abilityUi = getAbilityUi()
 	if abilityUi then
-		abilityUi.Visible = not windowsManager.anyOpen()
+		abilityUi.Visible = isHoldingShear() and not windowsManager.anyOpen()
 	end
 end
 
@@ -188,7 +202,17 @@ end
 player:GetAttributeChangedSignal(ACTIVE_ATTRIBUTE):Connect(onActiveAbilityChanged)
 player:GetAttributeChangedSignal(READY_AT_ATTRIBUTE):Connect(onReadyAtChanged)
 player:GetAttributeChangedSignal(EQUIPPED_ATTRIBUTE):Connect(updateAbilityName)
-player.CharacterAdded:Connect(stopAbility)
+local function onCharacterAdded(character: Model)
+	stopAbility()
+	character.ChildAdded:Connect(updateAbilityVisibility)
+	character.ChildRemoved:Connect(updateAbilityVisibility)
+	updateAbilityVisibility()
+end
+
+player.CharacterAdded:Connect(onCharacterAdded)
+if player.Character then
+	onCharacterAdded(player.Character)
+end
 windowsManager.openChanged:Connect(updateAbilityVisibility)
 onActiveAbilityChanged()
 onReadyAtChanged()

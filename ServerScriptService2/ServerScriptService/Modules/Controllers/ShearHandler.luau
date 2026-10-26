@@ -2,7 +2,7 @@
 
 --[[
 	Hitbox shearing: every swing of the held shear takes its damage (with the Shear Damage upgrade) off each of the player's sheep within its range.
-	Each hit pays out its share of the sheep's wool (with the rebirth and More Wool multipliers) and Luck; a sheep shorn bare leaves the farm.
+	Each hit pays out its share of the sheep's wool (with the Prestige and More Wool multipliers) and Luck; a sheep shorn bare leaves the farm.
 
 	Location: ServerScriptService.Modules.Controllers.ShearHandler
 ]]--
@@ -13,7 +13,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
-local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
+local PrestigeData = require(script.Parent.Parent.Constants.PrestigeData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
@@ -60,10 +60,10 @@ local function getNumber(player: Player, key: string): number
 	return if type(value) == "number" then value else 0
 end
 
--- Wool for shearing this sheep bare: its own wool times the rebirth and More Wool multipliers.
+-- Wool for shearing this sheep bare: its own wool times the Prestige and More Wool multipliers.
 local function getWoolReward(player: Player, sheep: Model): number
 	local baseWool = sheep:GetAttribute("WoolAmount")
-	local multiplier = RebirthData.getMultiplier(getNumber(player, "Rebirths"))
+	local multiplier = PrestigeData.getWoolMultiplier(getNumber(player, "Prestiges"))
 		* UpgradeData.getMoreWoolMultiplier(getNumber(player, "MoreWoolLevel"))
 	return math.floor((if type(baseWool) == "number" then baseWool else 0) * multiplier)
 end

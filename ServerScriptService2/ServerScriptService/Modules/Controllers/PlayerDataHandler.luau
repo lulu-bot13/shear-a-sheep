@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Temporary DataStore save for each player's farm (wool, luck, sheep capacity, upgrades, rebirths, shears, sheep sheared).
+	Temporary DataStore save for each player's farm (wool, luck, sheep capacity, upgrades, rebirths, Prestiges, shears, sheep sheared).
 	Wool and Luck are mirrored to Player.Inventory IntValues and the other numbers to player attributes for the client.
 
 	Location: ServerScriptService.Modules.Controllers.PlayerDataHandler
@@ -39,6 +39,7 @@ export type Data = {
 	DamageLevel: number, -- Shear Damage upgrade levels
 	RespawnLevel: number, -- Faster Respawn upgrade levels
 	Rebirths: number,
+	Prestiges: number,
 	ShearId: string,
 	OwnedShears: { string },
 	AbilityEquipped: string, -- AbilityData id of the ability used on E
@@ -49,7 +50,7 @@ export type Data = {
 
 local function getDefaultData(): Data
 	return {
-		Wool = 100, -- starter wool: after the tutorial's More Wool upgrade it covers ~75% of the first rebirth
+		Wool = 100, -- starter wool: after the tutorial's More Wool upgrade it covers ~85% of the first rebirth
 		Luck = 0,
 		MaxSheep = FarmData.StartingMaxSheep,
 		SheepCount = nil,
@@ -58,6 +59,7 @@ local function getDefaultData(): Data
 		DamageLevel = 0,
 		RespawnLevel = 0,
 		Rebirths = 0,
+		Prestiges = 0,
 		ShearId = ShearData.DefaultShearId,
 		OwnedShears = { ShearData.DefaultShearId },
 		AbilityEquipped = AbilityData.DefaultAbilityId,

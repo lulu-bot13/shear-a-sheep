@@ -23,6 +23,11 @@ export type EnumType = "ShearSwing"
 	| "RequestRebirthState"
 	| "RebirthState"
 	| "RebirthResult"
+	| "RequestPrestige"
+	| "RequestPrestigeState"
+	| "PrestigeState"
+	| "PrestigeResult"
+	| "PrestigeFinished"
 	| "Teleport"
 	| "ClaimIndexReward"
 	| "ClaimAllIndexRewards"
@@ -48,6 +53,11 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	RequestRebirthState = "RequestRebirthState",
 	RebirthState = "RebirthState",
 	RebirthResult = "RebirthResult",
+	RequestPrestige = "RequestPrestige",
+	RequestPrestigeState = "RequestPrestigeState",
+	PrestigeState = "PrestigeState",
+	PrestigeResult = "PrestigeResult",
+	PrestigeFinished = "PrestigeFinished",
 	Teleport = "Teleport",
 	ClaimIndexReward = "ClaimIndexReward",
 	ClaimAllIndexRewards = "ClaimAllIndexRewards",

@@ -22,11 +22,11 @@ local shearShopUIData = {}
 
 -- In progression order (the card order in the shop, cheapest first).
 shearShopUIData.Shears = {
-	{ id = "DefaultShear",   displayName = "Basic Shear",     price = 0,     sheepRequired = 0,   damage = 20, range = 6 },
-	{ id = "SteelShears",    displayName = "Steel Shears",    price = 300,   sheepRequired = 25,  damage = 26, range = 7.5 },
-	{ id = "LargeShears",    displayName = "Large Shears",    price = 1200,  sheepRequired = 100, damage = 34, range = 9 },
-	{ id = "ElectricShears", displayName = "Electric Shears", price = 4000,  sheepRequired = 300, damage = 45, range = 11 },
-	{ id = "MasterShears",   displayName = "Master Shears",   price = 12000, sheepRequired = 750, damage = 60, range = 13 },
+	{ id = "DefaultShear",   displayName = "Basic Shear",     price = 0,     sheepRequired = 0,    damage = 20, range = 6 },
+	{ id = "SteelShears",    displayName = "Steel Shears",    price = 300,   sheepRequired = 50,   damage = 26, range = 7.5 },
+	{ id = "LargeShears",    displayName = "Large Shears",    price = 1200,  sheepRequired = 300,  damage = 34, range = 9 },
+	{ id = "ElectricShears", displayName = "Electric Shears", price = 4000,  sheepRequired = 1500, damage = 45, range = 11 },
+	{ id = "MasterShears",   displayName = "Master Shears",   price = 12000, sheepRequired = 4500, damage = 60, range = 13 },
 } :: { ShearUI }
 
 --// Preview (the spinning 3D shear on each card)
@@ -53,11 +53,20 @@ function shearShopUIData.getRank(id: any): number
 	return if type(id) == "string" then (rankById[id] or 0) else 0
 end
 
--- 1500 -> "1,500 Wool"
-function shearShopUIData.formatWool(amount: number): string
+local function formatWithCommas(amount: number): string
 	local text = tostring(math.floor(amount))
 	local formatted = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
-	return formatted:gsub("^,", "") .. " Wool"
+	return (formatted:gsub("^,", ""))
+end
+
+-- 1500 -> "1,500 Wool"
+function shearShopUIData.formatWool(amount: number): string
+	return formatWithCommas(amount) .. " Wool"
+end
+
+-- 1500 -> "Sheep: 1,500"
+function shearShopUIData.formatSheep(amount: number): string
+	return "Sheep: " .. formatWithCommas(amount)
 end
 
 return shearShopUIData
