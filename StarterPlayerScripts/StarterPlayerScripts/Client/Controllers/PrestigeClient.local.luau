@@ -14,6 +14,7 @@ local soundService = game:GetService("SoundService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local alerts = require(script.Parent.Parent.Modules.Alerts)
+local rebirthVFX = require(script.Parent.Parent.Modules.RebirthVFX)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
@@ -24,7 +25,7 @@ local rebirthCount = playerGui:WaitForChild("RebirthScreen"):WaitForChild("Main"
 
 --// Sounds
 local uiSounds = soundService:WaitForChild("UISounds")
-local prestigedSound = (uiSounds:FindFirstChild("Prestiged") or uiSounds:FindFirstChild("Rebirthed")) :: Sound?
+local prestigeSound = uiSounds:FindFirstChild("Prestige") :: Sound?
 
 --// Configs
 local FADE_IN_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
@@ -90,6 +91,10 @@ local function playWhiteScreen(prestiges: number)
 	end
 	task.wait(HOLD_SECONDS)
 
+	-- Played as the white lifts, so the burst isn't hidden behind it.
+	if player.Character then
+		rebirthVFX.play(player.Character)
+	end
 	tweenService:Create(white, FADE_OUT_TWEEN, { BackgroundTransparency = 1 }):Play()
 	local fadeOut = tweenService:Create(title, FADE_OUT_TWEEN, { TextTransparency = 1 })
 	fadeOut:Play()
@@ -111,8 +116,8 @@ network.connectEvent(network.RemoteEvents.PrestigeResult, function(success: bool
 
 	farmReset = false
 	windowsManager.closeAll()
-	if prestigedSound then
-		prestigedSound:Play()
+	if prestigeSound then
+		prestigeSound:Play()
 	end
 	task.spawn(playWhiteScreen, prestiges or 0)
 end)

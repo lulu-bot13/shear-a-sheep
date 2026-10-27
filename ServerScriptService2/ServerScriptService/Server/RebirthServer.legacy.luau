@@ -18,7 +18,7 @@ local RebirthHandler = require(serverScriptService.Modules.Controllers.RebirthHa
 
 --// Configs
 local POLL_SECONDS = 0.5
-local REBIRTH_COOLDOWN_SECONDS = 1.5
+local REBIRTH_COOLDOWN_SECONDS = 0.25
 local STATE_REQUEST_COOLDOWN_SECONDS = 0.5
 local DEBUG = false
 

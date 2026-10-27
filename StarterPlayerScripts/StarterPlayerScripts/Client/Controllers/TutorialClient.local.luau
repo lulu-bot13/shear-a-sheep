@@ -1,5 +1,5 @@
 --[[
-	First-play tutorial: go to a sheep, shear 3 (with every other UI hidden), buy More Wool, close the shop, gain wool, then rebirth.
+	First-play tutorial: equip shears, go to a sheep, shear it then 2 more (with every other UI hidden), buy More Wool, close the shop, gain wool, then rebirth.
 	Each step is worked out from the player's progress, so it resumes after a rejoin and ends at the first rebirth.
 ]]--
 
@@ -42,25 +42,29 @@ local SHEEP_TAG = "Sheep"
 local OWNER_ATTRIBUTE = "OwnerId"
 local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- only shear Tools have it
 local NEAR_DISTANCE = 8 -- studs (flat) from a sheep that count as "at" it
-local ALWAYS_IN_STUDIO = false -- runs the tutorial in Studio even on a save that has rebirthed
+local LEAVE_DISTANCE = 12 -- studs (flat) the first sheep is walked away from before the beam leads back to a sheep
+local ALWAYS_IN_STUDIO = true -- runs the tutorial in Studio even on a save that has rebirthed
 local TICK_SECONDS = 0.1
 local DISPLAY_ORDER = 90 -- the text and spotlight draw over every window (Alerts are 100)
 local STATE_REQUEST_SECONDS = 2 -- re-asks the server for upgrade / rebirth state until it arrives
 local COMPLETED_SECONDS = 3 -- how long the completed label stays up
-local SHEEP_TO_SHEAR = 3
+local SHEEP_TO_SHEAR = 3 -- counting the first sheep
 local MORE_WOOL_ID = "MoreWool"
 local KEEP_HUD_BUTTONS = { Upgrades = true, Rebirth = true } -- the only HUD buttons shown until the tutorial ends
-local HIDE_UI_STAGES = { GoToSheep = true, Shear = true } -- every ScreenGui but the tutorial's is off during these
+local HIDE_UI_STAGES = { EquipShears = true, GoToSheep = true, FirstShear = true, Shear = true } -- every ScreenGui but the tutorial's is off during these
 local POP_IN = TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local POP_OUT = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In)
 
 local HIGHLIGHT_COLOR = Color3.fromRGB(255, 230, 90)
 local BEAM_ATTACHMENT_ROTATION = Vector3.new(0, 0, 90) -- degrees, applied to both beam ends
+local HOTBAR_SLOT_SIZE = 60 -- pixels, Roblox's default hotbar
+local HOTBAR_SLOT_GAP = 5
+local HOTBAR_BOTTOM_GAP = 5
 
-type Stage = "GoToSheep" | "Shear" | "Upgrades" | "CloseUpgrades" | "Rebirth" | "Done"
+type Stage = "EquipShears" | "GoToSheep" | "FirstShear" | "Shear" | "Upgrades" | "CloseUpgrades" | "Rebirth" | "Done"
 
 --// State
-local stage: Stage = "GoToSheep"
+local stage: Stage = "EquipShears"
 local shearedBaseline = 0 -- SheepShearedCount the "Shear 3 Sheep" progress counts up from
 local hiddenHudButtons: { GuiObject } = {}
 local hiddenGuis: { ScreenGui } = {}
@@ -70,6 +74,7 @@ local rebirthCost: number? = nil
 local nextStateRequest = 0
 local highlights: { [Model]: Highlight } = {}
 local beamSheep: Model? = nil -- the sheep the beam leads to
+local firstSheep: Model? = nil -- the sheep "Click To Shear" shows the health of
 local beamConnection: RBXScriptConnection? = nil
 local focused: GuiObject? = nil -- what the spotlight was last tweened over, and where it was
 local focusedPosition, focusedSize = Vector2.zero, Vector2.zero
@@ -91,6 +96,14 @@ beam.Attachment1 = beamEnd
 beam.FaceCamera = false -- the ends' rotation sets which way the beam lies
 beam.Enabled = false
 beam.Parent = workspace.Terrain
+
+-- The hotbar is CoreGui, so the spotlight points at this see-through stand-in sized over it.
+local hotbarFrame = Instance.new("Frame")
+hotbarFrame.Name = "TutorialHotbar"
+hotbarFrame.BackgroundTransparency = 1
+hotbarFrame.AnchorPoint = Vector2.new(0.5, 1)
+hotbarFrame.Position = UDim2.new(0.5, 0, 1, -HOTBAR_BOTTOM_GAP)
+hotbarFrame.Parent = spotlightFrame.Parent
 
 --// Helpers -------------------------------------------------------------------------
 
@@ -151,6 +164,10 @@ end
 local function isWindowOpen(name: string): boolean
 	local window = windowsManager.get(name)
 	return window ~= nil and window.isOpen()
+end
+
+local function formatHealth(value: number): string
+	return numberFormatter:Format(math.ceil(value), 1)
 end
 
 local function setText(text: string)
@@ -215,6 +232,23 @@ local function point(target: GuiObject?)
 	end
 end
 
+-- Sizes the hotbar stand-in to one slot per Tool the player has, then spotlights it.
+local function pointAtHotbar()
+	local toolCount = 0
+	for _, container in { player:FindFirstChildOfClass("Backpack") or false, player.Character or false } do
+		if container then
+			for _, child in container:GetChildren() do
+				if child:IsA("Tool") then
+					toolCount += 1
+				end
+			end
+		end
+	end
+	local slots = math.max(toolCount, 1)
+	hotbarFrame.Size = UDim2.fromOffset(slots * HOTBAR_SLOT_SIZE + (slots - 1) * HOTBAR_SLOT_GAP, HOTBAR_SLOT_SIZE)
+	point(hotbarFrame)
+end
+
 --// Stages ------------------------------------------------------------------------------
 
 -- Turns off every ScreenGui but the tutorial's; run each tick, since respawned or newly opened guis come back on.
@@ -238,6 +272,7 @@ local function setStage(newStage: Stage)
 	stage = newStage
 	setHighlights({})
 	beamSheep = nil
+	firstSheep = nil
 	point(nil)
 	if HIDE_UI_STAGES[newStage] then
 		hideOtherGuis()
@@ -255,9 +290,23 @@ local function requestState(eventName: any)
 	end
 end
 
+-- "Equip Shears": the spotlight sits on the hotbar until a shear is held out.
+local function updateEquipShears()
+	if isHoldingShear() then
+		setStage("GoToSheep")
+		return
+	end
+	setText("Equip Shears")
+	pointAtHotbar()
+end
+
 -- "Go to a Sheep": every sheep is outlined and the beam leads to one of them.
 local function updateGoToSheep()
-	setText("Equip Shears then go to the Highlighted Sheep.")
+	if not isHoldingShear() then
+		setStage("EquipShears")
+		return
+	end
+	setText("Go to the Highlighted Sheep")
 	local sheepList = getOwnSheep()
 	setHighlights(sheepList)
 	if not beamSheep or not table.find(sheepList, beamSheep) then
@@ -271,13 +320,45 @@ local function updateGoToSheep()
 	for _, sheep in sheepList do
 		local sheepRoot = getRoot(sheep) :: BasePart
 		if getFlatDistance(playerRoot.Position, sheepRoot.Position) <= NEAR_DISTANCE then
-			setStage("Shear")
+			setStage("FirstShear")
+			firstSheep = sheep
 			return
 		end
 	end
 end
 
--- "Shear Sheep for Wool 1/3": sheep shorn bare since the tutorial started.
+-- "Click to Shear ... (HP 60/100)": the first sheep's health until it is shorn bare.
+local function updateFirstShear()
+	if getNumberAttribute("SheepShearedCount") > shearedBaseline then
+		setStage("Shear")
+		return
+	end
+	if not isHoldingShear() then
+		setStage("EquipShears")
+		return
+	end
+
+	local sheep = firstSheep
+	local playerRoot = getRoot(player.Character)
+	local sheepRoot = getRoot(sheep)
+	if not sheep or not sheepRoot or not sheep:IsDescendantOf(workspace)
+		or (playerRoot and getFlatDistance(playerRoot.Position, sheepRoot.Position) > LEAVE_DISTANCE)
+	then
+		setStage("GoToSheep")
+		return
+	end
+
+	setHighlights({ sheep })
+	local health = sheep:GetAttribute("ShearHealth")
+	local maxHealth = sheep:GetAttribute("MaxShearHealth")
+	if type(health) == "number" and type(maxHealth) == "number" then
+		setText(`Click to Shear the Sheep for Wool (HP {formatHealth(math.max(health, 0))}/{formatHealth(maxHealth)})`)
+	else
+		setText("Click to Shear the Sheep for Wool")
+	end
+end
+
+-- "Shear 2 more Sheep ... 0/2": sheep shorn bare after the first one.
 local function updateShear()
 	local count = getNumberAttribute("SheepShearedCount")
 	if count < shearedBaseline then
@@ -290,9 +371,12 @@ local function updateShear()
 	end
 	if not isHoldingShear() then
 		setText("Equip your Shears")
+		pointAtHotbar()
 		return
 	end
-	setText(`Shear Sheep for Wool {sheared}/{SHEEP_TO_SHEAR}`)
+	point(nil)
+	local remaining = SHEEP_TO_SHEAR - 1 -- the first sheep was the "Click to Shear" stage
+	setText(`Shear {remaining} more Sheep to get enough Wool to upgrade! {math.max(sheared - 1, 0)}/{remaining}`)
 end
 
 -- Opens the shop and buys More Wool; asks for wool first if it isn't affordable.
@@ -300,7 +384,7 @@ local function updateUpgrades()
 	local card = upgradeStates and upgradeStates[MORE_WOOL_ID]
 	if not card then
 		requestState(network.RemoteEvents.RequestUpgradeState)
-		setText("Spend Wool on Upgrades")
+		setText("Spend Wool to increase the amount of Wool you earn per Sheep.")
 		point(upgradesButton)
 		return
 	end
@@ -310,15 +394,15 @@ local function updateUpgrades()
 	end
 
 	if not isWindowOpen("UpgradeShop") then
-		setText("Spend Wool on Upgrades")
+		setText("Spend Wool to increase the amount of Wool you earn per Sheep.")
 		point(upgradesButton)
 	elseif wool.Value < card.cost then
-		setText(`Shear sheep for Wool {formatWool(wool.Value)}/{formatWool(card.cost)}`)
+		setText(`Shear Sheep for Wool {formatWool(wool.Value)}/{formatWool(card.cost)}`)
 		point(nil)
 	else
 		local cardFrame = upgradeCards:FindFirstChild(MORE_WOOL_ID)
 		local purchase = cardFrame and cardFrame:FindFirstChild("Purchase")
-		setText("Buy More Wool to earn faster")
+		setText("Spend Wool to increase the amount of Wool you earn per Sheep.")
 		point(if purchase and purchase:IsA("GuiObject") then purchase else nil)
 	end
 end
@@ -337,12 +421,12 @@ local function updateRebirth()
 	local cost = rebirthCost
 	if not cost then
 		requestState(network.RemoteEvents.RequestRebirthState)
-		setText("Gain Wool")
+		setText("Shear Sheep for Wool to Rebirth and gain Luck.")
 		return
 	end
 
 	if wool.Value < cost then
-		setText(`Gain {formatWool(cost)} Wool to Rebirth {formatWool(wool.Value)}/{formatWool(cost)}`)
+		setText(`Farm {formatWool(cost)} Wool to Rebirth {formatWool(wool.Value)}/{formatWool(cost)}`)
 		point(nil)
 	elseif not isWindowOpen("Rebirth") then
 		setText("Open Rebirths")
@@ -354,7 +438,9 @@ local function updateRebirth()
 end
 
 local UPDATERS: { [Stage]: () -> () } = {
+	EquipShears = updateEquipShears,
 	GoToSheep = updateGoToSheep,
+	FirstShear = updateFirstShear,
 	Shear = updateShear,
 	Upgrades = updateUpgrades,
 	CloseUpgrades = updateCloseUpgrades,
@@ -391,6 +477,7 @@ local function stop()
 	beam:Destroy()
 	beamStart:Destroy()
 	beamEnd:Destroy()
+	hotbarFrame:Destroy()
 	tutorialMain.Visible = false
 	spotlightFrame.Visible = false
 	tutorialGui.Enabled = false
@@ -501,10 +588,11 @@ local forced = ALWAYS_IN_STUDIO and runService:IsStudio()
 if forced then
 	print("[TutorialClient] running from the start (ALWAYS_IN_STUDIO)")
 	shearedBaseline = getNumberAttribute("SheepShearedCount")
-	start("GoToSheep")
+	start("EquipShears")
 elseif getNumberAttribute("Rebirths") >= 1 or getNumberAttribute("Prestiges") >= 1 then
 	print(`[TutorialClient] skipped: this save has {getNumberAttribute("Rebirths")} rebirth(s), {getNumberAttribute("Prestiges")} Prestige(s)`)
 	stop()
 else
-	start(if getNumberAttribute("SheepShearedCount") >= SHEEP_TO_SHEAR then "Upgrades" else "GoToSheep")
+	local sheared = getNumberAttribute("SheepShearedCount")
+	start(if sheared >= SHEEP_TO_SHEAR then "Upgrades" elseif sheared >= 1 then "Shear" else "EquipShears")
 end
