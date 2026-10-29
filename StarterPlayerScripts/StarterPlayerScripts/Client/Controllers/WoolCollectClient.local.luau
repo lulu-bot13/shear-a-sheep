@@ -19,7 +19,6 @@ local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 
 --// Instances
 local player = players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
 local dropTemplate = replicatedStorage:WaitForChild("Assets"):WaitForChild("DropTemplate") :: BasePart
 
 --// Sound Effects
@@ -51,11 +50,6 @@ local POP_PITCH_STEP = 0.04 -- each pop in a run is slightly higher
 local POP_MAX_STEPS = 10
 local HOLD_TIMEOUT_SECONDS = 5 -- the counters are never held back longer than this, whatever happens
 
-local COUNTER_GROW_SCALE = 1.15 -- the HUD counter swells to this when a drop lands...
-local COUNTER_GROW_SECONDS = 0.12
-local COUNTER_HOLD_SECONDS = 0.7 -- ...stays big this long...
-local COUNTER_SHRINK_SECONDS = 0.2 -- ...then settles back
-
 type Kind = "Wool" | "Luck"
 
 local ICONS: { [Kind]: string } = {
@@ -63,7 +57,6 @@ local ICONS: { [Kind]: string } = {
 	Luck = "rbxassetid://86611651520562",
 }
 local HOLD_ATTRIBUTES: { [Kind]: string } = { Wool = "WoolLabelHold", Luck = "LuckLabelHold" }
-local COUNTER_LABELS: { [Kind]: string } = { Wool = "WoolAmount", Luck = "LuckAmount" }
 
 -- One pooled DropTemplate clone and the pieces of it that get updated.
 type DropObject = {
@@ -107,7 +100,6 @@ local holdToken = 0
 local idleDrops: { DropObject } = {}
 local activeDrops: { ActiveDrop } = {}
 local totals: { [Kind]: Total } = {}
-local counterTweens: { [Kind]: { Tween } } = {}
 local heartbeatConnection: RBXScriptConnection? = nil
 local moveParts: { BasePart } = {}
 local moveCFrames: { CFrame } = {}
@@ -223,37 +215,9 @@ end
 
 --// HUD counters ------------------------------------------------------------------------
 
--- The counter swells, stays big for a moment, then settles; more drops while it's big keep it big.
-local function growCounter(kind: Kind, label: GuiObject)
-	local running = counterTweens[kind]
-	if running then
-		for _, tween in running do
-			tween:Cancel()
-		end
-	end
-
-	local scale = getScale(label)
-	local grow = tweenService:Create(scale, TweenInfo.new(COUNTER_GROW_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = COUNTER_GROW_SCALE })
-	local shrink = tweenService:Create(scale, TweenInfo.new(COUNTER_SHRINK_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 0, false, COUNTER_HOLD_SECONDS), { Scale = 1 })
-	counterTweens[kind] = { grow, shrink }
-
-	grow.Completed:Connect(function(state: Enum.PlaybackState)
-		if state == Enum.PlaybackState.Completed then
-			shrink:Play()
-		end
-	end)
-	grow:Play()
-end
-
--- Lets `amount` of the held currency through to its counter.
+-- Lets `amount` of the held currency through to its counter, which ClientStart pulses as it goes up.
 local function addToCounter(kind: Kind, amount: number)
 	changeHeld(kind, -amount)
-
-	local main = playerGui:FindFirstChild("Main")
-	local label = main and main:FindFirstChild(COUNTER_LABELS[kind])
-	if label and label:IsA("GuiObject") then
-		growCounter(kind, label)
-	end
 end
 
 --// Totals over the character ---------------------------------------------------------------

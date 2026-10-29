@@ -286,9 +286,9 @@ for index, rarity in rarityOrder do
 	tierIndex[rarity] = index - 1
 end
 
-function sheepData.getLuckFactor(luck: number, rebirths: number, prestiges: number): number
+function sheepData.getLuckFactor(luck: number, rebirths: number, prestiges: number, boost: number?): number
 	local luckPart = 1 + sheepData.LUCK_STRENGTH * math.log10(1 + math.max(luck, 0) / sheepData.LUCK_SCALE)
-	return luckPart * RebirthData.getLuckMultiplier(rebirths) * PrestigeData.getLuckMultiplier(prestiges)
+	return luckPart * RebirthData.getLuckMultiplier(rebirths) * PrestigeData.getLuckMultiplier(prestiges) * (boost or 1)
 end
 
 local function getWeight(info: SheepInfo, luckFactor: number): number
@@ -303,9 +303,9 @@ local function getTotalWeight(luckFactor: number): number
 	return total
 end
 
--- Picks a sheep type name for a player with this much Luck, rebirths and Prestiges.
-function sheepData.roll(luck: number, rebirths: number, prestiges: number, random: Random?): string?
-	local luckFactor = sheepData.getLuckFactor(luck, rebirths, prestiges)
+-- Picks a sheep type name for a player with this much Luck, rebirths and Prestiges; `boost` multiplies the luck factor (e.g. Night).
+function sheepData.roll(luck: number, rebirths: number, prestiges: number, random: Random?, boost: number?): string?
+	local luckFactor = sheepData.getLuckFactor(luck, rebirths, prestiges, boost)
 	local roll = (random or Random.new()):NextNumber() * getTotalWeight(luckFactor)
 
 	local cumulative = 0
@@ -319,18 +319,18 @@ function sheepData.roll(luck: number, rebirths: number, prestiges: number, rando
 end
 
 -- N in "1 in N" for this sheep type with this Luck, rebirths and Prestiges (all 0 = base odds); nil for an unknown type.
-function sheepData.getOdds(name: string, luck: number, rebirths: number, prestiges: number): number?
+function sheepData.getOdds(name: string, luck: number, rebirths: number, prestiges: number, boost: number?): number?
 	local info = sheepData.Sheep[name]
 	if not info then
 		return nil
 	end
 
-	local luckFactor = sheepData.getLuckFactor(luck, rebirths, prestiges)
+	local luckFactor = sheepData.getLuckFactor(luck, rebirths, prestiges, boost)
 	return math.max(1, math.floor(getTotalWeight(luckFactor) / getWeight(info, luckFactor) + 0.5))
 end
 
-function sheepData.getOddsText(name: string, luck: number, rebirths: number, prestiges: number): string
-	local odds = sheepData.getOdds(name, luck, rebirths, prestiges)
+function sheepData.getOddsText(name: string, luck: number, rebirths: number, prestiges: number, boost: number?): string
+	local odds = sheepData.getOdds(name, luck, rebirths, prestiges, boost)
 	return if odds then `1 in {odds}` else "1 in ?"
 end
 

@@ -1,5 +1,5 @@
 --[[
-	Hover and press animations for every UI button: "Rotate" buttons tilt, the rest grow.
+	Hover and press animations and sounds for every UI button: "Rotate" buttons tilt, the rest grow.
 	Each button's tweens are kept in the tweens table and rebuilt only when its Rotate tag changes.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.ButtonClient
@@ -9,10 +9,17 @@
 local players = game:GetService("Players")
 local tweenService = game:GetService("TweenService")
 local collectionService = game:GetService("CollectionService")
+local soundService = game:GetService("SoundService")
+local runService = game:GetService("RunService")
 
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+
+--// Sound Effects
+local uiSounds = soundService:WaitForChild("UISounds")
+local hoverSound = uiSounds:WaitForChild("Hover") :: Sound
+local clickSound = uiSounds:WaitForChild("Click") :: Sound
 
 --// Configs
 local ROTATE_TAG = "Rotate" -- works as a tag or an attribute, in any letter case and with stray spaces (" rotate")
@@ -60,6 +67,19 @@ local function isRotateButton(button: GuiObject): boolean
 		end
 	end
 	return false
+end
+
+local function isShown(button: GuiObject): boolean
+	local current: Instance? = button
+	while current and current ~= playerGui do
+		if current:IsA("GuiObject") and not current.Visible then
+			return false
+		elseif current:IsA("LayerCollector") and not current.Enabled then
+			return false
+		end
+		current = current.Parent
+	end
+	return current == playerGui
 end
 
 local function getScale(button: GuiObject): UIScale
@@ -133,6 +153,7 @@ local function setupButton(button: GuiObject)
 	button.MouseEnter:Connect(function()
 		hovered[button] = true
 		play(button, "hover")
+		soundService:PlayLocalSound(hoverSound)
 
 		-- Ends at the base angle + HOVER_ROTATION unless another script is also setting Rotation.
 		if DEBUG and isRotateButton(button) then
@@ -147,6 +168,12 @@ local function setupButton(button: GuiObject)
 		hovered[button] = nil
 		play(button, "leave")
 	end)
+
+	if button:IsA("GuiButton") then
+		button.Activated:Connect(function()
+			soundService:PlayLocalSound(clickSound)
+		end)
+	end
 
 	button.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -182,6 +209,16 @@ for _, descendant in playerGui:GetDescendants() do
 end
 
 playerGui.DescendantAdded:Connect(trySetup)
+
+-- A window closed under the cursor (e.g. by a Prestige) never fires MouseLeave, so the button would stay tilted.
+runService.Heartbeat:Connect(function()
+	for button in hovered do
+		if not isShown(button) then
+			hovered[button] = nil
+			play(button, "leave")
+		end
+	end
+end)
 
 -- Tagged or untagged after setup: rebuilt so it switches between tilting and growing.
 local function onTagChanged(instance: Instance)

@@ -34,6 +34,7 @@ export type CardState = {
 	title: string,
 	icon: string,
 	level: number, -- levels bought so far
+	maxLevel: number?, -- levels there are to buy; nil = no limit
 	before: string,
 	after: string?,
 	cost: number?,
@@ -161,6 +162,7 @@ function UpgradeHandler.getState(player: Player): { CardState }
 			title = info.displayName,
 			icon = info.icon,
 			level = getBoughtLevel(player, id),
+			maxLevel = if id == "Capacity" then FarmData.MaxSheepCap - FarmData.StartingMaxSheep else info.maxLevel,
 			before = before,
 			after = if level then after else nil,
 			cost = if level then UpgradeData.getCost(id, level) else nil,

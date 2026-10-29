@@ -13,10 +13,12 @@ local players = game:GetService("Players")
 --// Modules
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
+local WeatherData = require(script.Parent.Parent.Constants.WeatherData)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local PlotHandler = require(script.Parent.PlotHandler)
 local SheepHandler = require(script.Parent.SheepHandler)
 local SheepWanderHandler = require(script.Parent.SheepWanderHandler)
+local WeatherHandler = require(script.Parent.WeatherHandler)
 
 --// State
 local activePlots: { [Player]: Folder } = {} -- the plot each running farm belongs to
@@ -58,9 +60,21 @@ local function getMaxSheep(player: Player): number
 	return math.min(getNumber(player, "MaxSheep"), FarmData.MaxSheepCap)
 end
 
--- Seconds between refills, shortened by the player's Faster Respawn level.
+-- Seconds between refills, shortened by the player's Faster Respawn level and the weather.
 local function getSpawnInterval(player: Player): number
-	return UpgradeData.getSpawnInterval(FarmData.SpawnInterval, getNumber(player, "RespawnLevel"))
+	local interval = UpgradeData.getSpawnInterval(FarmData.SpawnInterval, getNumber(player, "RespawnLevel"))
+	return interval * WeatherHandler.getRespawnMultiplier()
+end
+
+-- Pooled models keep their attributes, so Charged is always rewritten (true or cleared).
+local function applyCharge(sheep: Model)
+	local charged = WeatherHandler.rollCharged()
+	sheep:SetAttribute(WeatherData.ChargedAttribute, if charged then true else nil)
+
+	local woolAmount = sheep:GetAttribute("WoolAmount")
+	if charged and type(woolAmount) == "number" then
+		sheep:SetAttribute("WoolAmount", woolAmount * WeatherData.ChargedWoolMultiplier)
+	end
 end
 
 local function spawnOne(player: Player): boolean
@@ -75,9 +89,15 @@ local function spawnOne(player: Player): boolean
 		position,
 		getNumber(player, "Luck"),
 		getNumber(player, "Rebirths"),
-		getNumber(player, "Prestiges")
+		getNumber(player, "Prestiges"),
+		WeatherHandler.getLuckMultiplier()
 	)
-	return sheep ~= nil
+	if not sheep then
+		return false
+	end
+
+	applyCharge(sheep)
+	return true
 end
 
 -- Spawns sheep until the farm holds `target` (capped at the player's capacity).

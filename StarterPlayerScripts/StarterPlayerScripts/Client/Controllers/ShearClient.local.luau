@@ -1,26 +1,27 @@
 --[[
-	Client side of hitbox shearing: draws the shear's range as a flat ring under the character while it is held,
-	outlines the sheep a swing would reach, swings on click / tap, and flashes, throws wool off and pops the damage over
-	each sheep hit. ShearHandler decides the hits.
-	The wool chunks and flash highlights are pooled locally in ReplicatedStorage.ShearEffectPool.
-
+	Client side of hitbox shearing: draws the held shear's range ring, outlines the sheep a swing would reach, swings on click / tap and plays the hit effects.
+	Auto Shear (Q, gamepad Y or its on-screen button) swings by itself while one of your sheep is in range; ShearHandler decides the hits.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.ShearClient
 ]]--
 
 --// Services
 local collectionService = game:GetService("CollectionService")
+local contextActionService = game:GetService("ContextActionService")
 local debris = game:GetService("Debris")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
 local soundService = game:GetService("SoundService")
 local tweenService = game:GetService("TweenService")
+local userInputService = game:GetService("UserInputService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
 local player = players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
 
 --// Animations
 local shearToolAnim = replicatedStorage.Assets.Animations.ShearTool
@@ -29,7 +30,7 @@ local shearRigAnim = replicatedStorage.Assets.Animations.ShearRig
 --// Sound Effects
 local uiSounds = soundService:WaitForChild("UISounds")
 local shearSound = uiSounds:WaitForChild("Shear", 10) :: Sound?
-local shearCompleteSound = soundService:WaitForChild("SoundGroup"):WaitForChild("ShearComplete", 10) :: Sound?
+local shearCompleteSound = soundService:WaitForChild("Sheep"):WaitForChild("ShearComplete", 10) :: Sound?
 
 --// VFX
 local poofTemplate = replicatedStorage.Assets.VFX.PoofAttachment :: Attachment
@@ -83,6 +84,15 @@ local RANGE_HIGHLIGHT_COLOR = Color3.fromRGB(255, 230, 90)
 local RANGE_FILL_TRANSPARENCY = 0.85
 local MAX_RANGE_HIGHLIGHTS = 20 -- Roblox only draws ~31 highlights at once; the rest are left for hit flashes
 
+--// Auto shear
+local AUTO_ACTION = "ToggleAutoShear"
+local AUTO_KEY = Enum.KeyCode.Q
+local AUTO_GAMEPAD_KEY = Enum.KeyCode.ButtonY
+local AUTO_BUTTON_SIZE = UDim2.fromOffset(170, 40)
+local AUTO_BUTTON_POSITION = UDim2.new(0.5, 0, 1, -84) -- bottom centre, just above the hotbar
+local AUTO_ON_COLOR = Color3.fromRGB(80, 190, 100)
+local AUTO_OFF_COLOR = Color3.fromRGB(60, 60, 70)
+
 --// State
 local heldTool: Tool? = nil
 local toolConnections: { RBXScriptConnection } = {}
@@ -91,6 +101,8 @@ local nextSwingAt = 0
 local nextRangeCheck = 0
 local rangeHighlights: { [Model]: Highlight } = {}
 local idleRangeHighlights: { Highlight } = {}
+local autoShear = false -- kept for the session, across respawns
+local autoGui = Instance.new("ScreenGui") -- TutorialClient disables it, which also pauses auto shear
 
 -- Created by this client, so it only exists locally; idle effects wait here instead of being destroyed.
 local poolFolder = Instance.new("Folder")
@@ -312,7 +324,19 @@ local function getGroundY(character: Model, root: BasePart): number
 	return feetY
 end
 
--- Keeps the ring flat on the ground under the character and the in-range outlines current.
+-- True while an outlined sheep still exists; one sheared bare is gone before the next range check.
+local function hasSheepInRange(): boolean
+	for sheep in rangeHighlights do
+		if sheep.Parent then
+			return true
+		end
+	end
+	return false
+end
+
+local swing: () -> ()
+
+-- Keeps the ring flat on the ground under the character and the in-range outlines current, and swings for Auto Shear.
 local function updateRing()
 	local character = player.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
@@ -332,6 +356,10 @@ local function updateRing()
 		nextRangeCheck = now + RANGE_CHECK_SECONDS
 		updateRangeHighlights(root.Position)
 	end
+
+	if autoShear and autoGui.Enabled and now >= nextSwingAt and hasSheepInRange() and not windowsManager.anyOpen() then
+		swing()
+	end
 end
 
 local function flashRing()
@@ -341,7 +369,7 @@ end
 
 --// Swinging -----------------------------------------------------------------------
 
-local function swing()
+function swing()
 	local tool = heldTool
 	local now = os.clock()
 	if not tool or now < nextSwingAt then
@@ -356,6 +384,67 @@ local function swing()
 	network.fireServer(network.RemoteEvents.ShearSwing)
 end
 
+--// Auto shear ---------------------------------------------------------------------
+
+-- Its own gui so a respawn or a rebuilt Main gui never takes it away; the tutorial still hides it like any other gui.
+autoGui.Name = "AutoShear"
+autoGui.ResetOnSpawn = false
+autoGui.Parent = playerGui
+
+local autoButton = Instance.new("TextButton")
+autoButton.Name = "Toggle"
+autoButton.AnchorPoint = Vector2.new(0.5, 1)
+autoButton.Position = AUTO_BUTTON_POSITION
+autoButton.Size = AUTO_BUTTON_SIZE
+autoButton.Font = Enum.Font.GothamBlack
+autoButton.TextSize = 18
+autoButton.TextColor3 = Color3.new(1, 1, 1)
+autoButton.AutoButtonColor = true
+autoButton.Visible = false
+autoButton.Parent = autoGui
+Instance.new("UICorner").Parent = autoButton
+local autoStroke = Instance.new("UIStroke")
+autoStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+autoStroke.Thickness = 2
+autoStroke.Parent = autoButton
+
+-- The key to press for the input the player is using; none on touch.
+local function getKeyHint(): string
+	local lastInput = userInputService:GetLastInputType()
+	if lastInput == Enum.UserInputType.Touch or (userInputService.TouchEnabled and not userInputService.KeyboardEnabled) then
+		return ""
+	end
+	return if string.find(lastInput.Name, "Gamepad", 1, true) then " [Y]" else ` [{AUTO_KEY.Name}]`
+end
+
+local function updateAutoButton()
+	autoButton.Text = `Auto Shear: {if autoShear then "ON" else "OFF"}{getKeyHint()}`
+	autoButton.BackgroundColor3 = if autoShear then AUTO_ON_COLOR else AUTO_OFF_COLOR
+	autoButton.Visible = heldTool ~= nil and not windowsManager.anyOpen()
+end
+
+local function toggleAutoShear()
+	if not autoGui.Enabled then
+		return
+	end
+	autoShear = not autoShear
+	updateAutoButton()
+end
+
+autoButton.Activated:Connect(toggleAutoShear)
+windowsManager.openChanged:Connect(updateAutoButton)
+userInputService.LastInputTypeChanged:Connect(updateAutoButton)
+
+contextActionService:BindAction(AUTO_ACTION, function(_, inputState: Enum.UserInputState)
+	if inputState ~= Enum.UserInputState.Begin then
+		return Enum.ContextActionResult.Pass
+	end
+	toggleAutoShear()
+	return Enum.ContextActionResult.Sink
+end, false, AUTO_KEY, AUTO_GAMEPAD_KEY)
+
+--// Equipping ------------------------------------------------------------------------
+
 local function unequip()
 	heldTool = nil
 	for _, connection in toolConnections do
@@ -369,6 +458,7 @@ local function unequip()
 	end
 	ring.Parent = nil
 	clearRangeHighlights()
+	updateAutoButton()
 end
 
 local function equip(tool: Tool)
@@ -382,6 +472,7 @@ local function equip(tool: Tool)
 
 	updateRing()
 	renderConnection = runService.RenderStepped:Connect(updateRing)
+	updateAutoButton()
 end
 
 local function isShear(instance: Instance): boolean

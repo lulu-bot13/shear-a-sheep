@@ -411,7 +411,19 @@ local function selectCard(card: Card)
 	startSpin()
 end
 
---// Tier pages ---------------------------------------------------------------------
+-- The given sheep if it's waiting to be claimed, else the first one that is (in index order).
+local function findUnclaimed(id: string?): Card?
+	local card = if id then cards[id] else nil
+	if card and card.entry.status == "Found" then
+		return card
+	end
+	for _, entry in entries do
+		if entry.status == "Found" then
+			return cards[entry.id]
+		end
+	end
+	return nil
+end ---------------------------------------------------------------------
 
 -- Shows only the open tier's cards, lights up its tab and dims the others.
 local function renderTier()
@@ -473,6 +485,18 @@ local function renderClaimAll()
 	claimAllAmount.Text = `+{formatWithCommas(luck)}`
 
 	alertBadge.Visible = count > 0
+end
+
+-- Opens a sheep waiting to be claimed in the InfoFrame (on its tier's page); with none waiting the selection stays as it is.
+local function focusUnclaimed(id: string?)
+	local card = findUnclaimed(id)
+	if not card then
+		return
+	end
+	if currentTier then
+		setTier(getTier(card.entry))
+	end
+	selectCard(card)
 end
 
 -- Fills the UnlockBar with the share of sheep types that aren't Locked any more.
@@ -583,12 +607,13 @@ end
 
 --// Setup -------------------------------------------------------------------------------
 
-windowsManager.register("Index", {
+local indexWindow = windowsManager.register("Index", {
 	gui = indexGui,
 	frame = mainFrame,
 	openButton = openButton,
 	onOpen = function()
 		network.fireServer(network.RemoteEvents.RequestIndexState)
+		focusUnclaimed(selectedId)
 		startSpin()
 	end,
 	onClose = stopSpin,
@@ -671,8 +696,19 @@ network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string,
 		playLuckClaimedSound()
 		luckRain.play(indexGui)
 		announcements.show("ClaimAlert", "Claimed 1 sheep")
+		-- The SheepIndex change already pushed IndexState, so the claimed sheep reads "Claimed" by now.
+		if indexWindow.isOpen() then
+			focusUnclaimed()
+		end
 	else
 		shake(claimButton)
+	end
+end)
+
+-- IndexState with the new "Found" sheep arrives just before this.
+network.connectEvent(network.RemoteEvents.SheepUnlocked, function(sheepType: string)
+	if indexWindow.isOpen() then
+		focusUnclaimed(sheepType)
 	end
 end)
 

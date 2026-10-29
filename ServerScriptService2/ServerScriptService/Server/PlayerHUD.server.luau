@@ -19,7 +19,7 @@ local HUD_NAME = "PlayerHUD"
 local VERIFIED_ICON = utf8.char(0xE000) -- Roblox's built-in verified badge glyph
 local PLUS_ICON = utf8.char(0xE003) -- Roblox's built-in Roblox Plus glyph
 local VIP_COLOR = "#FFD54A"
-local DEBUG = false -- TODO: set to false once the HUD shows up
+local DEBUG = false
 
 local function debugLog(message: string)
 	if DEBUG then

@@ -1,5 +1,5 @@
 --[[
-	First-play tutorial: equip shears, go to a sheep, shear it then 2 more (with every other UI hidden), buy More Wool, close the shop, gain wool, then rebirth.
+	First-play tutorial: equip shears, shear 3 sheep (every other UI hidden), buy 3 upgrades (shearing more when short), close the shop, then rebirth.
 	Each step is worked out from the player's progress, so it resumes after a rejoin and ends at the first rebirth.
 ]]--
 
@@ -43,13 +43,18 @@ local OWNER_ATTRIBUTE = "OwnerId"
 local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- only shear Tools have it
 local NEAR_DISTANCE = 8 -- studs (flat) from a sheep that count as "at" it
 local LEAVE_DISTANCE = 12 -- studs (flat) the first sheep is walked away from before the beam leads back to a sheep
-local ALWAYS_IN_STUDIO = true -- runs the tutorial in Studio even on a save that has rebirthed
+local ALWAYS_IN_STUDIO = false -- runs the tutorial in Studio even on a save that has rebirthed
 local TICK_SECONDS = 0.1
 local DISPLAY_ORDER = 90 -- the text and spotlight draw over every window (Alerts are 100)
 local STATE_REQUEST_SECONDS = 2 -- re-asks the server for upgrade / rebirth state until it arrives
 local COMPLETED_SECONDS = 3 -- how long the completed label stays up
 local SHEEP_TO_SHEAR = 3 -- counting the first sheep
-local MORE_WOOL_ID = "MoreWool"
+-- The upgrades bought in order, each with why it helps; 45 + 40 + 76 wool, so the last one usually needs another sheep first.
+local TUTORIAL_UPGRADES = {
+	{ id = "MoreWool", text = "Buy More Wool. Every Sheep gives you more Wool!" },
+	{ id = "Capacity", text = "Buy Sheep Capacity. More Sheep fit on your farm!" },
+	{ id = "MoreWool", text = "Buy More Wool again. Upgrades stack up!" },
+}
 local KEEP_HUD_BUTTONS = { Upgrades = true, Rebirth = true } -- the only HUD buttons shown until the tutorial ends
 local HIDE_UI_STAGES = { EquipShears = true, GoToSheep = true, FirstShear = true, Shear = true } -- every ScreenGui but the tutorial's is off during these
 local POP_IN = TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
@@ -296,7 +301,7 @@ local function updateEquipShears()
 		setStage("GoToSheep")
 		return
 	end
-	setText("Equip Shears")
+	setText("Click your Shears to hold them")
 	pointAtHotbar()
 end
 
@@ -306,7 +311,7 @@ local function updateGoToSheep()
 		setStage("EquipShears")
 		return
 	end
-	setText("Go to the Highlighted Sheep")
+	setText("Follow the arrow to a glowing Sheep")
 	local sheepList = getOwnSheep()
 	setHighlights(sheepList)
 	if not beamSheep or not table.find(sheepList, beamSheep) then
@@ -352,9 +357,9 @@ local function updateFirstShear()
 	local health = sheep:GetAttribute("ShearHealth")
 	local maxHealth = sheep:GetAttribute("MaxShearHealth")
 	if type(health) == "number" and type(maxHealth) == "number" then
-		setText(`Click to Shear the Sheep for Wool (HP {formatHealth(math.max(health, 0))}/{formatHealth(maxHealth)})`)
+		setText(`Click the Sheep to shear its Wool! (HP {formatHealth(math.max(health, 0))}/{formatHealth(maxHealth)})`)
 	else
-		setText("Click to Shear the Sheep for Wool")
+		setText("Click the Sheep to shear its Wool!")
 	end
 end
 
@@ -370,39 +375,68 @@ local function updateShear()
 		return
 	end
 	if not isHoldingShear() then
-		setText("Equip your Shears")
+		setText("Click your Shears to hold them")
 		pointAtHotbar()
 		return
 	end
 	point(nil)
 	local remaining = SHEEP_TO_SHEAR - 1 -- the first sheep was the "Click to Shear" stage
-	setText(`Shear {remaining} more Sheep to get enough Wool to upgrade! {math.max(sheared - 1, 0)}/{remaining}`)
+	setText(`Nice! Shear {remaining} more Sheep for Wool ({math.max(sheared - 1, 0)}/{remaining})`)
 end
 
--- Opens the shop and buys More Wool; asks for wool first if it isn't affordable.
+-- The TUTORIAL_UPGRADES step still to buy and its card, or nil once every step's level is owned (or maxed).
+-- Counted from the cards' levels, so it resumes after a rejoin.
+local function getUpgradeStep(): (number?, any)
+	local needed: { [string]: number } = {}
+	for index, step in TUTORIAL_UPGRADES do
+		needed[step.id] = (needed[step.id] or 0) + 1
+		local card = upgradeStates and upgradeStates[step.id]
+		if card and card.cost and (card.level or 0) < needed[step.id] then
+			return index, card
+		end
+	end
+	return nil, nil
+end
+
+-- "Upgrade 1/3": opens the shop and buys each TUTORIAL_UPGRADES step; short on wool, it sends the player back to shearing.
 local function updateUpgrades()
-	local card = upgradeStates and upgradeStates[MORE_WOOL_ID]
-	if not card then
+	if not upgradeStates then
 		requestState(network.RemoteEvents.RequestUpgradeState)
-		setText("Spend Wool to increase the amount of Wool you earn per Sheep.")
+		setText("Open Upgrades to spend your Wool")
 		point(upgradesButton)
 		return
 	end
-	if (card.level or 0) > 0 or not card.cost then
+	local index, card = getUpgradeStep()
+	if not index then
 		setStage("CloseUpgrades")
 		return
 	end
 
-	if not isWindowOpen("UpgradeShop") then
-		setText("Spend Wool to increase the amount of Wool you earn per Sheep.")
+	local progress = `Upgrade {index}/{#TUTORIAL_UPGRADES}:`
+	local shopOpen = isWindowOpen("UpgradeShop")
+	if wool.Value < card.cost then
+		setHighlights(if shopOpen then {} else getOwnSheep())
+		if shopOpen then
+			setText(`{progress} Need more Wool! Close Upgrades to shear more`)
+			point(upgradeShopExit)
+		elseif not isHoldingShear() then
+			setText("Click your Shears to hold them")
+			pointAtHotbar()
+		else
+			setText(`{progress} Shear Sheep for more Wool ({formatWool(wool.Value)}/{formatWool(card.cost)})`)
+			point(nil)
+		end
+		return
+	end
+
+	setHighlights({})
+	if not shopOpen then
+		setText(`{progress} Open Upgrades. Upgrades make you earn Wool faster!`)
 		point(upgradesButton)
-	elseif wool.Value < card.cost then
-		setText(`Shear Sheep for Wool {formatWool(wool.Value)}/{formatWool(card.cost)}`)
-		point(nil)
 	else
-		local cardFrame = upgradeCards:FindFirstChild(MORE_WOOL_ID)
+		local cardFrame = upgradeCards:FindFirstChild(card.id)
 		local purchase = cardFrame and cardFrame:FindFirstChild("Purchase")
-		setText("Spend Wool to increase the amount of Wool you earn per Sheep.")
+		setText(`{progress} {TUTORIAL_UPGRADES[index].text}`)
 		point(if purchase and purchase:IsA("GuiObject") then purchase else nil)
 	end
 end
@@ -412,7 +446,7 @@ local function updateCloseUpgrades()
 		setStage("Rebirth")
 		return
 	end
-	setText("Close Upgrades")
+	setText("Great job! Close Upgrades")
 	point(upgradeShopExit)
 end
 
@@ -421,18 +455,18 @@ local function updateRebirth()
 	local cost = rebirthCost
 	if not cost then
 		requestState(network.RemoteEvents.RequestRebirthState)
-		setText("Shear Sheep for Wool to Rebirth and gain Luck.")
+		setText("Shear Sheep for Wool to Rebirth")
 		return
 	end
 
 	if wool.Value < cost then
-		setText(`Farm {formatWool(cost)} Wool to Rebirth {formatWool(wool.Value)}/{formatWool(cost)}`)
+		setText(`Shear Sheep for Wool to Rebirth ({formatWool(wool.Value)}/{formatWool(cost)})`)
 		point(nil)
 	elseif not isWindowOpen("Rebirth") then
-		setText("Open Rebirths")
+		setText("Open Rebirth")
 		point(rebirthHudButton)
 	else
-		setText("Rebirth for more Luck!")
+		setText("Press Rebirth! Luck brings rarer Sheep")
 		point(rebirthButton)
 	end
 end
@@ -590,7 +624,6 @@ if forced then
 	shearedBaseline = getNumberAttribute("SheepShearedCount")
 	start("EquipShears")
 elseif getNumberAttribute("Rebirths") >= 1 or getNumberAttribute("Prestiges") >= 1 then
-	print(`[TutorialClient] skipped: this save has {getNumberAttribute("Rebirths")} rebirth(s), {getNumberAttribute("Prestiges")} Prestige(s)`)
 	stop()
 else
 	local sheared = getNumberAttribute("SheepShearedCount")

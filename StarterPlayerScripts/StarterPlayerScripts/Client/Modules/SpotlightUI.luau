@@ -109,7 +109,6 @@ function SpotlightUI:FollowPart(object: BasePart)
 	end
 
 	if currentTarget == object then
-		print(`Same object`)
 		return
 	end
 	currentTarget = object
@@ -128,7 +127,6 @@ function SpotlightUI:FollowPart(object: BasePart)
 		local screenPoint, onScreen = camera:WorldToScreenPoint(object.Position)
 
 		if not onScreen then
-			print(`Off screen`)
 			return
 		end
 

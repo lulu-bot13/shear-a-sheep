@@ -73,6 +73,7 @@ local function getShearDamage(player: Player): number
 	local shear = ShearShopHandler.getShear(player)
 	return UpgradeData.getShearDamage(shear.damage, getNumber(player, "DamageLevel"))
 end
+ShearHandler.getShearDamage = getShearDamage
 
 -- Mirrored for the client, so the tutorial can count the swings a sheep needs.
 local function updateDamageAttribute(player: Player)
@@ -85,7 +86,7 @@ local function getEarnedShare(total: number, maxHealth: number, health: number):
 end
 
 -- The player's sheep whose root is inside the hitbox circle around `center`.
-local function getSheepInRange(player: Player, center: Vector3, range: number): { Model }
+function ShearHandler.getSheepInRange(player: Player, center: Vector3, range: number): { Model }
 	local found: { Model } = {}
 	for _, sheep in SheepHandler.getAllSheep() do
 		if SheepHandler.getOwnerId(sheep) ~= player.UserId then
@@ -162,28 +163,32 @@ local function finishSheep(player: Player, sheep: Model, sheepId: number)
 	PlayerDataHandler.increment(player, "SheepShearedCount", 1)
 end
 
--- Shears every one of the player's sheep within the equipped shear's range (times `rangeMultiplier`) once.
-function ShearHandler.shearAround(player: Player, rangeMultiplier: number?, damageMultiplier: number?)
-	local playerRoot = getRootPart(player.Character)
-	if not playerRoot then
-		return
-	end
-
-	local shear = ShearShopHandler.getShear(player)
-	local shearDamage = math.max(math.floor(getShearDamage(player) * (damageMultiplier or 1)), 1)
-	local range = shear.range * (rangeMultiplier or 1) + ShearData.RangeTolerance
+--[[
+	Hits each of these sheep once for `getDamage(sheep, maxHealth)` wool (or a flat number), paying out and finishing
+	bare sheep like a swing does. `holdSheep = false` skips stopping them from wandering (the caller is moving them).
+]]
+function ShearHandler.shearSheep(
+	player: Player,
+	targets: { Model },
+	getDamage: number | (sheep: Model, maxHealth: number) -> number,
+	holdSheep: boolean?
+)
 	local hits: { Hit } = {}
 	local drops: { Drop } = {}
 
-	for _, sheep in getSheepInRange(player, playerRoot.Position, range) do
+	for _, sheep in targets do
 		local sheepId = sheep:GetAttribute("id")
 		local health = sheep:GetAttribute("ShearHealth")
+		local maxHealth = sheep:GetAttribute("MaxShearHealth")
 		local root = getRootPart(sheep)
-		if type(sheepId) ~= "number" or type(health) ~= "number" or health <= 0 or not root then
+		if type(sheepId) ~= "number" or type(health) ~= "number" or health <= 0 or not root or not SheepHandler.getSheep(sheepId) then
 			continue
 		end
 
-		local damage = math.min(shearDamage, health)
+		local rawDamage = if type(getDamage) == "number"
+			then getDamage
+			else getDamage(sheep, if type(maxHealth) == "number" then maxHealth else health)
+		local damage = math.min(math.max(math.floor(rawDamage), 1), health)
 		local newHealth = health - damage
 		local position = root.Position
 		table.insert(hits, {
@@ -201,7 +206,7 @@ function ShearHandler.shearAround(player: Player, rangeMultiplier: number?, dama
 		sheep:SetAttribute("ShearHealth", newHealth)
 		if newHealth <= 0 then
 			finishSheep(player, sheep, sheepId)
-		else
+		elseif holdSheep ~= false then
 			SheepWanderHandler.holdSheep(sheep)
 		end
 	end
@@ -213,6 +218,19 @@ function ShearHandler.shearAround(player: Player, rangeMultiplier: number?, dama
 	if #drops > 0 then
 		network.fireClient(network.RemoteEvents.SheepSheared, player, drops)
 	end
+end
+
+-- Shears every one of the player's sheep within the equipped shear's range (times `rangeMultiplier`) once.
+function ShearHandler.shearAround(player: Player, rangeMultiplier: number?, damageMultiplier: number?)
+	local playerRoot = getRootPart(player.Character)
+	if not playerRoot then
+		return
+	end
+
+	local shear = ShearShopHandler.getShear(player)
+	local range = shear.range * (rangeMultiplier or 1) + ShearData.RangeTolerance
+	local targets = ShearHandler.getSheepInRange(player, playerRoot.Position, range)
+	ShearHandler.shearSheep(player, targets, getShearDamage(player) * (damageMultiplier or 1))
 end
 
 local function onShearSwing(player: Player)

@@ -43,9 +43,12 @@ export type Data = {
 	ShearId: string,
 	OwnedShears: { string },
 	AbilityEquipped: string, -- AbilityData id of the ability used on E
+	OwnedAbilities: { string }, -- AbilityData ids won at the Ability Shack
+	AbilityPity: number, -- Ability Shack rolls in a row without an AbilityData.PityRarities ability
 	SheepShearedCount: number, -- lifetime sheep shorn bare (kept through rebirths); unlocks shears
 	BestFind: string, -- SheepData type key of the rarest sheep ever shorn; "" = none yet
 	SheepIndex: { [string]: string }, -- sheep type -> "Found" | "Claimed" (kept through rebirths)
+	PodiumSheep: { [string]: any }, -- podium name -> SheepHandler.SavedSheep standing on it
 }
 
 local function getDefaultData(): Data
@@ -63,9 +66,12 @@ local function getDefaultData(): Data
 		ShearId = ShearData.DefaultShearId,
 		OwnedShears = { ShearData.DefaultShearId },
 		AbilityEquipped = AbilityData.DefaultAbilityId,
+		OwnedAbilities = { AbilityData.DefaultAbilityId },
+		AbilityPity = 0,
 		SheepShearedCount = 0,
 		BestFind = "",
 		SheepIndex = {},
+		PodiumSheep = {},
 	}
 end
 
@@ -136,8 +142,18 @@ local function reconcile(saved: any): Data
 			end
 		end
 	end
-	if not AbilityData.get(data.AbilityEquipped) then
-		data.AbilityEquipped = AbilityData.DefaultAbilityId -- e.g. an ability that was renamed or removed
+	-- Known abilities only, once each, always with the default; the equipped one must be owned (e.g. one renamed or removed).
+	local ownedAbilities = { AbilityData.DefaultAbilityId }
+	for _, savedId in data.OwnedAbilities do
+		local id = AbilityData.RenamedAbilities[savedId] or savedId
+		if AbilityData.get(id) and not table.find(ownedAbilities, id) then
+			table.insert(ownedAbilities, id)
+		end
+	end
+	data.OwnedAbilities = ownedAbilities
+	data.AbilityEquipped = AbilityData.RenamedAbilities[data.AbilityEquipped] or data.AbilityEquipped
+	if not table.find(ownedAbilities, data.AbilityEquipped) then
+		data.AbilityEquipped = AbilityData.DefaultAbilityId
 	end
 	return data :: Data
 end

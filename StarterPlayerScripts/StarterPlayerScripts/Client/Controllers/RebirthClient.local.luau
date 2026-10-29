@@ -102,6 +102,7 @@ local nextStateRequest = 0
 local stateRequestQueued = false
 local tipTexts: { [TextLabel]: string } = {} -- each RequirementTip label's own text, restored while the player can't Prestige
 local knobOnePosition = amountKnob.Position -- the 1X side, as built in Studio
+local restRotations = { [rebirthButton] = rebirthButton.Rotation, [openButton] = openButton.Rotation }
 
 --// Helpers -------------------------------------------------------------------------
 
@@ -156,10 +157,10 @@ local function toggleAmount()
 	requestState()
 end
 
--- Wiggles around the button's current angle, so it ends where it started.
+-- Wiggles around the button's rest angle, so a shake started mid hover-tilt can't leave it tilted.
 local function shake(button: GuiObject, angles: { number })
 	task.spawn(function()
-		local baseRotation = button.Rotation
+		local baseRotation = restRotations[button] or button.Rotation
 		for _, angle in angles do
 			tweenService:Create(button, TweenInfo.new(0.04), { Rotation = baseRotation + angle }):Play()
 			task.wait(0.04)

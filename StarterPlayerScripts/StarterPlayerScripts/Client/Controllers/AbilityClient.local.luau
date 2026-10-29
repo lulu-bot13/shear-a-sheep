@@ -1,6 +1,6 @@
 --[[
-	Uses the player's ability on E or by tapping the Ability ui, then plays its animation and spins the character while AbilityHandler keeps it active.
-	Counts the ability's cooldown down on the Main gui's Ability.Cooldown label, greys the button out until it's ready and shows AbilityEquipped on Ability.AbilityName.
+	Uses the player's ability (aimed at the mouse, or straight ahead on touch) on E, the Ability ui or the touch button by the jump button, and plays its animation and Modules.Abilities effect.
+	Shows the cooldown on Main.Ability and routes AbilityEffect broadcasts to each ability's module so everyone sees the VFX.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AbilityClient
 ]]--
 
@@ -10,6 +10,7 @@ local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
 local soundService = game:GetService("SoundService")
+local userInputService = game:GetService("UserInputService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
@@ -19,6 +20,7 @@ local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local abilityAnimations = replicatedStorage:WaitForChild("Assets"):WaitForChild("Animations"):WaitForChild("Abilities")
+local abilityModules = script.Parent.Parent.Modules.Abilities
 
 --// Sounds
 local abilityStartSound = soundService:WaitForChild("UISounds"):FindFirstChild("ShearAbilityStart")
@@ -31,15 +33,32 @@ local READY_AT_ATTRIBUTE = "AbilityReadyAt" -- server time the ability can be us
 local EQUIPPED_ATTRIBUTE = "AbilityEquipped" -- mirrored from PlayerDataHandler
 local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- set on every shear Tool by ShearShopHandler
 local USED_COLOR = Color3.fromRGB(120, 120, 120) -- while active and cooling down
-local SPIN_SPEED = math.rad(900) -- radians per second the character turns while spinning
 local READY_TEXT = "[E] Ability"
+local TOUCH_AIM_DISTANCE = 40 -- studs ahead of the character an ability is aimed without a mouse
+local AIM_RAY_LENGTH = 500
+
+--// Mobile ability button
+local ABILITY_BUTTON_IMAGE = "" -- the mobile button's icon (rbxassetid://...); blank until one is made
+local MOBILE_BUTTON_NAME = "MobileAbility" -- a Studio-made Main.MobileAbility is used instead of the built one
+local MOBILE_BUTTON_SCALE = 0.9 -- of the jump button's size
+local MOBILE_BUTTON_GAP = 12 -- pixels between it and the jump button
+local MOBILE_BUTTON_COLOR = Color3.fromRGB(255, 190, 60)
+local MOBILE_OVERLAY_TRANSPARENCY = 0.4
+
+type AbilityModule = {
+	loopAnimation: boolean?,
+	start: ((character: Model, humanoid: Humanoid) -> () -> ())?,
+	onEffect: ((caster: Player, ...any) -> ())?,
+}
 
 --// State
 local abilityTrack: AnimationTrack? = nil
-local spinConnection: RBXScriptConnection? = nil
-local spinningHumanoid: Humanoid? = nil
+local stopEffect: (() -> ())? = nil
 local cooldownConnection: RBXScriptConnection? = nil
+local loadedModules: { [string]: AbilityModule | false } = {}
 local normalColors: { [GuiObject]: Color3 } = setmetatable({}, { __mode = "k" }) :: any -- each Ability ui's Studio color
+local usingTouch = userInputService.TouchEnabled
+	and (not userInputService.KeyboardEnabled or userInputService:GetLastInputType() == Enum.UserInputType.Touch)
 
 --// Cooldown label --------------------------------------------------------------
 
@@ -78,10 +97,11 @@ local function isHoldingShear(): boolean
 end
 
 -- Shown only while a shear is held, and hidden while any window is open so it doesn't sit on top of the menus.
+-- Touch players get the mobile button instead.
 local function updateAbilityVisibility()
 	local abilityUi = getAbilityUi()
 	if abilityUi then
-		abilityUi.Visible = isHoldingShear() and not windowsManager.anyOpen()
+		abilityUi.Visible = not usingTouch and isHoldingShear() and not windowsManager.anyOpen()
 	end
 end
 
@@ -135,14 +155,23 @@ local function getAnimation(abilityId: string): Animation?
 	return asset and asset:FindFirstChildWhichIsA("Animation", true)
 end
 
-local function stopAbility()
-	if spinConnection then
-		spinConnection:Disconnect()
-		spinConnection = nil
+local function getModule(abilityId: string): AbilityModule?
+	local cached = loadedModules[abilityId]
+	if cached ~= nil then
+		return cached or nil
 	end
-	if spinningHumanoid then
-		spinningHumanoid.AutoRotate = true
-		spinningHumanoid = nil
+
+	local moduleScript = abilityModules:FindFirstChild(abilityId)
+	local loaded = moduleScript and moduleScript:IsA("ModuleScript") and require(moduleScript) :: any
+	loadedModules[abilityId] = loaded or false
+	return loaded or nil
+end
+
+local function stopAbility()
+	if stopEffect then
+		local stop = stopEffect
+		stopEffect = nil
+		stop()
 	end
 	if abilityTrack then
 		abilityTrack:Stop()
@@ -156,8 +185,7 @@ local function startAbility(abilityId: string)
 
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if not humanoid or not root then
+	if not character or not humanoid then
 		return
 	end
 
@@ -165,28 +193,48 @@ local function startAbility(abilityId: string)
 		abilityStartSound:Play()
 	end
 
+	local abilityModule = getModule(abilityId)
 	local animator = humanoid:FindFirstChildOfClass("Animator")
 	local animation = getAnimation(abilityId)
 	if animator and animation then
 		local track = animator:LoadAnimation(animation)
 		track.Priority = Enum.AnimationPriority.Action
-		track.Looped = true
+		track.Looped = abilityModule ~= nil and abilityModule.loopAnimation == true
 		track:Play()
 		abilityTrack = track
 	else
 		warn(`AbilityClient: no Animation for ability "{abilityId}" in {abilityAnimations:GetFullName()}.`)
 	end
 
-	-- AutoRotate off so the humanoid stops turning the character to face its walk direction.
-	humanoid.AutoRotate = false
-	spinningHumanoid = humanoid
-	spinConnection = runService.RenderStepped:Connect(function(deltaTime: number)
-		if not root.Parent then
-			stopAbility()
-			return
-		end
-		root.CFrame *= CFrame.Angles(0, SPIN_SPEED * deltaTime, 0)
-	end)
+	if abilityModule and abilityModule.start then
+		stopEffect = abilityModule.start(character, humanoid)
+	end
+end
+
+-- Where the ability is aimed: the world point under the mouse, or straight ahead of the character on touch and gamepad.
+local function getAimPoint(): Vector3?
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not root then
+		return nil
+	end
+
+	local lastInput = userInputService:GetLastInputType()
+	local usingMouse = lastInput == Enum.UserInputType.MouseButton1
+		or lastInput == Enum.UserInputType.MouseMovement
+		or lastInput == Enum.UserInputType.Keyboard
+	local camera = workspace.CurrentCamera
+	if not usingMouse or not camera then
+		return root.Position + root.CFrame.LookVector * TOUCH_AIM_DISTANCE
+	end
+
+	local mouse = userInputService:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { character }
+	local result = workspace:Raycast(ray.Origin, ray.Direction * AIM_RAY_LENGTH, params)
+	return if result then result.Position else ray.Origin + ray.Direction * AIM_RAY_LENGTH
 end
 
 local function onActiveAbilityChanged()
@@ -222,8 +270,15 @@ updateAbilityVisibility()
 network.waitUntilReadyAsync()
 
 local function useAbility()
-	network.fireServer(network.RemoteEvents.UseAbility)
+	network.fireServer(network.RemoteEvents.UseAbility, getAimPoint())
 end
+
+network.connectEvent(network.RemoteEvents.AbilityEffect, function(caster: Player, abilityId: string, ...: any)
+	local abilityModule = type(abilityId) == "string" and getModule(abilityId)
+	if abilityModule and abilityModule.onEffect then
+		abilityModule.onEffect(caster, ...)
+	end
+end)
 
 -- Tapping or clicking the Ability ui uses it too, so touch players aren't stuck without an E key.
 local boundAbilityUi: GuiObject? = nil
@@ -262,7 +317,7 @@ if main then
 	task.spawn(bindAbilityUi, main)
 end
 
--- No CAS touch button: the Main gui's Ability ui already covers touch.
+-- No CAS touch button: the Main gui's Ability ui and the mobile button below cover touch.
 contextActionService:BindAction(ABILITY_ACTION, function(_, inputState: Enum.UserInputState)
 	if inputState ~= Enum.UserInputState.Begin then
 		return Enum.ContextActionResult.Pass
@@ -270,3 +325,224 @@ contextActionService:BindAction(ABILITY_ACTION, function(_, inputState: Enum.Use
 	useAbility()
 	return Enum.ContextActionResult.Sink
 end, false, ABILITY_KEY)
+
+--// Mobile ability button ------------------------------------------------------------
+
+-- A thumb-sized button by the jump button on touch screens; a Studio-made Main.MobileAbility replaces the built one.
+local builtMobileButton: ImageButton? = nil
+local boundMobileButtons: { [GuiButton]: boolean } = setmetatable({}, { __mode = "k" }) :: any
+local mobileCooldownConnection: RBXScriptConnection? = nil
+local cooldownTotal = 0 -- length of the current cooldown, for the overlay's fill
+
+-- Size, left edge and top edge (offsets from the bottom-right corner) of the PlayerModule's touch jump button.
+local function getJumpLayout(): (number, number, number)
+	local camera = workspace.CurrentCamera
+	local viewport = if camera then camera.ViewportSize else Vector2.zero
+	if math.min(viewport.X, viewport.Y) <= 500 then
+		return 70, 95, 90
+	end
+	return 120, 170, 210
+end
+
+local function addCorner(guiObject: GuiObject)
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0.5, 0)
+	corner.Parent = guiObject
+end
+
+local function addLabel(name: string, parent: GuiObject): TextLabel
+	local label = Instance.new("TextLabel")
+	label.Name = name
+	label.AnchorPoint = Vector2.new(0.5, 0.5)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBlack
+	label.TextScaled = true
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.Text = ""
+	label.ZIndex = 3
+	label.Parent = parent
+	local stroke = Instance.new("UIStroke")
+	stroke.Thickness = 2
+	stroke.Parent = label
+	return label
+end
+
+local function buildMobileButton(): ImageButton
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "MobileAbility"
+	gui.ResetOnSpawn = false
+	gui.Parent = playerGui
+
+	local button = Instance.new("ImageButton")
+	button.Name = MOBILE_BUTTON_NAME
+	button.AnchorPoint = Vector2.new(1, 0.5)
+	button.Image = ABILITY_BUTTON_IMAGE
+	button.ScaleType = Enum.ScaleType.Fit
+	button.BackgroundColor3 = MOBILE_BUTTON_COLOR
+	button.BackgroundTransparency = 0.15
+	button.Visible = false
+	button.Parent = gui
+	addCorner(button)
+	local stroke = Instance.new("UIStroke")
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Thickness = 3
+	stroke.Parent = button
+
+	-- Darkens the top share of the button still cooling down; the gradient keeps it inside the round corners.
+	local overlay = Instance.new("Frame")
+	overlay.Name = "CooldownOverlay"
+	overlay.Size = UDim2.fromScale(1, 1)
+	overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	overlay.BackgroundTransparency = MOBILE_OVERLAY_TRANSPARENCY
+	overlay.Visible = false
+	overlay.ZIndex = 2
+	overlay.Parent = button
+	addCorner(overlay)
+	local gradient = Instance.new("UIGradient")
+	gradient.Rotation = 90
+	gradient.Parent = overlay
+
+	local cooldownLabel = addLabel("Cooldown", button)
+	cooldownLabel.Position = UDim2.fromScale(0.5, 0.5)
+	cooldownLabel.Size = UDim2.fromScale(0.7, 0.4)
+
+	local nameLabel = addLabel("AbilityName", button)
+	nameLabel.AnchorPoint = Vector2.new(0.5, 0)
+	nameLabel.Position = UDim2.new(0.5, 0, 1, 2)
+	nameLabel.Size = UDim2.fromScale(1.4, 0.28)
+
+	return button
+end
+
+local function layoutBuiltButton(button: ImageButton)
+	local jumpSize, jumpLeft, jumpTop = getJumpLayout()
+	local size = math.floor(jumpSize * MOBILE_BUTTON_SCALE)
+	button.Size = UDim2.fromOffset(size, size)
+	button.Position = UDim2.new(1, -(jumpLeft + MOBILE_BUTTON_GAP), 1, -jumpTop)
+end
+
+-- Main.MobileAbility when Studio has one, else the built button (made on first need, touch devices only).
+local function getMobileButton(): GuiButton?
+	local mainGui = playerGui:FindFirstChild("Main")
+	local studioButton = mainGui and mainGui:FindFirstChild(MOBILE_BUTTON_NAME)
+	local button: GuiButton? = nil
+	if studioButton and studioButton:IsA("GuiButton") then
+		button = studioButton
+		if builtMobileButton then
+			builtMobileButton.Visible = false
+		end
+	elseif userInputService.TouchEnabled then
+		if not builtMobileButton then
+			builtMobileButton = buildMobileButton()
+		end
+		button = builtMobileButton
+	end
+
+	if button and not boundMobileButtons[button] then
+		boundMobileButtons[button] = true
+		button.Activated:Connect(useAbility)
+	end
+	return button
+end
+
+local function updateMobileCooldown()
+	local secondsLeft = getSecondsLeft()
+	if secondsLeft <= 0 and mobileCooldownConnection then
+		mobileCooldownConnection:Disconnect()
+		mobileCooldownConnection = nil
+	end
+
+	local button = getMobileButton()
+	if not button then
+		return
+	end
+
+	local isActive = player:GetAttribute(ACTIVE_ATTRIBUTE) ~= nil
+	local overlay = button:FindFirstChild("CooldownOverlay")
+	if overlay and overlay:IsA("GuiObject") then
+		overlay.Visible = isActive or secondsLeft > 0
+		local gradient = overlay:FindFirstChildOfClass("UIGradient")
+		if gradient and overlay.Visible then
+			local share = if isActive or cooldownTotal <= 0 then 1 else secondsLeft / cooldownTotal
+			local edge = math.clamp(share, 0.002, 0.998)
+			gradient.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0),
+				NumberSequenceKeypoint.new(edge, 0),
+				NumberSequenceKeypoint.new(edge + 0.001, 1),
+				NumberSequenceKeypoint.new(1, 1),
+			})
+		end
+	end
+
+	local label = button:FindFirstChild("Cooldown")
+	if label and label:IsA("TextLabel") then
+		label.Text = if isActive then "Active" elseif secondsLeft > 0 then string.format("%.1f", secondsLeft) else ""
+	end
+end
+
+local function onMobileReadyAtChanged()
+	cooldownTotal = getSecondsLeft()
+	updateMobileCooldown()
+	if cooldownTotal > 0 and not mobileCooldownConnection then
+		mobileCooldownConnection = runService.Heartbeat:Connect(updateMobileCooldown)
+	end
+end
+
+-- Shown to touch players holding a shear while no window is open, like Main.Ability.
+local function updateMobileButton()
+	local button = getMobileButton()
+	if not button then
+		return
+	end
+
+	if button == builtMobileButton then
+		layoutBuiltButton(button :: ImageButton)
+	end
+	button.Visible = usingTouch and isHoldingShear() and not windowsManager.anyOpen()
+
+	local nameLabel = button:FindFirstChild("AbilityName")
+	if nameLabel and nameLabel:IsA("TextLabel") then
+		local abilityId = player:GetAttribute(EQUIPPED_ATTRIBUTE)
+		nameLabel.Text = if type(abilityId) == "string" then abilityId else "Ability"
+	end
+	updateMobileCooldown()
+end
+
+local function onMobileCharacterAdded(character: Model)
+	character.ChildAdded:Connect(updateMobileButton)
+	character.ChildRemoved:Connect(updateMobileButton)
+	updateMobileButton()
+end
+
+if userInputService.TouchEnabled then
+	userInputService.LastInputTypeChanged:Connect(function(inputType: Enum.UserInputType)
+		local wasTouch = usingTouch
+		if inputType == Enum.UserInputType.Touch then
+			usingTouch = true
+		elseif inputType == Enum.UserInputType.Keyboard
+			or string.find(inputType.Name, "Mouse", 1, true)
+			or string.find(inputType.Name, "Gamepad", 1, true)
+		then
+			usingTouch = false
+		end
+		if usingTouch ~= wasTouch then
+			updateAbilityVisibility()
+			updateMobileButton()
+		end
+	end)
+end
+
+player:GetAttributeChangedSignal(ACTIVE_ATTRIBUTE):Connect(updateMobileCooldown)
+player:GetAttributeChangedSignal(READY_AT_ATTRIBUTE):Connect(onMobileReadyAtChanged)
+player:GetAttributeChangedSignal(EQUIPPED_ATTRIBUTE):Connect(updateMobileButton)
+windowsManager.openChanged:Connect(updateMobileButton)
+playerGui.ChildAdded:Connect(function(child: Instance)
+	if child.Name == "Main" then
+		updateMobileButton()
+	end
+end)
+player.CharacterAdded:Connect(onMobileCharacterAdded)
+if player.Character then
+	onMobileCharacterAdded(player.Character)
+end
+onMobileReadyAtChanged()

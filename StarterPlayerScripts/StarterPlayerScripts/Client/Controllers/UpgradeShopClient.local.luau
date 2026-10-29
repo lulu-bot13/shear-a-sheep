@@ -47,6 +47,10 @@ local AFTER_COLOR = "#1EFF3C" -- the "after" number in the Upgrade text
 local MAX_COLOR = "#FFD54A"
 local DISABLED_COLOR = Color3.fromRGB(130, 130, 130) -- the Purchase button while the upgrade can't be bought
 local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so card sizes aren't measured
+local LEVEL_BOUGHT_COLOR = Color3.fromRGB(102, 255, 56) -- a ProgressionFrame cell for a level the player owns
+local LEVEL_EMPTY_COLOR = Color3.fromRGB(120, 120, 120)
+local LEVELS_PER_PAGE = 16 -- cells in a full ProgressionFrame; buying past them starts the next page
+local CELLS_PER_ROW = 8
 
 -- Alert text when an upgrade can't be bought; "%s" is the upgrade's name.
 local REASON_TEXT = {
@@ -60,10 +64,13 @@ type Card = {
 	title: TextLabel,
 	price: TextLabel,
 	upgrade: TextLabel,
-	level: TextLabel,
 	purchase: GuiButton,
 	purchaseColor: Color3,
 	icon: GuiObject?,
+	progression: GuiObject?,
+	progressionTemplate: GuiObject?,
+	progressionText: TextLabel?,
+	progressionCells: { GuiObject },
 	state: any,
 }
 
@@ -75,7 +82,11 @@ local openToken = 0
 local layout = scrollFrame:FindFirstChildOfClass("UIListLayout") or scrollFrame:FindFirstChildOfClass("UIGridLayout")
 local framePadding = scrollFrame:FindFirstChildOfClass("UIPadding")
 
--- Scale on Y inside a ScrollingFrame is relative to the canvas, so these are turned into pixels of the visible window.
+--[[
+	Scale on Y inside a ScrollingFrame is relative to the canvas, so these are turned into pixels using the canvas
+	height Studio laid them out on (taken before updateCanvasSize changes it), giving the same size as in Studio.
+]]
+local designCanvasY = scrollFrame.CanvasSize.Y
 local cardSize = cardTemplate.Size
 local listPadding = if layout and layout:IsA("UIListLayout") then layout.Padding else nil
 local gridCellSize = if layout and layout:IsA("UIGridLayout") then layout.CellSize else nil
@@ -110,7 +121,8 @@ end
 --// Cards -----------------------------------------------------------------------------
 
 local function toWindowPixels(size: UDim, windowHeight: number): UDim
-	return UDim.new(0, math.floor(size.Offset + size.Scale * windowHeight))
+	local canvasHeight = math.max(windowHeight, designCanvasY.Offset + designCanvasY.Scale * windowHeight)
+	return UDim.new(0, math.floor(size.Offset + size.Scale * canvasHeight))
 end
 
 -- Nil while the window is shrunk to (almost) nothing by its close tween.
@@ -163,10 +175,81 @@ local function updateCanvasSize()
 	end
 end
 
+-- Turns the ProgressionFrame grid's offset sizes into scale for a full page, so the cells fit the frame on any screen.
+local function scaleProgressionGrid(grid: UIGridLayout)
+	local rows = math.ceil(LEVELS_PER_PAGE / CELLS_PER_ROW)
+	local cellSize, cellPadding = grid.CellSize, grid.CellPadding
+	local ratioX = if cellSize.X.Offset > 0 then cellPadding.X.Offset / cellSize.X.Offset else 0
+	local ratioY = if cellSize.Y.Offset > 0 then cellPadding.Y.Offset / cellSize.Y.Offset else 0
+	local cellWidth = 1 / (CELLS_PER_ROW + (CELLS_PER_ROW - 1) * ratioX)
+	local cellHeight = 1 / (rows + (rows - 1) * ratioY)
+
+	grid.SortOrder = Enum.SortOrder.LayoutOrder
+	grid.FillDirectionMaxCells = CELLS_PER_ROW
+	grid.CellSize = UDim2.fromScale(cellWidth, cellHeight)
+	grid.CellPadding = UDim2.fromScale(cellWidth * ratioX, cellHeight * ratioY)
+end
+
+local function buildProgressionCells(card: Card, count: number)
+	local template = card.progressionTemplate :: GuiObject
+	for _, cell in card.progressionCells do
+		cell:Destroy()
+	end
+	table.clear(card.progressionCells)
+
+	for index = 1, count do
+		local cell = template:Clone()
+		cell.Name = tostring(index)
+		cell.LayoutOrder = index
+		cell.Visible = true
+		cell.Parent = card.progression
+		table.insert(card.progressionCells, cell)
+	end
+end
+
+--[[
+	Levels are shown a page of LEVELS_PER_PAGE at a time: green for bought, grey for the rest, with "page/pages" in
+	ProgressionText. Filling a page moves on to the next (all grey again); the last page only has the levels left.
+	Hidden for upgrades with no level limit.
+]]
+local function renderProgression(card: Card)
+	local progression = card.progression
+	local text = card.progressionText
+	if not progression or not card.progressionTemplate then
+		return
+	end
+
+	local maxLevel = card.state.maxLevel
+	local hasLimit = type(maxLevel) == "number" and maxLevel >= 1
+	progression.Visible = hasLimit
+	if text then
+		text.Visible = hasLimit
+	end
+	if not hasLimit then
+		return
+	end
+
+	local level = math.clamp(card.state.level or 0, 0, maxLevel)
+	local pages = math.ceil(maxLevel / LEVELS_PER_PAGE)
+	local page = math.min(level // LEVELS_PER_PAGE + 1, pages)
+	local pageStart = (page - 1) * LEVELS_PER_PAGE
+	local cellCount = math.min(LEVELS_PER_PAGE, maxLevel - pageStart)
+
+	if #card.progressionCells ~= cellCount then
+		buildProgressionCells(card, cellCount)
+	end
+	for index, cell in card.progressionCells do
+		cell.BackgroundColor3 = if index <= level - pageStart then LEVEL_BOUGHT_COLOR else LEVEL_EMPTY_COLOR
+	end
+
+	if text then
+		text.Text = `{page}/{pages}`
+	end
+end
+
 local function renderCard(card: Card)
 	local state = card.state
 	card.title.Text = state.title
-	card.level.Text = `lvl {state.level or 0}`
 
 	if state.after then
 		card.upgrade.Text = `{state.before} -> <font color="{AFTER_COLOR}"><b>{state.after}</b></font>`
@@ -179,6 +262,8 @@ local function renderCard(card: Card)
 	if card.icon and card.icon:IsA("ImageLabel") and state.icon ~= "" then
 		card.icon.Image = state.icon
 	end
+
+	renderProgression(card)
 end
 
 -- Greys out the Purchase button while the player can't afford the upgrade (or it's maxed).
@@ -208,15 +293,37 @@ local function createCard(state: any, order: number): Card
 
 	local shearImage = frame:FindFirstChild("ShearImage")
 	local purchase = frame:WaitForChild("Purchase") :: GuiButton
+	local progression = frame:FindFirstChild("ProgressionFrame") :: GuiObject?
+	local progressionGrid = progression and progression:FindFirstChildOfClass("UIGridLayout")
+	local progressionTemplate = progression and progression:FindFirstChild("Template") :: GuiObject?
+	local progressionText = frame:FindFirstChild("ProgressionText") :: TextLabel?
+	if progressionGrid then
+		scaleProgressionGrid(progressionGrid)
+	end
+	if progressionTemplate then
+		progressionTemplate.Visible = false
+	end
+	if progression then
+		-- Placeholder cells left in from designing the frame would sit in the grid before the real ones.
+		for _, child in progression:GetChildren() do
+			if child:IsA("GuiObject") and child ~= progressionTemplate then
+				child:Destroy()
+			end
+		end
+	end
+
 	local card: Card = {
 		frame = frame,
 		title = frame:WaitForChild("Title") :: TextLabel,
 		price = frame:WaitForChild("Price") :: TextLabel,
 		upgrade = frame:WaitForChild("Upgrade") :: TextLabel,
-		level = frame:WaitForChild("Level") :: TextLabel,
 		purchase = purchase,
 		purchaseColor = purchase.BackgroundColor3,
 		icon = if shearImage then shearImage:FindFirstChild("Icon") :: GuiObject? else nil,
+		progression = progression,
+		progressionTemplate = progressionTemplate,
+		progressionText = progressionText,
+		progressionCells = {},
 		state = state,
 	}
 	card.upgrade.RichText = true

@@ -37,6 +37,14 @@ export type EnumType = "ShearSwing"
 	| "SheepUnlocked"
 	| "UseAbility"
 	| "TitleUnlocked"
+	| "AbilityEffect"
+	| "RollAbility"
+	| "EquipAbility"
+	| "AbilityRollResult"
+	| "RequestAbilityState"
+	| "AbilityState"
+	| "CrookPickUp"
+	| "CrookRelease"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	ShearSwing = "ShearSwing",
@@ -67,6 +75,14 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	SheepUnlocked = "SheepUnlocked",
 	UseAbility = "UseAbility",
 	TitleUnlocked = "TitleUnlocked",
+	AbilityEffect = "AbilityEffect",
+	RollAbility = "RollAbility",
+	EquipAbility = "EquipAbility",
+	AbilityRollResult = "AbilityRollResult",
+	RequestAbilityState = "RequestAbilityState",
+	AbilityState = "AbilityState",
+	CrookPickUp = "CrookPickUp",
+	CrookRelease = "CrookRelease",
 }
 
 return RemoteEventName
