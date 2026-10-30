@@ -1,6 +1,6 @@
 --[[
-	The Shepherd's Crook: a "HOLD" tag over the hovered sheep, clicks to pick it up or release it in the pen, a hint above the Ability ui
-	and the tutorial beam to an open podium. Podium prompts only show on your own plot while you carry a sheep.
+	The Shepherd's Crook: a "HOLD" tag over the hovered sheep, clicks to pick it up or let it go in the pen, a hint of what to do next
+	and a beam to an open podium. The rest of the UI hides while the crook is out or a sheep is carried.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.CrookClient
 ]]--
 
@@ -9,6 +9,7 @@ local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
+local userInputService = game:GetService("UserInputService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
@@ -34,15 +35,29 @@ local HOLD_COLOR = Color3.fromRGB(255, 230, 90)
 local HOVER_RAY_LENGTH = 300
 local BEAM_ATTACHMENT_ROTATION = Vector3.new(0, 0, 90) -- degrees, matches TutorialClient
 
-local TEXT_PICK_UP = "Click on a sheep to hold"
-local TEXT_PLACE = "Place on a podium stand"
-local TEXT_REPLACE = "Replace a sheep on a podium stand"
+-- "%s" is "Click", or "Tap" on touch screens.
+local TEXT_PICK_UP = "%s a sheep to pick it up"
+local TEXT_PLACE = "Place it on a podium stand"
+local TEXT_REPLACE = "Swap it with a sheep on a podium stand"
+local TEXT_OR_RELEASE = ", or %s to let it go" -- added to the podium text while standing in the pen
 local TEXT_GO_TO_PEN = "Take it back to your pen to shear it"
-local TEXT_RELEASE = "Click to release it in your pen"
+local TEXT_RELEASE = "%s to let it go in your pen"
+
+-- Stay up while the rest of the UI is hidden: short-lived popups, the tutorial, and TouchGui (the touch thumbstick).
+local KEEP_GUIS = {
+	TouchGui = true,
+	Tutorial = true,
+	Alerts = true,
+	AlertsGui = true,
+	GemPopup = true,
+	BestFindAnnouncement = true,
+}
 
 --// State
 local hovered: Model? = nil
 local boundCrooks: { [Instance]: boolean } = {}
+local uiHidden = false
+local hiddenGuis: { ScreenGui } = {} -- turned off by this script, so only these are turned back on
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -69,17 +84,36 @@ local hintStroke = Instance.new("UIStroke")
 hintStroke.Thickness = 2
 hintStroke.Parent = hintLabel
 
--- Centred over Main.Ability when it exists (it is hidden while the crook is held, but still laid out).
-local function placeHint()
-	local main = playerGui:FindFirstChild("Main")
-	local ability = main and main:FindFirstChild("Ability")
-	if ability and ability:IsA("GuiObject") and ability.AbsoluteSize.X > 0 then
-		local centerX = ability.AbsolutePosition.X + ability.AbsoluteSize.X / 2 - hintGui.AbsolutePosition.X
-		hintLabel.Position = UDim2.new(0, centerX, HINT_Y_SCALE, 0)
-	else
-		hintLabel.Position = UDim2.fromScale(0.5, HINT_Y_SCALE)
+--// Hiding the UI ----------------------------------------------------------------------
+
+local function hideGui(gui: Instance)
+	if uiHidden and gui:IsA("ScreenGui") and gui ~= hintGui and not KEEP_GUIS[gui.Name] and gui.Enabled then
+		gui.Enabled = false
+		table.insert(hiddenGuis, gui)
 	end
 end
+
+-- Guis added while hidden (a respawned Main) are hidden too; ones opened on purpose later, like a shop, are left alone.
+local function setUiHidden(hidden: boolean)
+	if hidden == uiHidden then
+		return
+	end
+	uiHidden = hidden
+	if hidden then
+		for _, gui in playerGui:GetChildren() do
+			hideGui(gui)
+		end
+	else
+		for _, gui in hiddenGuis do
+			if gui.Parent then
+				gui.Enabled = true
+			end
+		end
+		table.clear(hiddenGuis)
+	end
+end
+
+playerGui.ChildAdded:Connect(hideGui)
 
 --// HOLD tag ---------------------------------------------------------------------------
 
@@ -253,20 +287,29 @@ local function setHovered(sheep: Model?)
 	hoverHighlight.Parent = if sheep then workspace else nil
 end
 
+local function getClickWord(): string
+	return if userInputService.TouchEnabled and not userInputService.KeyboardEnabled then "Tap" else "Click"
+end
+
 -- Hint text and beam target for what the player should do next; nil text hides the hint.
 local function getGoal(playerRoot: BasePart): (string?, Vector3?)
 	local source = getCarrySource()
+	local inPen = isInPen(playerRoot.Position)
 	if source == "Podium" then
-		if isInPen(playerRoot.Position) then
-			return TEXT_RELEASE, nil
+		if inPen then
+			return string.format(TEXT_RELEASE, getClickWord()), nil
 		end
 		local boxCFrame = getPenBox()
 		return TEXT_GO_TO_PEN, if boxCFrame then boxCFrame.Position else nil
 	elseif source then
 		local podium, allTaken = getTargetPodium(playerRoot.Position)
-		return if allTaken then TEXT_REPLACE else TEXT_PLACE, podium
+		local text = if allTaken then TEXT_REPLACE else TEXT_PLACE
+		if inPen then
+			text ..= string.format(TEXT_OR_RELEASE, getClickWord():lower())
+		end
+		return text, podium
 	elseif isHoldingCrook() then
-		return TEXT_PICK_UP, nil
+		return string.format(TEXT_PICK_UP, getClickWord()), nil
 	end
 	return nil, nil
 end
@@ -278,6 +321,7 @@ local function update()
 			prompt.Enabled = carrying
 		end
 	end
+	setUiHidden(carrying or isHoldingCrook())
 
 	setHovered(if isHoldingCrook() and not carrying then getSheepUnderMouse() else nil)
 
@@ -288,9 +332,8 @@ local function update()
 	end
 
 	hintLabel.Visible = text ~= nil
-	if text then
+	if text and hintLabel.Text ~= text then
 		hintLabel.Text = text
-		placeHint()
 	end
 
 	if playerRoot and beamTarget then

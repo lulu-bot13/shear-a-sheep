@@ -1,6 +1,6 @@
 --[[
-	Starts the client network and keeps the Main HUD's wool, luck and sheep sheared labels updated.
-	Wool and luck swell and flash green when they go up; the sheep sheared count pops a "+N".
+	Starts the client network and keeps the Main HUD's wool, luck, Gems and sheep sheared labels updated.
+	Wool, luck and Gems pop with a light green tint when they go up; the sheep sheared count pops a "+N".
 ]]--
 
 --// Services
@@ -27,17 +27,18 @@ local playerGui = player:WaitForChild("PlayerGui")
 local mainGui = playerGui:WaitForChild("Main")
 local woolAmountLabel = mainGui:WaitForChild("WoolAmount") :: TextLabel
 local luckAmountLabel = mainGui:WaitForChild("LuckAmount") :: TextLabel
+local gemAmountLabel = mainGui:WaitForChild("GemAmount") :: TextLabel
 local sheepCountLabel = mainGui:WaitForChild("SheepCount"):WaitForChild("Count") :: TextLabel
 local inventory = player:WaitForChild("Inventory")
 local woolAmountValue = inventory:WaitForChild("Wool") :: IntValue
 local luckAmountValue = inventory:WaitForChild("Luck") :: IntValue
 
 --// Configs
-local PULSE_SCALE = 1.25
+local PULSE_SCALE = 1.1
 local PULSE_COLOR = Color3.fromRGB(85, 255, 85)
-local PULSE_GROW_SECONDS = 0.12
-local PULSE_HOLD_SECONDS = 0.5 -- more increases while it's big keep it big
-local PULSE_SETTLE_SECONDS = 0.2
+local PULSE_TINT = 0.3 -- how far the text leans towards PULSE_COLOR at the peak
+local PULSE_GROW_SECONDS = 0.05
+local PULSE_SETTLE_SECONDS = 0.1 -- grow + settle stays under 0.15s, since drops land in quick succession
 
 -- A HUD counter, the colour it settles back to and the last amount it showed.
 type Counter = {
@@ -59,16 +60,18 @@ end
 
 local woolCounter = newCounter(woolAmountLabel)
 local luckCounter = newCounter(luckAmountLabel)
+local gemCounter = newCounter(gemAmountLabel)
 
--- Swells the counter and turns it green, then settles back; a new increase restarts it from wherever it is.
+-- Pops the counter up with a light green tint and straight back down; a new increase restarts it from wherever it is.
 local function pulseCounter(counter: Counter)
 	for _, tween in counter.tweens do
 		tween:Cancel()
 	end
 
-	local settleInfo = TweenInfo.new(PULSE_SETTLE_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 0, false, PULSE_HOLD_SECONDS)
-	local grow = tweenService:Create(counter.scale, TweenInfo.new(PULSE_GROW_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = PULSE_SCALE })
-	local flash = tweenService:Create(counter.label, TweenInfo.new(PULSE_GROW_SECONDS), { TextColor3 = PULSE_COLOR })
+	local growInfo = TweenInfo.new(PULSE_GROW_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local settleInfo = TweenInfo.new(PULSE_SETTLE_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	local grow = tweenService:Create(counter.scale, growInfo, { Scale = PULSE_SCALE })
+	local flash = tweenService:Create(counter.label, growInfo, { TextColor3 = counter.color:Lerp(PULSE_COLOR, PULSE_TINT) })
 	local shrink = tweenService:Create(counter.scale, settleInfo, { Scale = 1 })
 	local fade = tweenService:Create(counter.label, settleInfo, { TextColor3 = counter.color })
 	counter.tweens = { grow, flash, shrink, fade }
@@ -89,8 +92,7 @@ local function getShown(value: IntValue, holdAttribute: string): number
 	return math.max(value.Value - (if type(held) == "number" then held else 0), 0)
 end
 
-local function updateCounter(counter: Counter, prefix: string, value: IntValue, holdAttribute: string)
-	local shown = getShown(value, holdAttribute)
+local function showCount(counter: Counter, prefix: string, shown: number)
 	counter.label.Text = `{prefix}: {numberFormatter:Format(shown, 1)}`
 
 	-- Skips the first value so loading a save doesn't pulse.
@@ -98,6 +100,16 @@ local function updateCounter(counter: Counter, prefix: string, value: IntValue, 
 		pulseCounter(counter)
 	end
 	counter.lastShown = shown
+end
+
+local function updateCounter(counter: Counter, prefix: string, value: IntValue, holdAttribute: string)
+	showCount(counter, prefix, getShown(value, holdAttribute))
+end
+
+-- Gems are a player attribute (not in Inventory) and never fly to the counter, so there is nothing to hold back.
+local function updateGemAmountLabel()
+	local gems = player:GetAttribute("Gems")
+	showCount(gemCounter, "Gems", if type(gems) == "number" then gems else 0)
 end
 
 local function updateWoolAmountLabel()
@@ -177,10 +189,12 @@ end
 
 updateWoolAmountLabel()
 updateLuckAmountLabel()
+updateGemAmountLabel()
 updateSheepCountLabel()
 
 woolAmountValue.Changed:Connect(updateWoolAmountLabel)
 luckAmountValue.Changed:Connect(updateLuckAmountLabel)
+player:GetAttributeChangedSignal("Gems"):Connect(updateGemAmountLabel)
 player:GetAttributeChangedSignal("SheepShearedCount"):Connect(updateSheepCountLabel)
 player:GetAttributeChangedSignal("WoolLabelHold"):Connect(updateWoolAmountLabel)
 player:GetAttributeChangedSignal("LuckLabelHold"):Connect(updateLuckAmountLabel)

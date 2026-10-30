@@ -1,8 +1,8 @@
 --!strict
 
 --[[
-	Local look of each weather: blends the Lighting, a colour grade and the Terrain clouds, and runs the rain,
-	fireflies and looping ambience. Clear is whatever the place was built with.
+	Local look of each weather: blends the Lighting, a colour grade and the Terrain clouds, and runs the pooled
+	rain streaks, fireflies and looping ambience. Clear is whatever the place was built with.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Modules.WeatherEffects
 ]]--
 
@@ -13,18 +13,28 @@ local runService = game:GetService("RunService")
 local soundService = game:GetService("SoundService")
 local tweenService = game:GetService("TweenService")
 
+--// Sounds
+local weatherSounds = soundService:WaitForChild("Weather", 10)
+local rainSfx = if weatherSounds then weatherSounds:FindFirstChild("Rain") :: Sound? else nil -- fades up to its Studio volume
+
 --// Configs
 local TRANSITION_SECONDS = 6
 
-local RAIN_TEXTURE = "rbxassetid://131193008859152" -- a thin vertical streak; empty uses the default particle
-local RAIN_SOUND_ID = "" -- looping rain; empty plays no sound
-local NIGHT_SOUND_ID = "" -- looping crickets / night ambience
+local NIGHT_SFX_ID = "" -- looping crickets / night ambience; empty plays none
+local NIGHT_SFX_VOLUME = 0.5
 local FIREFLY_TEXTURE = "rbxassetid://92367567771233" -- a soft glowing dot
-local AMBIENCE_VOLUME = 0.5
 local AMBIENCE_FADE = TweenInfo.new(2)
 
-local RAIN_AREA = 90 -- studs square above the camera the rain falls from
-local RAIN_HEIGHT = 35
+local RAIN_AREA = 90 -- studs square around the camera the rain falls in
+local RAIN_HEIGHT = 35 -- studs above the camera drops start from
+local RAIN_DEPTH = 15 -- studs below the camera drops recycle at
+local RAIN_SPEED = 90 -- studs per second
+local RAIN_SPEED_JITTER = 10 -- +/- per drop so they don't fall in lockstep
+local RAIN_WIND = Vector3.new(6, 0, 3) -- studs per second of sideways drift, tilts the streaks
+local RAIN_DROP_SIZE = Vector3.new(0.08, 2.5, 0.08)
+local RAIN_COLOR = Color3.fromRGB(175, 195, 220)
+local RAIN_TRANSPARENCY = 0.45
+local PARK_CFRAME = CFrame.new(0, 10000, 0) -- where unused drops wait
 local FIREFLY_AREA = Vector3.new(50, 6, 50) -- box around the character they drift in
 
 type Look = {
@@ -37,13 +47,13 @@ type Look = {
 	contrast: number,
 	cloudCover: number?, -- Terrain Clouds, only when the place has them
 	cloudDensity: number?,
-	rainRate: number,
+	rainDrops: number, -- drops falling at once
 	fireflyRate: number,
 	ambience: "Rain" | "Night" | nil,
 }
 
 local LOOKS: { [string]: Look } = {
-	Clear = { brightness = 1, tint = Color3.new(1, 1, 1), saturation = 0, contrast = 0, rainRate = 0, fireflyRate = 0 },
+	Clear = { brightness = 1, tint = Color3.new(1, 1, 1), saturation = 0, contrast = 0, rainDrops = 0, fireflyRate = 0 },
 	Rain = {
 		brightness = 0.65,
 		outdoorAmbient = Color3.fromRGB(110, 115, 125),
@@ -52,7 +62,7 @@ local LOOKS: { [string]: Look } = {
 		contrast = 0,
 		cloudCover = 0.85,
 		cloudDensity = 0.6,
-		rainRate = 350,
+		rainDrops = 220,
 		fireflyRate = 0,
 		ambience = "Rain",
 	},
@@ -64,7 +74,7 @@ local LOOKS: { [string]: Look } = {
 		contrast = 0.1,
 		cloudCover = 0.95,
 		cloudDensity = 0.85,
-		rainRate = 650,
+		rainDrops = 400,
 		fireflyRate = 0,
 		ambience = "Rain",
 	},
@@ -76,7 +86,7 @@ local LOOKS: { [string]: Look } = {
 		tint = Color3.fromRGB(195, 210, 255),
 		saturation = -0.1,
 		contrast = 0.05,
-		rainRate = 0,
+		rainDrops = 0,
 		fireflyRate = 8,
 		ambience = "Night",
 	},
@@ -93,6 +103,11 @@ type Snapshot = {
 	contrast: number,
 	cloudCover: number,
 	cloudDensity: number,
+}
+
+type Ambience = {
+	sound: Sound,
+	volume: number,
 }
 
 local WeatherEffects = {}
@@ -119,28 +134,6 @@ end
 
 local rigFolder = Instance.new("Folder")
 rigFolder.Name = "WeatherRig"
-
-local rainPart = makeEmitterPart("Rain", Vector3.new(RAIN_AREA, 1, RAIN_AREA))
-rainPart.Parent = rigFolder
-
-local rain = Instance.new("ParticleEmitter")
-rain.Name = "Rain"
-if RAIN_TEXTURE ~= "" then
-	rain.Texture = RAIN_TEXTURE
-end
-rain.EmissionDirection = Enum.NormalId.Bottom
-rain.Shape = Enum.ParticleEmitterShape.Box
-rain.Orientation = Enum.ParticleOrientation.VelocityParallel
-rain.Speed = NumberRange.new(90, 110)
-rain.Lifetime = NumberRange.new(0.45, 0.6)
-rain.Size = NumberSequence.new(0.15)
-rain.Squash = NumberSequence.new(3) -- stretches each drop into a streak
-rain.Color = ColorSequence.new(Color3.fromRGB(200, 215, 235))
-rain.Transparency = NumberSequence.new(0.35)
-rain.LightInfluence = 1
-rain.Rate = 0
-rain.Enabled = false
-rain.Parent = rainPart
 
 local fireflyPart = makeEmitterPart("Fireflies", FIREFLY_AREA)
 fireflyPart.Parent = rigFolder
@@ -172,7 +165,37 @@ fireflies.Rate = 0
 fireflies.Enabled = false
 fireflies.Parent = fireflyPart
 
-local function makeAmbience(name: string, soundId: string): Sound?
+-- Prewarmed once to the densest look; drops are only ever moved, never created or destroyed.
+local random = Random.new()
+local rainPoolSize = 0
+for _, look in LOOKS do
+	rainPoolSize = math.max(rainPoolSize, look.rainDrops)
+end
+
+local rainParts: { BasePart } = table.create(rainPoolSize)
+local dropX: { number } = table.create(rainPoolSize, 0)
+local dropY: { number } = table.create(rainPoolSize, 0)
+local dropZ: { number } = table.create(rainPoolSize, 0)
+local dropSpeed: { number } = table.create(rainPoolSize, 0)
+for index = 1, rainPoolSize do
+	local drop = Instance.new("Part")
+	drop.Name = "RainDrop"
+	drop.Anchored = true
+	drop.CanCollide = false
+	drop.CanQuery = false
+	drop.CanTouch = false
+	drop.CastShadow = false
+	drop.Material = Enum.Material.SmoothPlastic
+	drop.Color = RAIN_COLOR
+	drop.Transparency = RAIN_TRANSPARENCY
+	drop.Size = RAIN_DROP_SIZE
+	drop.CFrame = PARK_CFRAME
+	drop.Parent = rigFolder
+	rainParts[index] = drop
+	dropSpeed[index] = RAIN_SPEED + random:NextNumber(-RAIN_SPEED_JITTER, RAIN_SPEED_JITTER)
+end
+
+local function makeAmbience(name: string, soundId: string, volume: number): Ambience?
 	if soundId == "" then
 		return nil
 	end
@@ -182,12 +205,23 @@ local function makeAmbience(name: string, soundId: string): Sound?
 	sound.Looped = true
 	sound.Volume = 0
 	sound.Parent = soundService
-	return sound
+	return { sound = sound, volume = volume }
 end
 
-local ambienceSounds: { [string]: Sound? } = {
-	Rain = makeAmbience("RainAmbience", RAIN_SOUND_ID),
-	Night = makeAmbience("NightAmbience", NIGHT_SOUND_ID),
+-- A Studio-built sound looped as ambience; silent until its weather starts.
+local function useAmbience(sound: Sound?): Ambience?
+	if not sound or not sound:IsA("Sound") then
+		return nil
+	end
+	local volume = sound.Volume
+	sound.Looped = true
+	sound.Volume = 0
+	return { sound = sound, volume = volume }
+end
+
+local ambiences: { [string]: Ambience? } = {
+	Rain = useAmbience(rainSfx),
+	Night = makeAmbience("NightAmbience", NIGHT_SFX_ID, NIGHT_SFX_VOLUME),
 }
 
 --// State
@@ -205,6 +239,13 @@ local baseline: Snapshot = {
 local applied: Snapshot = table.clone(baseline)
 local transition: RBXScriptConnection? = nil
 local follow: RBXScriptConnection? = nil
+local rainLoop: RBXScriptConnection? = nil
+local rainTarget = 0
+local rainCount = 0 -- fractional while ramping between looks
+local rainRamp = 0 -- drops per second
+local rainActive = 0 -- drops currently placed in the sky
+local moveParts: { BasePart } = {}
+local moveCFrames: { CFrame } = {}
 
 --// Lighting --------------------------------------------------------------------
 
@@ -277,6 +318,105 @@ local function blendTo(target: Snapshot, instant: boolean)
 	end)
 end
 
+--// Rain ------------------------------------------------------------------------
+
+local floor = math.floor
+local min = math.min
+local max = math.max
+local abs = math.abs
+
+local RAIN_HALF = RAIN_AREA / 2
+local RAIN_COLUMN = RAIN_HEIGHT + RAIN_DEPTH
+
+-- Every streak shares one tilt along the average fall velocity, so only its position changes per frame.
+local rainAxis = Vector3.new(-RAIN_WIND.X, RAIN_SPEED, -RAIN_WIND.Z).Unit
+local _, _, _, R00, R01, R02, R10, R11, R12, R20, R21, R22 =
+	CFrame.fromMatrix(Vector3.zero, rainAxis:Cross(Vector3.zAxis).Unit, rainAxis):GetComponents()
+
+local function stepRain(deltaTime: number)
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return
+	end
+
+	if rainCount < rainTarget then
+		rainCount = min(rainCount + rainRamp * deltaTime, rainTarget)
+	elseif rainCount > rainTarget then
+		rainCount = max(rainCount - rainRamp * deltaTime, rainTarget)
+	end
+	local active = floor(rainCount)
+
+	local cameraPosition = camera.CFrame.Position
+	local left = cameraPosition.X - RAIN_HALF
+	local back = cameraPosition.Z - RAIN_HALF
+	local bottom = cameraPosition.Y - RAIN_DEPTH
+	local driftX = RAIN_WIND.X * deltaTime
+	local driftZ = RAIN_WIND.Z * deltaTime
+
+	-- Positions wrap into the box around the camera instead of raycasting, so walking keeps it raining overhead.
+	local count = 0
+	for index = 1, active do
+		local x: number, y: number, z: number
+		if index > rainActive then
+			x = left + random:NextNumber() * RAIN_AREA
+			y = bottom + random:NextNumber() * RAIN_COLUMN
+			z = back + random:NextNumber() * RAIN_AREA
+		else
+			y = dropY[index] - dropSpeed[index] * deltaTime
+			local height = y - bottom
+			if height < 0 or height >= RAIN_COLUMN then
+				y = bottom + height % RAIN_COLUMN
+				x = left + random:NextNumber() * RAIN_AREA
+				z = back + random:NextNumber() * RAIN_AREA
+			else
+				x = left + (dropX[index] + driftX - left) % RAIN_AREA
+				z = back + (dropZ[index] + driftZ - back) % RAIN_AREA
+			end
+		end
+		dropX[index] = x
+		dropY[index] = y
+		dropZ[index] = z
+
+		count += 1
+		moveParts[count] = rainParts[index]
+		moveCFrames[count] = CFrame.new(x, y, z, R00, R01, R02, R10, R11, R12, R20, R21, R22)
+	end
+	for index = active + 1, rainActive do
+		count += 1
+		moveParts[count] = rainParts[index]
+		moveCFrames[count] = PARK_CFRAME
+	end
+	rainActive = active
+
+	for index = #moveParts, count + 1, -1 do
+		moveParts[index] = nil
+		moveCFrames[index] = nil
+	end
+	if count > 0 then
+		workspace:BulkMoveTo(moveParts, moveCFrames, Enum.BulkMoveMode.FireCFrameChanged)
+	end
+
+	if active == 0 and rainTarget == 0 and rainLoop then
+		rainLoop:Disconnect()
+		rainLoop = nil
+		rainCount = 0
+	end
+end
+
+local function setRain(look: Look, instant: boolean)
+	rainTarget = min(look.rainDrops, rainPoolSize)
+	if instant then
+		rainCount = rainTarget
+	else
+		rainRamp = max(abs(rainTarget - rainCount), 1) / TRANSITION_SECONDS
+	end
+
+	if (rainTarget > 0 or rainActive > 0) and not rainLoop then
+		rigFolder.Parent = workspace.CurrentCamera
+		rainLoop = runService.PreRender:Connect(stepRain)
+	end
+end
+
 --// Particles and sound ---------------------------------------------------------
 
 local function followCamera()
@@ -284,42 +424,37 @@ local function followCamera()
 	if not camera then
 		return
 	end
-	local cameraPosition = camera.CFrame.Position
-	rainPart.CFrame = CFrame.new(cameraPosition + Vector3.new(0, RAIN_HEIGHT, 0))
-
 	local character = players.LocalPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
-	local center = if root and root:IsA("BasePart") then root.Position else cameraPosition
+	local center = if root and root:IsA("BasePart") then root.Position else camera.CFrame.Position
 	fireflyPart.CFrame = CFrame.new(center + Vector3.new(0, 1, 0))
 end
 
 local function setEmitters(look: Look)
-	rain.Rate = look.rainRate
-	rain.Enabled = look.rainRate > 0
 	fireflies.Rate = look.fireflyRate
 	fireflies.Enabled = look.fireflyRate > 0
 
-	local active = rain.Enabled or fireflies.Enabled
-	if active and not follow then
+	if fireflies.Enabled and not follow then
 		rigFolder.Parent = workspace.CurrentCamera
 		followCamera()
 		follow = runService.PreRender:Connect(followCamera)
-	elseif not active and follow then
+	elseif not fireflies.Enabled and follow then
 		follow:Disconnect()
 		follow = nil
 	end
 end
 
 local function setAmbience(look: Look)
-	for name, sound in ambienceSounds do
-		if not sound then
+	for name, ambience in ambiences do
+		if not ambience then
 			continue
 		end
+		local sound = ambience.sound
 		local wanted = look.ambience == name
 		if wanted and not sound.IsPlaying then
 			sound:Play()
 		end
-		local fade = tweenService:Create(sound, AMBIENCE_FADE, { Volume = if wanted then AMBIENCE_VOLUME else 0 })
+		local fade = tweenService:Create(sound, AMBIENCE_FADE, { Volume = if wanted then ambience.volume else 0 })
 		if not wanted then
 			fade.Completed:Once(function(playbackState: Enum.PlaybackState)
 				if playbackState == Enum.PlaybackState.Completed then
@@ -337,6 +472,7 @@ end
 function WeatherEffects.apply(weather: string, instant: boolean?)
 	local look = LOOKS[weather] or LOOKS.Clear
 	blendTo(resolve(look), instant == true)
+	setRain(look, instant == true)
 	setEmitters(look)
 	setAmbience(look)
 end

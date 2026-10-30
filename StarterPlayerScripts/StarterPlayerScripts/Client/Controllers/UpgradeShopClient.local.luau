@@ -28,6 +28,10 @@ local shopGui = playerGui:WaitForChild("UpgradeShop") :: ScreenGui
 local mainFrame = shopGui:WaitForChild("Main") :: Frame
 local scrollFrame = mainFrame:WaitForChild("ScrollingFrame") :: ScrollingFrame
 local cardTemplate = scrollFrame:WaitForChild("Template") :: Frame
+local amountButton = mainFrame:WaitForChild("Amount") :: GuiButton -- the 1X / MAX switch
+local amountKnob = amountButton:WaitForChild("Knob") :: GuiObject
+local amountLabel = amountButton:FindFirstChildWhichIsA("TextLabel", true) :: TextLabel? -- the button's own Text stays ""
+local amountGradient = amountButton:FindFirstChildOfClass("UIGradient")
 local hudButtons = playerGui:WaitForChild("Main"):FindFirstChild("Buttons")
 local hudButton = hudButtons and hudButtons:FindFirstChild("Upgrades") :: GuiButton? -- optional: the shack prompts work without it
 local alertBadge = hudButton and hudButton:FindFirstChild("Alert", true) :: GuiObject? -- optional badge on the HUD button
@@ -51,6 +55,10 @@ local LEVEL_BOUGHT_COLOR = Color3.fromRGB(102, 255, 56) -- a ProgressionFrame ce
 local LEVEL_EMPTY_COLOR = Color3.fromRGB(120, 120, 120)
 local LEVELS_PER_PAGE = 16 -- cells in a full ProgressionFrame; buying past them starts the next page
 local CELLS_PER_ROW = 8
+local AMOUNTS = { 1, "max" } -- what the Amount switch flips between; "max" is as many levels as the player can afford
+local KNOB_MAX_POSITION = UDim2.fromScale(0.492, 0.5) -- matches the rebirth screen's switch
+local KNOB_TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local MAX_GRADIENT = ColorSequence.new(Color3.fromRGB(120, 255, 110), Color3.fromRGB(40, 175, 60)) -- the switch while on MAX
 
 -- Alert text when an upgrade can't be bought; "%s" is the upgrade's name.
 local REASON_TEXT = {
@@ -78,6 +86,9 @@ type Card = {
 local cards: { [string]: Card } = {}
 local activePrompt: ProximityPrompt? = nil
 local openToken = 0
+local amountIndex = 1 -- into AMOUNTS; back to 1X every time the shop opens
+local knobOnePosition = amountKnob.Position -- the 1X side, as built in Studio
+local oneGradient = if amountGradient then amountGradient.Color else nil
 
 local layout = scrollFrame:FindFirstChildOfClass("UIListLayout") or scrollFrame:FindFirstChildOfClass("UIGridLayout")
 local framePadding = scrollFrame:FindFirstChildOfClass("UIPadding")
@@ -247,13 +258,42 @@ local function renderProgression(card: Card)
 	end
 end
 
+local function isMaxSelected(): boolean
+	return AMOUNTS[amountIndex] == "max"
+end
+
+--[[
+	What a click buys right now: one level on 1X, or on MAX as many of the server's next `steps` as the wool covers
+	(still one level when it covers none, so the card shows what the next one costs). Returns the levels, the total
+	cost and the value after them.
+]]
+local function getPurchasePreview(state: any): (number, number, string)
+	if not isMaxSelected() or type(state.steps) ~= "table" then
+		return 1, state.cost, state.after
+	end
+
+	local count, total = 0, 0
+	for index, step in state.steps do
+		if total + step.cost > wool.Value then
+			break
+		end
+		count, total = index, total + step.cost
+	end
+	if count == 0 then
+		return 1, state.cost, state.after
+	end
+	return count, total, state.steps[count].after
+end
+
 local function renderCard(card: Card)
 	local state = card.state
 	card.title.Text = state.title
 
 	if state.after then
-		card.upgrade.Text = `{state.before} -> <font color="{AFTER_COLOR}"><b>{state.after}</b></font>`
-		card.price.Text = `{numberFormatter:Format(state.cost, 1)} Wool`
+		local count, cost, after = getPurchasePreview(state)
+		local levels = if count > 1 then ` <b>(+{count})</b>` else ""
+		card.upgrade.Text = `{state.before} -> <font color="{AFTER_COLOR}"><b>{after}</b></font>{levels}`
+		card.price.Text = `{numberFormatter:Format(cost, 1)} Wool`
 	else
 		card.upgrade.Text = `{state.before} <font color="{MAX_COLOR}"><b>(MAX)</b></font>`
 		card.price.Text = "MAXED"
@@ -333,7 +373,7 @@ local function createCard(state: any, order: number): Card
 			showFailure(card, "Maxed")
 			return
 		end
-		network.fireServer(network.RemoteEvents.PurchaseUpgrade, card.state.id)
+		network.fireServer(network.RemoteEvents.PurchaseUpgrade, card.state.id, AMOUNTS[amountIndex])
 	end)
 
 	frame.Parent = scrollFrame
@@ -377,6 +417,29 @@ local function applyState(states: { any })
 	updateAlert()
 end
 
+-- Slides the knob over and recolours the switch, then re-prices every card for the new amount.
+local function setAmountIndex(index: number)
+	amountIndex = index
+	local amount = AMOUNTS[amountIndex]
+	if amountLabel then
+		amountLabel.Text = if amount == "max" then "MAX" else `{amount}X`
+	end
+	amountButton:SetAttribute("Amount", amount)
+	if amountGradient and oneGradient then
+		amountGradient.Color = if amount == "max" then MAX_GRADIENT else oneGradient
+	end
+	local knobPosition = if amount == "max" then KNOB_MAX_POSITION else knobOnePosition
+	tweenService:Create(amountKnob, KNOB_TWEEN, { Position = knobPosition }):Play()
+
+	for _, card in cards do
+		renderCard(card)
+	end
+end
+
+local function toggleAmount()
+	setAmountIndex(amountIndex % #AMOUNTS + 1)
+end
+
 --// Open / close ------------------------------------------------------------------
 
 local function getPromptPosition(prompt: ProximityPrompt): Vector3?
@@ -395,6 +458,7 @@ local window = windowsManager.register("UpgradeShop", {
 	openButton = hudButton,
 	onOpen = function()
 		openToken += 1
+		setAmountIndex(1)
 		network.fireServer(network.RemoteEvents.RequestUpgradeState)
 	end,
 	onClose = function()
@@ -485,10 +549,21 @@ if alertBadge then
 end
 wool.Changed:Connect(function()
 	updateAlert()
+	local maxSelected = isMaxSelected()
 	for _, card in cards do
+		if maxSelected then
+			renderCard(card) -- how many levels MAX buys depends on the wool
+		end
 		updatePurchaseButton(card)
 	end
 end)
+
+setAmountIndex(1)
+amountButton.MouseButton1Click:Connect(toggleAmount)
+-- The Knob sits on top of the switch, so it would swallow clicks if it's a button too.
+if amountKnob:IsA("GuiButton") then
+	amountKnob.MouseButton1Click:Connect(toggleAmount)
+end
 
 if layout then
 	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvasSize)
@@ -514,7 +589,7 @@ network.waitUntilReadyAsync()
 
 network.connectEvent(network.RemoteEvents.UpgradeState, applyState)
 
-network.connectEvent(network.RemoteEvents.UpgradeResult, function(id: any, success: boolean, reason: string?, level: number?)
+network.connectEvent(network.RemoteEvents.UpgradeResult, function(id: any, success: boolean, reason: string?, level: number?, count: number?)
 	local card = if type(id) == "string" then cards[id] else nil
 	if not card then
 		return
@@ -525,7 +600,8 @@ network.connectEvent(network.RemoteEvents.UpgradeResult, function(id: any, succe
 		return
 	end
 
-	alerts.show(`Upgraded {card.state.title} -> lvl {level or card.state.level or 0}`, "success")
+	local levels = if count and count > 1 then ` (+{count} levels)` else ""
+	alerts.show(`Upgraded {card.state.title} -> lvl {level or card.state.level or 0}{levels}`, "success")
 	if cashInSound and cashInSound:IsA("Sound") then
 		cashInSound:Play()
 	end

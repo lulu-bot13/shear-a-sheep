@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Temporary DataStore save for each player's farm (wool, luck, sheep capacity, upgrades, rebirths, Prestiges, shears, sheep sheared).
+	Temporary DataStore save for each player's farm (wool, luck, Gems, sheep capacity, upgrades, rebirths, Prestiges, shears, sheep sheared).
 	Wool and Luck are mirrored to Player.Inventory IntValues and the other numbers to player attributes for the client.
 
 	Location: ServerScriptService.Modules.Controllers.PlayerDataHandler
@@ -32,6 +32,7 @@ local REMOVED_KEYS = { LuckLevel = true } -- dropped from older saves
 export type Data = {
 	Wool: number,
 	Luck: number,
+	Gems: number, -- rare currency from GemHandler drops (kept through rebirths and Prestiges)
 	MaxSheep: number,
 	SheepCount: number?, -- sheep on the farm when the player left; nil = start with a full farm
 	MoreWoolLevel: number,
@@ -55,6 +56,7 @@ local function getDefaultData(): Data
 	return {
 		Wool = 100, -- starter wool: after the tutorial's More Wool upgrade it covers ~85% of the first rebirth
 		Luck = 0,
+		Gems = 0,
 		MaxSheep = FarmData.StartingMaxSheep,
 		SheepCount = nil,
 		MoreWoolLevel = 0,

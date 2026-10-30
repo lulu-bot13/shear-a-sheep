@@ -32,6 +32,8 @@ local ACTIVE_ATTRIBUTE = "ActiveAbility" -- set by AbilityHandler while an abili
 local READY_AT_ATTRIBUTE = "AbilityReadyAt" -- server time the ability can be used again
 local EQUIPPED_ATTRIBUTE = "AbilityEquipped" -- mirrored from PlayerDataHandler
 local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- set on every shear Tool by ShearShopHandler
+local CARRY_ATTRIBUTE = "CarryingSheep" -- set by SheepCarryHandler while a sheep is carried
+local CROOK_NAME = "ShepherdsCrook"
 local USED_COLOR = Color3.fromRGB(120, 120, 120) -- while active and cooling down
 local READY_TEXT = "[E] Ability"
 local TOUCH_AIM_DISTANCE = 40 -- studs ahead of the character an ability is aimed without a mouse
@@ -96,12 +98,22 @@ local function isHoldingShear(): boolean
 	return false
 end
 
+-- The crook is out or a sheep is being carried: no abilities until it's placed or let go.
+local function isUsingCrook(): boolean
+	local character = player.Character
+	return player:GetAttribute(CARRY_ATTRIBUTE) ~= nil or (character ~= nil and character:FindFirstChild(CROOK_NAME) ~= nil)
+end
+
+local function canShowAbility(): boolean
+	return isHoldingShear() and not isUsingCrook() and not windowsManager.anyOpen()
+end
+
 -- Shown only while a shear is held, and hidden while any window is open so it doesn't sit on top of the menus.
 -- Touch players get the mobile button instead.
 local function updateAbilityVisibility()
 	local abilityUi = getAbilityUi()
 	if abilityUi then
-		abilityUi.Visible = not usingTouch and isHoldingShear() and not windowsManager.anyOpen()
+		abilityUi.Visible = not usingTouch and canShowAbility()
 	end
 end
 
@@ -250,6 +262,7 @@ end
 player:GetAttributeChangedSignal(ACTIVE_ATTRIBUTE):Connect(onActiveAbilityChanged)
 player:GetAttributeChangedSignal(READY_AT_ATTRIBUTE):Connect(onReadyAtChanged)
 player:GetAttributeChangedSignal(EQUIPPED_ATTRIBUTE):Connect(updateAbilityName)
+player:GetAttributeChangedSignal(CARRY_ATTRIBUTE):Connect(updateAbilityVisibility)
 local function onCharacterAdded(character: Model)
 	stopAbility()
 	character.ChildAdded:Connect(updateAbilityVisibility)
@@ -270,7 +283,9 @@ updateAbilityVisibility()
 network.waitUntilReadyAsync()
 
 local function useAbility()
-	network.fireServer(network.RemoteEvents.UseAbility, getAimPoint())
+	if not isUsingCrook() then
+		network.fireServer(network.RemoteEvents.UseAbility, getAimPoint())
+	end
 end
 
 network.connectEvent(network.RemoteEvents.AbilityEffect, function(caster: Player, abilityId: string, ...: any)
@@ -319,7 +334,8 @@ end
 
 -- No CAS touch button: the Main gui's Ability ui and the mobile button below cover touch.
 contextActionService:BindAction(ABILITY_ACTION, function(_, inputState: Enum.UserInputState)
-	if inputState ~= Enum.UserInputState.Begin then
+	-- Passed on with the crook out, so E still reaches the podium prompts.
+	if inputState ~= Enum.UserInputState.Begin or isUsingCrook() then
 		return Enum.ContextActionResult.Pass
 	end
 	useAbility()
@@ -498,7 +514,7 @@ local function updateMobileButton()
 	if button == builtMobileButton then
 		layoutBuiltButton(button :: ImageButton)
 	end
-	button.Visible = usingTouch and isHoldingShear() and not windowsManager.anyOpen()
+	button.Visible = usingTouch and canShowAbility()
 
 	local nameLabel = button:FindFirstChild("AbilityName")
 	if nameLabel and nameLabel:IsA("TextLabel") then
@@ -535,6 +551,7 @@ end
 player:GetAttributeChangedSignal(ACTIVE_ATTRIBUTE):Connect(updateMobileCooldown)
 player:GetAttributeChangedSignal(READY_AT_ATTRIBUTE):Connect(onMobileReadyAtChanged)
 player:GetAttributeChangedSignal(EQUIPPED_ATTRIBUTE):Connect(updateMobileButton)
+player:GetAttributeChangedSignal(CARRY_ATTRIBUTE):Connect(updateMobileButton)
 windowsManager.openChanged:Connect(updateMobileButton)
 playerGui.ChildAdded:Connect(function(child: Instance)
 	if child.Name == "Main" then

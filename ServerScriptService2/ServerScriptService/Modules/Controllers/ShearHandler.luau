@@ -17,6 +17,8 @@ local PrestigeData = require(script.Parent.Parent.Constants.PrestigeData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
+local AnnouncementHandler = require(script.Parent.AnnouncementHandler)
+local GemHandler = require(script.Parent.GemHandler)
 local IndexHandler = require(script.Parent.IndexHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local SheepHandler = require(script.Parent.SheepHandler)
@@ -117,6 +119,7 @@ local function updateBestFind(player: Player, sheepType: any)
 	local currentInfo = if type(current) == "string" then SheepData.Sheep[current] else nil
 	if not currentInfo or info.chance < currentInfo.chance then
 		PlayerDataHandler.set(player, "BestFind", sheepType)
+		AnnouncementHandler.bestFind(player, sheepType)
 	end
 end
 
@@ -153,7 +156,7 @@ local function payHit(player: Player, sheep: Model, health: number, newHealth: n
 	}
 end
 
--- The sheep is bare: count it, add it to the Index and have it vanish a second later.
+-- The sheep is bare: count it, add it to the Index, roll its Gem drop and have it vanish a second later.
 local function finishSheep(player: Player, sheep: Model, sheepId: number)
 	local sheepType = sheep:GetAttribute("SheepType")
 
@@ -161,6 +164,7 @@ local function finishSheep(player: Player, sheep: Model, sheepId: number)
 	updateBestFind(player, sheepType)
 	IndexHandler.discover(player, sheepType)
 	PlayerDataHandler.increment(player, "SheepShearedCount", 1)
+	GemHandler.rollSheepDrop(player)
 end
 
 --[[

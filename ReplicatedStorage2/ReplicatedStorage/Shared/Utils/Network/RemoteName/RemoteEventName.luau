@@ -45,6 +45,8 @@ export type EnumType = "ShearSwing"
 	| "AbilityState"
 	| "CrookPickUp"
 	| "CrookRelease"
+	| "ServerAnnouncement"
+	| "GemFound"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	ShearSwing = "ShearSwing",
@@ -83,6 +85,8 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	AbilityState = "AbilityState",
 	CrookPickUp = "CrookPickUp",
 	CrookRelease = "CrookRelease",
+	ServerAnnouncement = "ServerAnnouncement",
+	GemFound = "GemFound",
 }
 
 return RemoteEventName

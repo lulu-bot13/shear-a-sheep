@@ -24,6 +24,8 @@ local abilityModules = script.Parent.Parent.Abilities
 local REQUEST_COOLDOWN = 0.25
 local ACTIVE_ATTRIBUTE = "ActiveAbility" -- the running ability's id, nil when none
 local READY_AT_ATTRIBUTE = "AbilityReadyAt" -- server time the ability can be used again
+local CARRY_ATTRIBUTE = "CarryingSheep" -- set by SheepCarryHandler while a sheep is carried
+local CROOK_NAME = "ShepherdsCrook"
 local SPEED_ATTRIBUTE = "AbilitySpeedMultiplier" -- read by UpgradeHandler.applyWalkSpeed
 
 type AbilityModule = {
@@ -78,6 +80,10 @@ end
 local function onUseAbility(player: Player, aim: any)
 	local now = os.clock()
 	if now < (readyAt[player] or 0) or player:GetAttribute(ACTIVE_ATTRIBUTE) or not AbilityUtil.isAlive(player) then
+		return
+	end
+	-- No abilities while the crook is out or a sheep is being carried.
+	if player:GetAttribute(CARRY_ATTRIBUTE) ~= nil or (player.Character and player.Character:FindFirstChild(CROOK_NAME)) then
 		return
 	end
 

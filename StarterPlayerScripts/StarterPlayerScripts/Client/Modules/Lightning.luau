@@ -10,9 +10,11 @@ local lighting = game:GetService("Lighting")
 local soundService = game:GetService("SoundService")
 local tweenService = game:GetService("TweenService")
 
+--// Sounds
+local weatherSounds = soundService:WaitForChild("Weather", 10)
+local thunderSfx = if weatherSounds then weatherSounds:FindFirstChild("ThunderStrike") :: Sound? else nil
+
 --// Configs
-local THUNDER_SOUND_ID = "" -- thunder clap; empty plays no sound
-local THUNDER_VOLUME = 0.8
 local THUNDER_DELAY = 0.35 -- seconds after the flash, so it feels a little way off
 
 local SEGMENT_COUNT = 9
@@ -71,16 +73,6 @@ local flash = Instance.new("ColorCorrectionEffect")
 flash.Name = "LightningFlash"
 flash.Brightness = 0
 flash.Parent = lighting
-
-local thunder: Sound? = nil
-if THUNDER_SOUND_ID ~= "" then
-	local sound = Instance.new("Sound")
-	sound.Name = "Thunder"
-	sound.SoundId = THUNDER_SOUND_ID
-	sound.Volume = THUNDER_VOLUME
-	sound.Parent = soundService
-	thunder = sound
-end
 
 --// State
 local strikeToken = 0
@@ -141,10 +133,11 @@ function Lightning.strike(target: Vector3)
 		lightTween:Play()
 	end)
 
-	local sound = thunder
-	if sound then
+	-- PlayLocalSound plays a fresh copy, so back-to-back strikes overlap instead of cutting each other off.
+	local sound = thunderSfx
+	if sound and sound:IsA("Sound") then
 		task.delay(THUNDER_DELAY, function()
-			sound:Play()
+			soundService:PlayLocalSound(sound)
 		end)
 	end
 end

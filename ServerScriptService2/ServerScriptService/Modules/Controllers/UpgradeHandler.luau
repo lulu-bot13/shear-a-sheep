@@ -27,8 +27,15 @@ local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 local PURCHASE_COOLDOWN = 0.25
 local STATE_REQUEST_COOLDOWN = 0.5
 local STATE_KEYS = { MaxSheep = true, MoreWoolLevel = true, SpeedLevel = true, DamageLevel = true, RespawnLevel = true, ShearId = true } -- data the cards show
+local MAX_LEVELS_PER_PURCHASE = 100 -- caps MAX on upgrades with no limit; costs grow x1.55+ a level, so 100 is past any wool total
 
--- One card in the UpgradeShop. `after` and `cost` are nil once the upgrade is maxed.
+-- One more level of an upgrade: its price and the value once it's bought.
+export type Step = {
+	cost: number,
+	after: string,
+}
+
+-- One card in the UpgradeShop. `after` and `cost` are nil (and `steps` empty) once the upgrade is maxed.
 export type CardState = {
 	id: string,
 	title: string,
@@ -38,6 +45,7 @@ export type CardState = {
 	before: string,
 	after: string?,
 	cost: number?,
+	steps: { Step }, -- the next levels in order, so the client can preview MAX against its wool as it changes
 }
 
 local UpgradeHandler = {}
@@ -79,6 +87,15 @@ local function getLevel(player: Player, id: string): number?
 	return if level < (info.maxLevel or math.huge) then level else nil
 end
 
+-- Levels still to buy, at most MAX_LEVELS_PER_PURCHASE (Capacity stops at FarmData.MaxSheepCap, the rest at their maxLevel).
+local function getLevelsLeft(player: Player, id: string): number
+	local info = UpgradeData.Upgrades[id]
+	local left = if id == "Capacity"
+		then FarmData.MaxSheepCap - getNumber(player, "MaxSheep")
+		else (info and info.maxLevel or math.huge) - getBoughtLevel(player, id)
+	return math.clamp(left, 0, MAX_LEVELS_PER_PURCHASE)
+end
+
 -- Base damage of the player's equipped shear.
 local function getShearBaseDamage(player: Player): number
 	local shear = ShearData.get(PlayerDataHandler.get(player, "ShearId")) or ShearData.Shears[1]
@@ -96,17 +113,17 @@ end
 
 local applyWalkSpeed = UpgradeHandler.applyWalkSpeed
 
-local function applyUpgrade(player: Player, id: string, level: number)
+local function applyUpgrade(player: Player, id: string, level: number, count: number)
 	if id == "Capacity" then
-		PlayerDataHandler.increment(player, "MaxSheep", 1)
+		PlayerDataHandler.increment(player, "MaxSheep", count)
 	elseif id == "MoreWool" then
-		PlayerDataHandler.set(player, "MoreWoolLevel", level + 1)
+		PlayerDataHandler.set(player, "MoreWoolLevel", level + count)
 	elseif id == "FasterSpeed" then
-		PlayerDataHandler.set(player, "SpeedLevel", level + 1)
+		PlayerDataHandler.set(player, "SpeedLevel", level + count)
 	elseif id == "ShearDamage" then
-		PlayerDataHandler.set(player, "DamageLevel", level + 1)
+		PlayerDataHandler.set(player, "DamageLevel", level + count)
 	elseif id == "FasterRespawn" then
-		PlayerDataHandler.set(player, "RespawnLevel", level + 1)
+		PlayerDataHandler.set(player, "RespawnLevel", level + count)
 	end
 end
 
@@ -120,28 +137,48 @@ local function formatMultiplier(value: number): string
 	return "x" .. (string.format("%.2f", value):gsub("%.?0+$", ""))
 end
 
--- The value the upgrade changes, now and after one more level (nil when maxed).
-local function getValues(player: Player, id: string, level: number?): (string, string?)
+-- The value the upgrade changes, `extra` levels past what the player has now (0 = their current value).
+local function getValue(player: Player, id: string, extra: number): string
 	if id == "Capacity" then
-		local maxSheep = getNumber(player, "MaxSheep")
-		return tostring(maxSheep), if level then tostring(maxSheep + 1) else nil
+		return tostring(getNumber(player, "MaxSheep") + extra)
 	elseif id == "MoreWool" then
-		local current = getNumber(player, "MoreWoolLevel")
-		return formatMultiplier(UpgradeData.getMoreWoolMultiplier(current)),
-			formatMultiplier(UpgradeData.getMoreWoolMultiplier(current + 1))
+		return formatMultiplier(UpgradeData.getMoreWoolMultiplier(getNumber(player, "MoreWoolLevel") + extra))
 	elseif id == "ShearDamage" then
-		local current = getNumber(player, "DamageLevel")
-		local baseDamage = getShearBaseDamage(player)
-		return tostring(UpgradeData.getShearDamage(baseDamage, current)),
-			tostring(UpgradeData.getShearDamage(baseDamage, current + 1))
+		return tostring(UpgradeData.getShearDamage(getShearBaseDamage(player), getNumber(player, "DamageLevel") + extra))
 	elseif id == "FasterRespawn" then
-		local current = getNumber(player, "RespawnLevel")
-		return formatSeconds(UpgradeData.getSpawnInterval(FarmData.SpawnInterval, current)),
-			formatSeconds(UpgradeData.getSpawnInterval(FarmData.SpawnInterval, current + 1))
+		return formatSeconds(UpgradeData.getSpawnInterval(FarmData.SpawnInterval, getNumber(player, "RespawnLevel") + extra))
 	else
-		local current = getNumber(player, "SpeedLevel")
-		return tostring(UpgradeData.getWalkSpeed(current)), tostring(UpgradeData.getWalkSpeed(current + 1))
+		return tostring(UpgradeData.getWalkSpeed(getNumber(player, "SpeedLevel") + extra))
 	end
+end
+
+-- The price and resulting value of each level still to buy, in order, up to MAX_LEVELS_PER_PURCHASE.
+local function getSteps(player: Player, id: string, level: number?): { Step }
+	local steps: { Step } = {}
+	if not level then
+		return steps
+	end
+	for extra = 1, getLevelsLeft(player, id) do
+		local cost = UpgradeData.getCost(id, level + extra - 1)
+		if not cost then
+			break
+		end
+		table.insert(steps, { cost = cost, after = getValue(player, id, extra) })
+	end
+	return steps
+end
+
+-- How many of the next levels `wool` covers (at most `limit`) and what they cost together.
+local function getAffordable(steps: { Step }, wool: number, limit: number): (number, number)
+	local count, total = 0, 0
+	for index = 1, math.min(#steps, limit) do
+		local nextTotal = total + steps[index].cost
+		if nextTotal > wool then
+			break
+		end
+		count, total = index, nextTotal
+	end
+	return count, total
 end
 
 -- Every card's title, before -> after values and next price, in shop order.
@@ -154,8 +191,8 @@ function UpgradeHandler.getState(player: Player): { CardState }
 			continue
 		end
 
-		local level = getLevel(player, id)
-		local before, after = getValues(player, id, level)
+		local steps = getSteps(player, id, getLevel(player, id))
+		local nextStep = steps[1]
 
 		table.insert(state, {
 			id = id,
@@ -163,9 +200,10 @@ function UpgradeHandler.getState(player: Player): { CardState }
 			icon = info.icon,
 			level = getBoughtLevel(player, id),
 			maxLevel = if id == "Capacity" then FarmData.MaxSheepCap - FarmData.StartingMaxSheep else info.maxLevel,
-			before = before,
-			after = if level then after else nil,
-			cost = if level then UpgradeData.getCost(id, level) else nil,
+			before = getValue(player, id, 0),
+			after = if nextStep then nextStep.after else nil,
+			cost = if nextStep then nextStep.cost else nil,
+			steps = steps,
 		})
 	end
 	return state
@@ -180,28 +218,32 @@ end
 --// Purchasing ------------------------------------------------------------------------------
 
 --[[
-	Buys one level of an upgrade with wool. Returns true on success, or false plus a reason
-	("NotLoaded", "Unknown", "Maxed" or "NoWool"). Works from anywhere: the HUD button opens the shop too.
+	Buys one level of an upgrade with wool, or with `amount` "max" as many as the player can afford, paid in one go.
+	Returns true and the levels bought, or false plus a reason ("NotLoaded", "Unknown", "Maxed" or "NoWool").
+	Works from anywhere: the HUD button opens the shop too.
 ]]
-function UpgradeHandler.purchase(player: Player, id: any): (boolean, string?)
+function UpgradeHandler.purchase(player: Player, id: any, amount: any): (boolean, string?, number?)
 	if not PlayerDataHandler.getData(player) then
-		return false, "NotLoaded"
+		return false, "NotLoaded", nil
 	end
 	if type(id) ~= "string" or not UpgradeData.Upgrades[id] then
-		return false, "Unknown"
+		return false, "Unknown", nil
 	end
 
 	local level = getLevel(player, id)
-	local cost = level and UpgradeData.getCost(id, level)
-	if not level or not cost then
-		return false, "Maxed"
-	end
-	if not PlayerDataHandler.spend(player, "Wool", cost) then
-		return false, "NoWool"
+	local steps = getSteps(player, id, level)
+	if not level or #steps == 0 then
+		return false, "Maxed", nil
 	end
 
-	applyUpgrade(player, id, level)
-	return true, nil
+	-- Anything but "max" (the client's to send) buys a single level.
+	local count, cost = getAffordable(steps, getNumber(player, "Wool"), if amount == "max" then #steps else 1)
+	if count == 0 or not PlayerDataHandler.spend(player, "Wool", cost) then
+		return false, "NoWool", nil
+	end
+
+	applyUpgrade(player, id, level, count)
+	return true, nil, count
 end
 
 --// Seller ------------------------------------------------------------------------
@@ -289,10 +331,10 @@ end
 function UpgradeHandler.Start()
 	network.waitUntilReadyAsync()
 
-	network.connectEvent(network.RemoteEvents.PurchaseUpgrade, function(player: Player, id: any)
-		local success, reason = UpgradeHandler.purchase(player, id)
+	network.connectEvent(network.RemoteEvents.PurchaseUpgrade, function(player: Player, id: any, amount: any)
+		local success, reason, count = UpgradeHandler.purchase(player, id, amount)
 		local level = if success then getBoughtLevel(player, id) else nil
-		network.fireClient(network.RemoteEvents.UpgradeResult, player, id, success, reason, level)
+		network.fireClient(network.RemoteEvents.UpgradeResult, player, id, success, reason, level, count)
 	end, { network.Middleware.RateLimit(PURCHASE_COOLDOWN) })
 
 	network.connectEvent(network.RemoteEvents.RequestUpgradeState, pushState, {
