@@ -14,6 +14,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
+local Analytics = require(script.Parent.Analytics)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local PlotHandler = require(script.Parent.PlotHandler)
 local PodiumBonusHandler = require(script.Parent.PodiumBonusHandler)
@@ -301,6 +302,7 @@ local function onPodiumTriggered(prompt: ProximityPrompt, player: Player)
 	displayed[prompt] = nil
 	display(prompt, sheep)
 	savePodium(player, prompt, sheep)
+	Analytics.podiumPlaced(player, sheep:GetAttribute("SheepType"))
 
 	if previous and previous.Parent then
 		carry(player, previous, "Podium")
@@ -363,6 +365,7 @@ local function onPickUp(player: Player, sheep: any)
 	local root = getRoot(sheep)
 	if type(id) ~= "number" or SheepHandler.getSheep(id) ~= sheep or SheepHandler.getOwnerId(sheep) ~= player.UserId
 		or type(health) ~= "number" or health <= 0 or sheep:GetAttribute("Rising") or not playerRoot or not root
+		or sheep:GetAttribute("Boss") or sheep:GetAttribute("Minion") -- Reapers can't be saved to a podium
 		or (root.Position - playerRoot.Position).Magnitude > PICK_UP_RANGE
 	then
 		return

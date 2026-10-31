@@ -35,6 +35,8 @@ export type Announcement = {
 	itemName: string,
 	robuxCost: number,
 	recipientName: string,
+} | {
+	kind: "ReaperRaid",
 }
 
 local AnnouncementHandler = {}
@@ -72,6 +74,11 @@ function AnnouncementHandler.prestige(player: Player, previous: number, new: num
 	if new > previous then
 		announce({ kind = "Prestige", userName = player.Name, previous = previous, new = new })
 	end
+end
+
+-- The Night event's King Reaper has risen in every farm.
+function AnnouncementHandler.reaperRaid()
+	announce({ kind = "ReaperRaid" })
 end
 
 -- Not wired up yet: call from a future MarketplaceService.ProcessReceipt once a gift purchase is granted.

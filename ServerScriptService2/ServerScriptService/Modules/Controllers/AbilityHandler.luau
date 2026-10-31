@@ -14,6 +14,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local network = require(replicatedStorage.Shared.Utils.Network)
 local AbilityData = require(script.Parent.Parent.Constants.AbilityData)
 local AbilityUtil = require(script.Parent.Parent.Abilities.AbilityUtil)
+local Analytics = require(script.Parent.Analytics)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local UpgradeHandler = require(script.Parent.UpgradeHandler)
 
@@ -95,6 +96,7 @@ local function onUseAbility(player: Player, aim: any)
 	end
 
 	task.spawn(runAbility, player, ability, abilityModule, if typeof(aim) == "Vector3" then aim else nil)
+	Analytics.abilityUsed(player, ability.id)
 end
 
 function AbilityHandler.Start()

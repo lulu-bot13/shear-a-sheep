@@ -12,6 +12,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
+local Analytics = require(script.Parent.Analytics)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 
 --// Configs
@@ -194,6 +195,7 @@ local function onPurchaseShear(player: Player, id: any)
 	addOwned(player, info.id)
 	setShear(player, info.id)
 	reply(player, info.id, true, nil)
+	Analytics.shearBought(player, info.id, info.price)
 end
 
 -- Switches to a shear the player already owns.

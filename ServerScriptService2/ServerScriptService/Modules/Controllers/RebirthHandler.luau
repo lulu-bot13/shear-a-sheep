@@ -13,6 +13,7 @@ local players = game:GetService("Players")
 --// Modules
 local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
+local Analytics = require(script.Parent.Analytics)
 local AnnouncementHandler = require(script.Parent.AnnouncementHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 
@@ -142,6 +143,7 @@ function RebirthHandler.rebirth(player: Player, amount: Amount?): (boolean, stri
 
 	rebirthing[player] = nil
 	AnnouncementHandler.rebirth(player, state.rebirths, state.rebirths + state.amountCount)
+	Analytics.rebirthed(player, state.rebirths + state.amountCount, state.amountCount, state.amountCost)
 	return true, nil, state.amountCount
 end
 

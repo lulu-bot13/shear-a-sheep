@@ -11,6 +11,7 @@
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
+local runService = game:GetService("RunService")
 
 --// Modules
 local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
@@ -65,6 +66,7 @@ local FULL_HUD_SIZE_TIER = "Tiny" -- SheepSizeData tier whose billboards stay fu
 local HEALTH_FULL_COLOR = Color3.fromRGB(110, 220, 120)
 local HEALTH_EMPTY_COLOR = Color3.fromRGB(230, 90, 80)
 local WALK_MIN_SPEED = 0.1 -- below this the sheep counts as standing still
+local IDLE_FADE_SECONDS = 0.2
 local TAIL_PART_NAME = "Tail" -- used for tail VFX when the model has one; otherwise the back of the Torso
 local HUGE_TIER = "Huge" -- fresh spawns of this tier wait out the HugeSpawnVFX windup before appearing
 local HUGE_WINDUP_SECONDS = if type(hugeWindup) == "number" then hugeWindup else 0.7
@@ -77,7 +79,18 @@ local SHEEP_POOL = "SheepModel" -- keyed by sheep type name, since meshes differ
 local HUD_POOL = "SheepHUD"
 local HUD_KEY = "SheepHUD"
 
+-- Rolls spawnSheep skips: a fixed type and SheepSizeData tier, and no mutation.
+export type ForcedSpawn = {
+	sheepType: string?,
+	size: string?,
+	noMutation: boolean?,
+}
+
+type SheepTracks = { walk: AnimationTrack, idle: AnimationTrack? }
+
 --// State
+local tracksBySheep: { [Model]: SheepTracks } = {} -- cleared when the model is destroyed
+local idleAnimations: { [string]: Animation } = {} -- by animation id
 local sheepById: { [number]: Model } = {}
 local woolConnections: { [number]: RBXScriptConnection } = {}
 local countByOwner: { [number]: number? } = {}
@@ -118,6 +131,44 @@ local function createVariantModels()
 	end
 end
 
+-- Studio only: warns about Studio-built sheep whose rig would break animations. Fixes nothing.
+local function checkSheepRigs()
+	local function check(model: Model)
+		local humanoid = model:FindFirstChildOfClass("Humanoid")
+		if not humanoid then
+			warn(`SheepRigCheck: {model:GetFullName()} has no Humanoid.`)
+		elseif not humanoid:FindFirstChildOfClass("Animator") then
+			warn(`SheepRigCheck: {model:GetFullName()} has no Animator in its Humanoid.`)
+		end
+		if not model.PrimaryPart then
+			warn(`SheepRigCheck: {model:GetFullName()} has no PrimaryPart.`)
+		end
+
+		local motorCount: { [BasePart]: number } = {}
+		for _, descendant in model:GetDescendants() do
+			if descendant:IsA("Motor6D") and descendant.Part1 then
+				motorCount[descendant.Part1] = (motorCount[descendant.Part1] or 0) + 1
+			end
+		end
+		for _, descendant in model:GetDescendants() do
+			if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" and motorCount[descendant] ~= 1 then
+				warn(`SheepRigCheck: {model:GetFullName()} part '{descendant.Name}' is Part1 of {motorCount[descendant] or 0} Motor6Ds (needs 1).`)
+			end
+		end
+	end
+
+	for _, folder in { sheepModels, sheepModels:FindFirstChild("BabySheeps") } do
+		for _, child in folder:GetChildren() do
+			if child:IsA("Model") then
+				check(child)
+			end
+		end
+	end
+end
+
+if runService:IsStudio() then
+	checkSheepRigs() -- before createVariantModels, so only models built in Studio are checked
+end
 createVariantModels()
 
 SheepHandler.CountChanged = Signal.new() -- (player, count)
@@ -428,7 +479,7 @@ local function updateHealthHud(sheep: Model)
 	local healthText = bar:FindFirstChild("HealthText") :: TextLabel
 
 	local sheepType = sheep:GetAttribute("SheepType")
-	local info = if type(sheepType) == "string" then SheepData.Sheep[sheepType] else nil
+	local info = if type(sheepType) == "string" then SheepData.getInfo(sheepType) else nil
 	nameLabel.Text = if info
 		then formatName(info.name, SheepSizeData.get(sheep:GetAttribute(SIZE_TIER)), info.baby)
 		else tostring(sheep:GetAttribute("SheepName") or "Sheep")
@@ -436,6 +487,89 @@ local function updateHealthHud(sheep: Model)
 	fill.Visible = ratio > 0
 	fill.BackgroundColor3 = HEALTH_EMPTY_COLOR:Lerp(HEALTH_FULL_COLOR, ratio)
 	healthText.Text = `{math.ceil(health)} / {maxHealth}`
+end
+
+--// Animation -----------------------------------------------------------------------------
+
+local function getIdleAnimation(sheepType: string): Animation?
+	local id = SheepData.getIdleAnimation(sheepType)
+	if not id then
+		return nil
+	end
+	local animation = idleAnimations[id]
+	if not animation then
+		animation = Instance.new("Animation")
+		animation.AnimationId = id
+		idleAnimations[id] = animation
+	end
+	return animation
+end
+
+-- The sheep's walk and idle tracks, loaded once it is in the game and kept until the model is destroyed.
+local function getTracks(sheep: Model): SheepTracks?
+	local cached = tracksBySheep[sheep]
+	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
+	if cached or not humanoid or not sheep:IsDescendantOf(workspace) then
+		return cached
+	end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator")
+	animator.Parent = humanoid
+	local walk = animator:LoadAnimation(walkAnimation)
+	walk.Looped = true
+
+	local sheepType = sheep:GetAttribute("SheepType")
+	local idleAnimation = if type(sheepType) == "string" then getIdleAnimation(sheepType) else nil
+	local idle = if idleAnimation then animator:LoadAnimation(idleAnimation) else nil
+	if idle then
+		idle.Looped = true
+		idle.Priority = Enum.AnimationPriority.Idle
+	end
+
+	local tracks = { walk = walk, idle = idle }
+	tracksBySheep[sheep] = tracks
+	return tracks
+end
+
+-- Loops SheepWalking while the sheep moves faster than WALK_MIN_SPEED; otherwise its idle fades in.
+local function updateAnimation(sheep: Model, speed: number)
+	local tracks = getTracks(sheep)
+	if not tracks then
+		return
+	end
+
+	local walking = speed > WALK_MIN_SPEED
+	if walking and not tracks.walk.IsPlaying then
+		tracks.walk:Play()
+	elseif not walking and tracks.walk.IsPlaying then
+		tracks.walk:Stop()
+	end
+
+	local idle = tracks.idle
+	if idle and walking and idle.IsPlaying then
+		idle:Stop(IDLE_FADE_SECONDS)
+	elseif idle and not walking and not idle.IsPlaying then
+		idle:Play(IDLE_FADE_SECONDS)
+	end
+end
+
+local function stopAnimations(sheep: Model)
+	local tracks = tracksBySheep[sheep]
+	if tracks then
+		tracks.walk:Stop(0)
+		if tracks.idle then
+			tracks.idle:Stop(0)
+		end
+	end
+end
+
+local function bindAnimations(sheep: Model, humanoid: Humanoid)
+	humanoid.Running:Connect(function(speed: number)
+		updateAnimation(sheep, speed)
+	end)
+	sheep.Destroying:Once(function()
+		tracksBySheep[sheep] = nil
+	end)
 end
 
 --// Pooling -------------------------------------------------------------------------------
@@ -462,11 +596,13 @@ local function resetSheepForPool(sheep: Instance)
 	sheep:SetAttribute(OWNER_ATTRIBUTE, nil)
 	sheep:SetAttribute("Grazing", nil)
 	sheep:SetAttribute(RISING, nil)
+	sheep:SetAttribute("TutorialSheep", nil) -- TutorialHandler's override must not follow the pooled model to a normal spawn
 
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
 	if humanoid then
 		humanoid.WalkSpeed = 0
 	end
+	stopAnimations(sheep :: Model)
 
 	if root then
 		local hud = root:FindFirstChild("SheepHUD")
@@ -596,26 +732,6 @@ end
 
 --// Building a sheep -------------------------------------------------------------------
 
--- Loops SheepWalking while the sheep moves. The track loads on its first move, once the model is in the game.
-local function bindWalkAnimation(humanoid: Humanoid)
-	local track: AnimationTrack? = nil
-	humanoid.Running:Connect(function(speed: number)
-		if not track then
-			local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator")
-			animator.Parent = humanoid
-			track = animator:LoadAnimation(walkAnimation)
-		end
-		local walkTrack = track :: AnimationTrack
-		walkTrack.Looped = true
-
-		if speed > WALK_MIN_SPEED and not walkTrack.IsPlaying then
-			walkTrack:Play()
-		elseif speed <= WALK_MIN_SPEED and walkTrack.IsPlaying then
-			walkTrack:Stop()
-		end
-	end)
-end
-
 --[[
 	The collision group, health bar and walk animation are set up once per model; pooled models keep them.
 	Only the invisible root collides: the camera pops in front of any opaque collidable part, and players stand
@@ -634,7 +750,7 @@ local function prepareNewModel(sheepModel: Model, root: BasePart)
 		end
 	end
 	createHealthHud(root)
-	bindWalkAnimation(sheepModel:FindFirstChildOfClass("Humanoid") :: Humanoid)
+	bindAnimations(sheepModel, sheepModel:FindFirstChildOfClass("Humanoid") :: Humanoid)
 end
 
 local function acquireModel(sheepType: string): Model?
@@ -739,6 +855,7 @@ function SheepHandler.returnSheep(player: Player, sheep: Model, position: Vector
 	pcall(function()
 		root:SetNetworkOwner(nil)
 	end)
+	updateAnimation(sheep, 0) -- carrying stopped every track
 
 	updateHealthHud(sheep)
 	woolConnections[id] = sheep:GetAttributeChangedSignal("ShearHealth"):Connect(function()
@@ -755,15 +872,18 @@ end
 	Halloween sheep can only roll when `halloween` is true. Returns the sheep and its id, or nil if it couldn't be spawned.
 	A Huge sheep is counted at once but only registered and shown after the HugeSpawnVFX windup; during Halloween every
 	sheep (Huge too) instead rises out of a pit and is registered once it is out.
+	`forced` skips the rolls it sets (the tutorial's first sheep).
 ]]
-function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number, rebirths: number, prestiges: number, luckBoost: number?, halloween: boolean?): (Model?, number?)
+function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number, rebirths: number, prestiges: number, luckBoost: number?, halloween: boolean?, forced: ForcedSpawn?): (Model?, number?)
 	local sheepFolder = getSheepFolder(player)
 	if not sheepFolder then
 		return nil, nil
 	end
 
-	local sheepType = SheepData.roll(luck, rebirths, prestiges, random, luckBoost, halloween)
-	local info = sheepType and SheepData.Sheep[sheepType]
+	local sheepType = if forced and forced.sheepType and SheepData.getInfo(forced.sheepType)
+		then forced.sheepType
+		else SheepData.roll(luck, rebirths, prestiges, random, luckBoost, halloween)
+	local info = sheepType and SheepData.getInfo(sheepType)
 	if not sheepType or not info then
 		return nil, nil
 	end
@@ -776,8 +896,8 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 	local root = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
 	local oddsText = SheepData.getOddsText(sheepType, luck, rebirths, prestiges, luckBoost, halloween)
 
-	local size = SheepSizeData.roll(random)
-	local mutation = MutationData.roll(random)
+	local size = (forced and SheepSizeData.get(forced.size)) or SheepSizeData.roll(random)
+	local mutation = if forced and forced.noMutation then nil else MutationData.roll(random)
 	local variant = SheepData.getVariant(sheepType)
 	local weight, weightWool = SheepSizeData.rollWeight(size, if variant then variant.weight else 1, random)
 	local lift = scaleModel(sheepModel, size.scale)
@@ -833,6 +953,7 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 		pcall(function()
 			root:SetNetworkOwner(nil)
 		end)
+		updateAnimation(sheepModel, 0) -- stands idle until its first walk
 
 		-- Shearing only ever changes ShearHealth; the wool and health bar follow it.
 		woolConnections[id] = sheepModel:GetAttributeChangedSignal("ShearHealth"):Connect(function()

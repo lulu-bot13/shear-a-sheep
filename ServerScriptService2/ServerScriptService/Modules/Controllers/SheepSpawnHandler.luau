@@ -82,11 +82,11 @@ local function applyCharge(sheep: Model)
 	end
 end
 
-local function spawnOne(player: Player): boolean
+local function spawnSheep(player: Player, forced: SheepHandler.ForcedSpawn?): Model?
 	local plot = activePlots[player]
 	local position = plot and SheepWanderHandler.getSpawnPosition(plot)
 	if not position then
-		return false
+		return nil
 	end
 
 	local sheep = SheepHandler.spawnSheep(
@@ -96,14 +96,17 @@ local function spawnOne(player: Player): boolean
 		getNumber(player, "Rebirths"),
 		getNumber(player, "Prestiges"),
 		WeatherHandler.getLuckMultiplier() * PodiumBonusHandler.getLuckMultiplier(player),
-		WeatherHandler.isHalloween()
+		WeatherHandler.isHalloween(),
+		forced
 	)
-	if not sheep then
-		return false
+	if sheep and not forced then
+		applyCharge(sheep)
 	end
+	return sheep
+end
 
-	applyCharge(sheep)
-	return true
+local function spawnOne(player: Player): boolean
+	return spawnSheep(player) ~= nil
 end
 
 -- Spawns sheep until the farm holds `target` (capped at the player's capacity).
@@ -145,6 +148,11 @@ local function stopFarm(player: Player)
 end
 
 --// Public API ------------------------------------------------------------------------
+
+-- Drops one extra sheep with the given type / size on the player's farm, even past capacity; nil until their farm is running.
+function SheepSpawnHandler.spawnForced(player: Player, forced: SheepHandler.ForcedSpawn): Model?
+	return spawnSheep(player, forced)
+end
 
 -- Clears the player's sheep and fills the farm back to full capacity (used after a Prestige).
 function SheepSpawnHandler.resetFarm(player: Player)

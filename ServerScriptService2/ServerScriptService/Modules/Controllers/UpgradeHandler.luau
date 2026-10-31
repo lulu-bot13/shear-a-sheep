@@ -17,6 +17,7 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
+local Analytics = require(script.Parent.Analytics)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local PlotHandler = require(script.Parent.PlotHandler)
 
@@ -243,6 +244,7 @@ function UpgradeHandler.purchase(player: Player, id: any, amount: any): (boolean
 	end
 
 	applyUpgrade(player, id, level, count)
+	Analytics.upgraded(player, id, level + count, count, cost)
 	return true, nil, count
 end
 

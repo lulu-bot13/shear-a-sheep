@@ -36,6 +36,7 @@ sheepStyle.MoodByRarity = {
 	Epic = "Proud",
 	Legendary = "Majestic",
 	Mythic = "Fierce",
+	Boss = "Fierce",
 }
 
 local DEFAULT_MOOD = "Calm"

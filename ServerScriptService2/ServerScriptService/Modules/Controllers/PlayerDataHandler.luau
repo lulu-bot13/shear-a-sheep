@@ -54,7 +54,7 @@ export type Data = {
 
 local function getDefaultData(): Data
 	return {
-		Wool = 100, -- starter wool: after the tutorial's More Wool upgrade it covers ~85% of the first rebirth
+		Wool = 100, -- starter wool: with the tutorial's first 3 sheep it pays for its 3 upgrades in one shop visit
 		Luck = 0,
 		Gems = 0,
 		MaxSheep = FarmData.StartingMaxSheep,

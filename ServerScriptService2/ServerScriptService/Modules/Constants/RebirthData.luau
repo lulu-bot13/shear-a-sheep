@@ -11,7 +11,7 @@
 local rebirthData = {}
 
 rebirthData.MAX_REBIRTHS = 25
-rebirthData.FIRST_COST = 120 -- the tutorial's rebirth: 100 starter wool left after More Wool, then the 5th sheep sheared covers it
+rebirthData.FIRST_COST = 200 -- the tutorial's rebirth: ~15 wool is left after its 3 upgrades, then ~20s of shearing at More Wool x1.5 covers it
 rebirthData.COST_BASE = 1250 -- rebirth N (N >= 2) costs COST_BASE * COST_GROWTH ^ (N - 1)
 rebirthData.COST_GROWTH = 1.4
 rebirthData.REBIRTH_LUCK_PER = 0.04 -- luck factor is multiplied by 1 + this * rebirths

@@ -21,6 +21,7 @@ export type SheepInfo = {
 	variant: string?, -- "Baby" or "Giant" for a copy of an adult type (see Variants); nil = the adult itself
 	adult: string?, -- variants only: the adult type it's a copy of
 	halloween: boolean?, -- only spawns during Halloween mode (Night)
+	idleAnimation: string?, -- its own looped idle; nil = the adult/baby default in IdleAnimations
 	rarity: string,
 	color: Color3,
 	chance: number, -- base spawn weight (before luck)
@@ -373,6 +374,7 @@ for _, key in adultKeys do
 			variant = variant.id,
 			adult = key,
 			halloween = base.halloween,
+			idleAnimation = if variant.id == "Baby" then nil else base.idleAnimation, -- babies are a different rig
 			rarity = base.rarity,
 			color = base.color,
 			chance = base.chance * variant.share,
@@ -380,6 +382,59 @@ for _, key in adultKeys do
 		adultShare -= variant.share
 	end
 	base.chance *= adultShare
+end
+
+--[[
+	The Night event's Reapers (ReaperEventHandler spawns them; tuned for a ~10 minute player, Large Shears at 51 damage:
+	King ~59 swings / 20 s, Small ~3 swings). Never rolled, and not in the Index, variants or best finds.
+]]
+sheepData.Bosses = {
+	KingReaper = {
+		id = "King_Reaper",
+		name = "King Reaper",
+		ShearHealth = 3000,
+		WoolAmount = 600,
+		LuckAmount = 60,
+		halloween = true,
+		idleAnimation = "rbxassetid://110116382654217",
+		rarity = "Boss",
+		color = Color3.fromRGB(88, 28, 135),
+		chance = 0,
+	},
+	SmallReaper = {
+		id = "Small_Reaper",
+		name = "Small Reaper",
+		ShearHealth = 150,
+		WoolAmount = 30,
+		LuckAmount = 4,
+		baby = true, -- built on the baby rig
+		halloween = true,
+		idleAnimation = "rbxassetid://134593521798711",
+		rarity = "Minion",
+		color = Color3.fromRGB(75, 85, 99),
+		chance = 0,
+	},
+} :: { [string]: SheepInfo }
+
+-- A sheep type or boss by model name.
+function sheepData.getInfo(name: string): SheepInfo?
+	return sheepData.Sheep[name] or sheepData.Bosses[name]
+end
+
+-- Looped idles (4 s, priority Idle). "" = not published yet, so that sheep stands without one.
+sheepData.IdleAnimations = {
+	Adult = "rbxassetid://78449727128378", -- Sheep_Idle
+	Baby = "", -- BabySheep_Idle
+}
+
+-- The idle animation id for a sheep model name, or nil if it has none.
+function sheepData.getIdleAnimation(name: string): string?
+	local info = sheepData.getInfo(name)
+	if not info then
+		return nil
+	end
+	local id = info.idleAnimation or (if info.baby then sheepData.IdleAnimations.Baby else sheepData.IdleAnimations.Adult)
+	return if id ~= "" then id else nil
 end
 
 -- The Baby/Giant variant a sheep type is; nil for an adult or an unknown type.
@@ -451,6 +506,9 @@ function sheepData.getOdds(name: string, luck: number, rebirths: number, prestig
 end
 
 function sheepData.getOddsText(name: string, luck: number, rebirths: number, prestiges: number, boost: number?, halloween: boolean?): string
+	if sheepData.Bosses[name] then
+		return "Night Event"
+	end
 	local odds = sheepData.getOdds(name, luck, rebirths, prestiges, boost, halloween)
 	return if odds then `1 in {odds}` else "1 in ?"
 end

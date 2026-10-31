@@ -15,6 +15,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local network = require(replicatedStorage.Shared.Utils.Network)
 local MutationData = require(script.Parent.Parent.Constants.MutationData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
+local Analytics = require(script.Parent.Analytics)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local WeatherHandler = require(script.Parent.WeatherHandler)
 
@@ -95,6 +96,7 @@ function IndexHandler.discover(player: Player, sheepType: any, sheep: Model?)
 	if getIndex(player)[sheepType] == nil then
 		setStatus(player, sheepType, FOUND)
 		local info = SheepData.Sheep[sheepType]
+		Analytics.sheepDiscovered(player, sheepType, info.rarity)
 		local weight = if sheep then sheep:GetAttribute("Weight") else nil
 		local mutation = if sheep then MutationData.get(sheep:GetAttribute(MutationData.Attribute)) else nil
 		network.fireClient(network.RemoteEvents.SheepUnlocked, player, sheepType, info.name, info.rarity, info.color,
@@ -124,6 +126,7 @@ function IndexHandler.claim(player: Player, sheepType: any): (boolean, string?)
 
 	setStatus(player, sheepType, CLAIMED)
 	PlayerDataHandler.increment(player, "Luck", SheepData.getIndexLuck(sheepType))
+	Analytics.indexClaimed(player, 1, SheepData.getIndexLuck(sheepType))
 	return true, nil
 end
 
@@ -146,6 +149,7 @@ function IndexHandler.claimAll(player: Player): number
 	if count > 0 then
 		PlayerDataHandler.set(player, "SheepIndex", index)
 		PlayerDataHandler.increment(player, "Luck", luck)
+		Analytics.indexClaimed(player, count, luck)
 	end
 	return count
 end

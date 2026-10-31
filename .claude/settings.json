@@ -3,7 +3,9 @@
     "allow": [
       "Bash(grep -v -i \"\\\\.png$\")",
       "Read(//d/Vscode/shear-a-sheep/Constants/**)",
-      "Bash(awk -F'\"' '{print $2}')"
+      "Bash(awk -F'\"' '{print $2}')",
+      "Bash(cd \"D:/Vscode/shear-a-sheep/ServerScriptService2/ServerScriptService/Modules/Controllers\" && sed -n 745,758p SheepHandler.luau && sed -n 1,30p SheepSpawnHandler.luau && grep -n \"spawnSheep\\(\" -r .. | grep -v \"^../Controllers/SheepHandler.luau:759\")",
+      "Read(//d/Vscode/**)"
     ]
   }
 }

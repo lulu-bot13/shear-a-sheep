@@ -14,6 +14,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local network = require(replicatedStorage.Shared.Utils.Network)
 local AbilityData = require(script.Parent.Parent.Constants.AbilityData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
+local Analytics = require(script.Parent.Analytics)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local WeatherHandler = require(script.Parent.WeatherHandler)
 
@@ -194,6 +195,7 @@ function AbilityShackHandler.roll(player: Player, count: any?): RollResult
 		PlayerDataHandler.increment(player, "Gems", totalRefund)
 	end
 	PlayerDataHandler.set(player, "AbilityPity", pity)
+	Analytics.abilityRolled(player, AbilityData.RollCost * rolls, totalRefund, results)
 
 	return { success = true, results = results }
 end
@@ -222,6 +224,7 @@ function AbilityShackHandler.equip(player: Player, id: any): string?
 
 	if PlayerDataHandler.get(player, "AbilityEquipped") ~= ability.id then
 		PlayerDataHandler.set(player, "AbilityEquipped", ability.id)
+		Analytics.abilityEquipped(player, ability.id)
 	end
 	return nil
 end

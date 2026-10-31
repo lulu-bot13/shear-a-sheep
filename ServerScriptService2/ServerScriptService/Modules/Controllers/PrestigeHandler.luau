@@ -14,6 +14,7 @@ local players = game:GetService("Players")
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local PrestigeData = require(script.Parent.Parent.Constants.PrestigeData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
+local Analytics = require(script.Parent.Analytics)
 local AnnouncementHandler = require(script.Parent.AnnouncementHandler)
 local IndexHandler = require(script.Parent.IndexHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
@@ -120,6 +121,7 @@ function PrestigeHandler.prestige(player: Player, beforeFarmReset: ((prestiges: 
 
 	prestiging[player] = nil
 	AnnouncementHandler.prestige(player, state.prestiges, state.prestiges + 1)
+	Analytics.prestiged(player, state.prestiges + 1)
 	return true, nil
 end
 

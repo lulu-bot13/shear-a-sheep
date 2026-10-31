@@ -12,6 +12,7 @@ local players = game:GetService("Players")
 --// Modules
 local PodiumData = require(script.Parent.Parent.Constants.PodiumData)
 local ObjectPool = require(script.Parent.Parent.Utils.ObjectPool)
+local Analytics = require(script.Parent.Analytics)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 
 --// Configs
@@ -179,6 +180,7 @@ local function payTrickle()
 		trickleCarry[player] = earned - whole
 		if whole > 0 then
 			PlayerDataHandler.increment(player, "Wool", whole)
+			Analytics.woolEarned(player, whole, "Podium")
 		end
 	end
 end

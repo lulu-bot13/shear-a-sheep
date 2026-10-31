@@ -62,6 +62,12 @@ local FLASH_START_TRANSPARENCY = 0.35
 local FLASH_OUTLINE_START_TRANSPARENCY = 0.3
 local FLASH_TWEEN = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
+--// Screen outline flash: shearing a rare, mutated or Luck sheep bare pulses the images in Main.ScreenOutline
+local OUTLINE_NAME = "ScreenOutline"
+local OUTLINE_PEAK_ATTRIBUTE = "FlashPeak" -- each image's designed transparency, the brightest a pulse gets
+local OUTLINE_PULSE_IN = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local OUTLINE_PULSE_OUT = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
 --// Wool chunks: few and big, so they read clearly without spawning many parts
 local WOOL_CHUNKS_PER_HIT = 3
 local WOOL_CHUNKS_FINISH = 6 -- the blow that shears the sheep bare
@@ -666,9 +672,82 @@ local function playPoof(position: Vector3)
 	debris:AddItem(poof, lifetime + 0.5)
 end
 
-local function onShearHit(hits: { { sheep: Model?, position: Vector3, damage: number, color: Color3 } })
+local outlineFlashId = 0 -- a new flash cuts off the one still pulsing
+
+-- The images under Main.ScreenOutline, hidden between flashes; nil while the gui isn't there.
+local function getOutlineImages(): { ImageLabel }?
+	local main = playerGui:FindFirstChild("Main")
+	local outline = main and main:FindFirstChild(OUTLINE_NAME)
+	if not outline then
+		return nil
+	end
+
+	local images = {}
+	for _, descendant in outline:GetDescendants() do
+		if descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") then
+			if descendant:GetAttribute(OUTLINE_PEAK_ATTRIBUTE) == nil then
+				descendant:SetAttribute(OUTLINE_PEAK_ATTRIBUTE, if descendant.ImageTransparency < 1 then descendant.ImageTransparency else 0)
+				descendant.ImageTransparency = 1
+			end
+			descendant.Visible = true
+			table.insert(images, descendant)
+		end
+	end
+	if outline:IsA("GuiObject") then
+		outline.Visible = true
+	end
+	return images
+end
+
+-- Pulses the screen outline in `color` `pulses` times.
+local function flashOutline(color: Color3, pulses: number)
+	local images = getOutlineImages()
+	if not images or #images == 0 then
+		return
+	end
+
+	outlineFlashId += 1
+	local flashId = outlineFlashId
+	for _, image in images do
+		image.ImageColor3 = color
+	end
+
+	task.spawn(function()
+		for _ = 1, pulses do
+			for _, image in images do
+				tweenService:Create(image, OUTLINE_PULSE_IN, { ImageTransparency = image:GetAttribute(OUTLINE_PEAK_ATTRIBUTE) }):Play()
+			end
+			task.wait(OUTLINE_PULSE_IN.Time)
+			if flashId ~= outlineFlashId then
+				return
+			end
+
+			for _, image in images do
+				tweenService:Create(image, OUTLINE_PULSE_OUT, { ImageTransparency = 1 }):Play()
+			end
+			task.wait(OUTLINE_PULSE_OUT.Time)
+			if flashId ~= outlineFlashId then
+				return
+			end
+		end
+	end)
+end
+
+-- Hides the outline now, so it never shows before the first flash.
+task.spawn(function()
+	playerGui:WaitForChild("Main"):WaitForChild(OUTLINE_NAME, 10)
+	getOutlineImages()
+end)
+
+local function onShearHit(hits: { { sheep: Model?, position: Vector3, damage: number, color: Color3, flashColor: Color3?, flashPulses: number? } })
 	local finishedAny = false
+	local flashColor: Color3?, flashPulses = nil, 0
 	for _, hit in hits do
+		-- The most special sheep in the swing picks the flash.
+		if hit.flashColor and (hit.flashPulses or 1) > flashPulses then
+			flashColor, flashPulses = hit.flashColor, hit.flashPulses or 1
+		end
+
 		showDamage(hit.position, hit.damage)
 
 		-- No sheep means this blow sheared it bare (it is already gone), so it gets the bigger burst and the poof.
@@ -691,6 +770,9 @@ local function onShearHit(hits: { { sheep: Model?, position: Vector3, damage: nu
 	end
 	if finishedAny and shearCompleteHaptic then
 		shearCompleteHaptic:Play()
+	end
+	if flashColor then
+		flashOutline(flashColor, flashPulses)
 	end
 
 	-- Electric shears crackle on every hit (other players see it through the tool's "Snips" attribute).

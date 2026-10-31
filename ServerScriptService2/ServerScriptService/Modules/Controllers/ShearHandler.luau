@@ -13,10 +13,12 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local MutationData = require(script.Parent.Parent.Constants.MutationData)
 local PrestigeData = require(script.Parent.Parent.Constants.PrestigeData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
+local Analytics = require(script.Parent.Analytics)
 local AnnouncementHandler = require(script.Parent.AnnouncementHandler)
 local GemHandler = require(script.Parent.GemHandler)
 local IndexHandler = require(script.Parent.IndexHandler)
@@ -28,6 +30,9 @@ local SheepWanderHandler = require(script.Parent.SheepWanderHandler)
 
 --// Configs
 local COOLDOWN_LENIENCY = 0.8 -- swings may arrive this fraction of the cooldown apart (network jitter bunches them up)
+-- Shearing one of these bare flashes the screen outline this many times; rarities not listed don't flash.
+local RARITY_FLASH_PULSES = { Epic = 1, Legendary = 2, Mythic = 3, Boss = 3 }
+local MUTATION_FLASH_PULSES = { Shiny = 1, Rainbow = 2, Haunted = 2, Galaxy = 3 }
 
 -- What the client is told about each sheep a swing hit.
 type Hit = {
@@ -35,6 +40,8 @@ type Hit = {
 	position: Vector3,
 	damage: number,
 	color: Color3,
+	flashColor: Color3?, -- set on the blow that shears a rare, mutated or Luck sheep bare
+	flashPulses: number?,
 }
 
 -- What the client is told about the wool and Luck one hit knocked off, for the drops on the ground.
@@ -125,6 +132,21 @@ local function updateBestFind(player: Player, sheepType: any)
 	end
 end
 
+-- The screen flash for shearing this sheep bare: its mutation's colour, else its rarity's; nil for an ordinary sheep.
+local function getFlash(sheep: Model): (Color3?, number?)
+	local sheepType = sheep:GetAttribute("SheepType")
+	local info = if type(sheepType) == "string" then SheepData.getInfo(sheepType) else nil
+	local mutation = MutationData.get(sheep:GetAttribute(MutationData.Attribute))
+
+	local rarityPulses = if info then RARITY_FLASH_PULSES[info.rarity] or (if info.luckDrops then 1 else 0) else 0
+	local mutationPulses = if mutation then MUTATION_FLASH_PULSES[mutation.id] or 1 else 0
+	local pulses = math.max(rarityPulses, mutationPulses)
+	if pulses <= 0 then
+		return nil, nil
+	end
+	return if mutation then mutation.color elseif info then info.color else nil, pulses
+end
+
 --// Shearing ----------------------------------------------------------------------
 
 -- Pays out the wool and Luck a hit taking the sheep from `health` to `newHealth` knocked off; nil when it was nothing.
@@ -139,9 +161,11 @@ local function payHit(player: Player, sheep: Model, health: number, newHealth: n
 	local luck = getEarnedShare(totalLuck, maxHealth, newHealth) - getEarnedShare(totalLuck, maxHealth, health)
 	if wool > 0 then
 		PlayerDataHandler.increment(player, "Wool", wool)
+		Analytics.woolEarned(player, wool, "Shearing")
 	end
 	if luck > 0 then
 		PlayerDataHandler.increment(player, "Luck", luck)
+		Analytics.luckEarned(player, luck)
 	end
 	if wool <= 0 and luck <= 0 then
 		return nil
@@ -166,6 +190,7 @@ local function finishSheep(player: Player, sheep: Model, sheepId: number)
 	updateBestFind(player, sheepType)
 	IndexHandler.discover(player, sheepType, sheep)
 	PlayerDataHandler.increment(player, "SheepShearedCount", 1)
+	Analytics.sheepSheared(player, sheep)
 	GemHandler.rollSheepDrop(player)
 end
 
@@ -199,11 +224,17 @@ function ShearHandler.shearSheep(
 		local damage = math.min(math.max(math.floor(rawDamage), 1), health)
 		local newHealth = health - damage
 		local position = root.Position
+		local flashColor, flashPulses = nil, nil
+		if newHealth <= 0 then
+			flashColor, flashPulses = getFlash(sheep)
+		end
 		table.insert(hits, {
 			sheep = if newHealth > 0 then sheep else nil, -- a bare sheep is pooled away before the client could flash it
 			position = position,
 			damage = damage,
 			color = SheepHandler.getWoolColor(sheep),
+			flashColor = flashColor,
+			flashPulses = flashPulses,
 		})
 
 		local drop = payHit(player, sheep, health, newHealth, position)

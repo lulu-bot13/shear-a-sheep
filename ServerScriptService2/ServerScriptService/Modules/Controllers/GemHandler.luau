@@ -14,6 +14,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local GemData = require(script.Parent.Parent.Constants.GemData)
+local Analytics = require(script.Parent.Analytics)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 
 --// Configs
@@ -42,8 +43,8 @@ end
 
 -- Called once for every sheep shorn bare.
 function GemHandler.rollSheepDrop(player: Player)
-	if random:NextNumber() < GemData.SheepDropChance then
-		GemHandler.give(player, GemData.SheepDropAmount)
+	if random:NextNumber() < GemData.SheepDropChance and GemHandler.give(player, GemData.SheepDropAmount) then
+		Analytics.gemsFound(player, GemData.SheepDropAmount, "SheepDrop")
 	end
 end
 

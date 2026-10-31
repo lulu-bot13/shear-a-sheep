@@ -43,9 +43,11 @@ export type Window = {
 --// State
 local windows: { [string]: Window } = {}
 local openChanged = Instance.new("BindableEvent") -- fires with anyOpen() whenever a window opens or closes
+local opened = Instance.new("BindableEvent") -- fires with the window's name each time one opens
 
 local WindowsManager = {}
 WindowsManager.openChanged = openChanged.Event
+WindowsManager.opened = opened.Event
 
 local function anyWindowOpen(): boolean
 	for _, window in windows do
@@ -152,6 +154,7 @@ function WindowsManager.register(name: string, options: WindowOptions): Window
 		frame.Visible = true
 		playTween(OPEN_TWEEN, baseScale)
 		updateBlur()
+		opened:Fire(name)
 
 		if options.onOpen then
 			options.onOpen()

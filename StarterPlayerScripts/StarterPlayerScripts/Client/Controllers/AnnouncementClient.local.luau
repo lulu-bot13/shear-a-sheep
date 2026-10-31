@@ -1,5 +1,5 @@
 --[[
-	Server-wide announcements from AnnouncementHandler: a coloured chat line for rare best finds, rebirths, Prestiges and gifts.
+	Server-wide announcements from AnnouncementHandler: a coloured chat line for rare best finds, rebirths, Prestiges, gifts and Reaper raids.
 	Rare best finds also pop up a metal plaque at the top of the screen, one at a time.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AnnouncementClient
@@ -34,6 +34,7 @@ local PRESTIGE_NUMBER_COLOR = "#FFB300"
 local GIFT_NAME_COLOR = "#FF8AD8"
 local GIFT_ITEM_COLOR = "#7CF0FF"
 local ROBUX_COLOR = "#3DDC84"
+local REAPER_COLOR = "#C084FC"
 local ROBUX_GLYPH = "\u{E002}"
 local ARROW = "-&gt;" -- escaped, since it sits inside rich text
 
@@ -74,6 +75,8 @@ type Announcement = {
 	itemName: string,
 	robuxCost: number,
 	recipientName: string,
+} | {
+	kind: "ReaperRaid",
 }
 
 type BestFind = {
@@ -130,6 +133,9 @@ local function getChannel(): TextChannel?
 end
 
 local function getChatLine(announcement: Announcement): string
+	if announcement.kind == "ReaperRaid" then
+		return paint("The King Reaper has risen! Shear it before the Night ends.", REAPER_COLOR, true)
+	end
 	local userName = escape(announcement.userName)
 
 	if announcement.kind == "BestFind" then
