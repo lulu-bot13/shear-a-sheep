@@ -34,6 +34,7 @@ local EQUIPPED_ATTRIBUTE = "AbilityEquipped" -- mirrored from PlayerDataHandler
 local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- set on every shear Tool by ShearShopHandler
 local CARRY_ATTRIBUTE = "CarryingSheep" -- set by SheepCarryHandler while a sheep is carried
 local CROOK_NAME = "ShepherdsCrook"
+local TUTORIAL_DONE_ATTRIBUTE = "MainTutorialDone" -- set on the Tutorial gui by TutorialClient once it's finished
 local USED_COLOR = Color3.fromRGB(120, 120, 120) -- while active and cooling down
 local READY_TEXT = "[E] Ability"
 local TOUCH_AIM_DISTANCE = 40 -- studs ahead of the character an ability is aimed without a mouse
@@ -104,8 +105,14 @@ local function isUsingCrook(): boolean
 	return player:GetAttribute(CARRY_ATTRIBUTE) ~= nil or (character ~= nil and character:FindFirstChild(CROOK_NAME) ~= nil)
 end
 
+-- No abilities until TutorialClient is done (it marks the Tutorial gui straight away for players who skip it).
+local function isInTutorial(): boolean
+	local tutorialGui = playerGui:FindFirstChild("Tutorial")
+	return tutorialGui ~= nil and tutorialGui:GetAttribute(TUTORIAL_DONE_ATTRIBUTE) ~= true
+end
+
 local function canShowAbility(): boolean
-	return isHoldingShear() and not isUsingCrook() and not windowsManager.anyOpen()
+	return isHoldingShear() and not isUsingCrook() and not isInTutorial() and not windowsManager.anyOpen()
 end
 
 -- Shown only while a shear is held, and hidden while any window is open so it doesn't sit on top of the menus.
@@ -283,7 +290,7 @@ updateAbilityVisibility()
 network.waitUntilReadyAsync()
 
 local function useAbility()
-	if not isUsingCrook() then
+	if not isUsingCrook() and not isInTutorial() then
 		network.fireServer(network.RemoteEvents.UseAbility, getAimPoint())
 	end
 end
@@ -334,8 +341,8 @@ end
 
 -- No CAS touch button: the Main gui's Ability ui and the mobile button below cover touch.
 contextActionService:BindAction(ABILITY_ACTION, function(_, inputState: Enum.UserInputState)
-	-- Passed on with the crook out, so E still reaches the podium prompts.
-	if inputState ~= Enum.UserInputState.Begin or isUsingCrook() then
+	-- Passed on with the crook out or during the tutorial, so E still reaches the podium prompts.
+	if inputState ~= Enum.UserInputState.Begin or isUsingCrook() or isInTutorial() then
 		return Enum.ContextActionResult.Pass
 	end
 	useAbility()
@@ -558,6 +565,15 @@ playerGui.ChildAdded:Connect(function(child: Instance)
 		updateMobileButton()
 	end
 end)
+
+-- Shows the ability once TutorialClient marks the tutorial done.
+local tutorialGui = playerGui:WaitForChild("Tutorial", 10)
+if tutorialGui then
+	tutorialGui:GetAttributeChangedSignal(TUTORIAL_DONE_ATTRIBUTE):Connect(function()
+		updateAbilityVisibility()
+		updateMobileButton()
+	end)
+end
 player.CharacterAdded:Connect(onMobileCharacterAdded)
 if player.Character then
 	onMobileCharacterAdded(player.Character)

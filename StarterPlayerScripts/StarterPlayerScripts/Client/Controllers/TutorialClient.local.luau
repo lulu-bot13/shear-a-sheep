@@ -1,6 +1,6 @@
 --[[
-	First-play tutorial: shear a Huge sheep and 2 more, buy More Wool twice and Capacity, shear for the rebirth, rebirth, claim in the Index, then a tour of the buttons.
-	A tapping hand shows where to click, every click ripples, and the steps up to the rebirth are worked out from the player's progress so they resume after a rejoin.
+	First-play tutorial: shear a Huge sheep and 2 more, buy More Wool twice and Capacity, shear for the rebirth, rebirth, then claim in the Index.
+	A tapping hand points at buttons, a side "Click!" cue covers shearing, and the steps are worked out from progress so they resume after a rejoin; confetti at the end.
 ]]--
 
 --// Services
@@ -24,18 +24,14 @@ local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local tutorialGui = playerGui:WaitForChild("Tutorial") :: ScreenGui
-local tutorialMain = tutorialGui:WaitForChild("Main") :: GuiObject
-local tutorialFrame = tutorialMain:WaitForChild("TutorialFrame") :: GuiObject
+local tutorialFrame = tutorialGui:WaitForChild("TutorialFrame") :: GuiObject
 local tutorialText = tutorialFrame:WaitForChild("TutorialText") :: TextLabel
 local tutorialProgression = tutorialFrame:WaitForChild("TutorialProgression") :: TextLabel
 local spotlightFrame = tutorialGui:WaitForChild("Spotlight") :: GuiObject
 local darkOverlay = tutorialGui:WaitForChild("DarkOverlay") :: GuiObject
 local completedLabel = tutorialGui:WaitForChild("TutorialCompletedLabel") :: GuiObject
 local tip = tutorialGui:WaitForChild("Tip") :: GuiObject
-local hudButtons = playerGui:WaitForChild("Main"):WaitForChild("Buttons")
-local upgradesButton = hudButtons:WaitForChild("Upgrades") :: GuiButton
-local rebirthHudButton = hudButtons:WaitForChild("Rebirth") :: GuiButton
-local indexHudButton = hudButtons:WaitForChild("Index") :: GuiButton
+playerGui:WaitForChild("Main"):WaitForChild("Buttons"):WaitForChild("Index") -- the HUD buttons are looked up each time (Main is rebuilt on respawn)
 local indexMain = playerGui:WaitForChild("Index"):WaitForChild("Main")
 local indexClaimButton = indexMain:FindFirstChild("RewardsFrame", true):WaitForChild("Claim") :: GuiButton
 local indexClaimAllButton = indexMain:WaitForChild("ClaimAllFrame"):WaitForChild("Claim") :: GuiButton
@@ -55,7 +51,7 @@ local OWNER_ATTRIBUTE = "OwnerId"
 local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- only shear Tools have it
 local NEAR_DISTANCE = 8 -- studs (flat) from a sheep that count as "at" it
 local LEAVE_DISTANCE = 12 -- studs (flat) the first sheep is walked away from before the beam leads back to a sheep
-local ALWAYS_IN_STUDIO = true -- runs the tutorial in Studio even on a save that has rebirthed
+local ALWAYS_IN_STUDIO = false -- runs the tutorial in Studio even on a save that has rebirthed
 local TICK_SECONDS = 0.1
 local DISPLAY_ORDER = 90 -- the text and spotlight draw over every window (Alerts are 100)
 local STATE_REQUEST_SECONDS = 2 -- re-asks the server for upgrade / rebirth state until it arrives
@@ -64,41 +60,34 @@ local SHEEP_TO_SHEAR = 3 -- counting the first sheep
 local IDLE_HINT_SECONDS = 2.5 -- after the first sheep, the tapping hand comes back once the player stops clicking this long
 -- The upgrades bought in order in one shop visit, each with why it helps; 45 + 76 + 40 wool, which the starter wool and the first 3 sheep cover.
 local TUTORIAL_UPGRADES = {
-	{ id = "MoreWool", text = "Press +1 on More Wool. Every Sheep gives you more Wool!" },
-	{ id = "MoreWool", text = "Press +1 on More Wool again. Upgrades stack up!" },
-	{ id = "Capacity", text = "Now buy Sheep Capacity. More Sheep fit on your farm!" },
+	{ id = "MoreWool", text = "Upgrade your wool multiplier. Every Sheep gives you more Wool!" },
+	{ id = "MoreWool", text = "Upgrade your wool multiplier. Every Sheep gives you more Wool!" },
+	{ id = "Capacity", text = "Now upgrade Sheep Capacity. More Sheep enter your pen!" },
 }
 local KEEP_HUD_BUTTONS = { Upgrades = true, Rebirth = true } -- the only HUD buttons shown until the Index stage
-local HIDE_UI_STAGES = { EquipShears = true, GoToSheep = true, FirstShear = true, Shear = true } -- every ScreenGui but the tutorial's is off during these
+local HIDE_UI_STAGES = { GoToSheep = true, FirstShear = true, Shear = true } -- every ScreenGui but the tutorial's is off during these
+local KEEP_GUIS = { TouchGui = true } -- the PlayerModule's thumbstick and jump button, so mobile players can still move
 local POP_IN = TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local POP_OUT = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In)
 
--- Every stage in order; TutorialProgression shows the current one as "3/9". The cheer plays on reaching a stage.
-local STAGES = { "EquipShears", "GoToSheep", "FirstShear", "Shear", "Upgrades", "CloseUpgrades", "Rebirth", "Index", "Explain" }
+-- Every stage in order; TutorialProgression shows the current one as "3/8". The cheer plays on reaching a stage.
+local STAGES = { "GoToSheep", "FirstShear", "Shear", "Upgrades", "CloseUpgrades", "Rebirth", "Index", "CloseIndex" }
 local STAGE_ORDER: { [string]: number } = {}
 for index, name in STAGES do
 	STAGE_ORDER[name] = index
 end
 local STAGE_CHEERS = {
-	GoToSheep = "Shears ready!",
 	Shear = "First Sheep sheared!",
 	Upgrades = "Wool collected!",
 	CloseUpgrades = "Upgrades bought!",
 	Index = "Rebirthed!",
-	Explain = "Luck claimed!",
-}
--- The closing tour: one button and one sentence each, EXPLAIN_SECONDS apiece.
-local EXPLAIN_SECONDS = 4
-local EXPLAIN_STEPS = {
-	{ button = indexHudButton, text = "Index: every Sheep type you shear is saved here, with Luck to claim." },
-	{ button = rebirthHudButton, text = "Rebirth: trade Wool for a Luck boost, so rarer Sheep spawn." },
-	{ button = upgradesButton, text = "Upgrades: spend Wool to earn Wool faster and fit more Sheep." },
+	CloseIndex = "Luck claimed!",
 }
 local TUTORIAL_SHEEP_ATTRIBUTE = "TutorialSheep" -- set by TutorialHandler on the Huge sheep it drops for the first shear
 
 --// Rebirth progress bar, under the instruction box while the player shears for the rebirth
 local BAR_HEIGHT = 26
-local BAR_GAP = 24 -- pixels between the bottom of the instruction box and the bar
+local BAR_GAP = 56 -- pixels between the bottom of the instruction text and the bar
 local BAR_WIDTH_SCALE = 0.85 -- of the instruction box's width
 local BAR_TWEEN = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local BAR_BACK_COLOR = Color3.fromRGB(40, 35, 30)
@@ -107,18 +96,37 @@ local BAR_MILESTONES = { { ratio = 0.5, text = "Halfway there!" }, { ratio = 0.8
 
 local HIGHLIGHT_COLOR = Color3.fromRGB(255, 230, 90)
 local BEAM_ATTACHMENT_ROTATION = Vector3.new(0, 0, 90) -- degrees, applied to both beam ends
-local HOTBAR_SLOT_SIZE = 60 -- pixels, Roblox's default hotbar
-local HOTBAR_SLOT_GAP = 5
-local HOTBAR_BOTTOM_GAP = 5
 
---// Click hint: a hand that taps the target, a ripple on each tap and a pulsing CLICK / TAP word
+--// Click hint: a hand that taps the target button, a ripple on each tap and a pulsing CLICK / TAP word
 local HINT_Z_INDEX = 50
 local HAND_SIZE = 72
 local HAND_GAP = -6 -- pixels between the target point and the hand's edge; below 0 the emoji's padding overlaps it, so the fingertip lands on it
 local HAND_TRAVEL = 12 -- how far the hand moves in on each tap
 local BUTTON_TAP_DEPTH = 0.3 -- how far down a button the fingertip lands, of its height (the ripple is at its centre)
 local HINT_LABEL_SIZE = Vector2.new(170, 40)
-local HINT_FALLBACK = Vector2.new(0.5, 0.62) -- of the screen, when the target sheep is off-screen
+local HINT_FALLBACK = Vector2.new(0.5, 0.62) -- of the screen, where an R2 press ripples when no button is hinted
+
+--// Side click cue: while shearing, a pointing hand and "CLICK!" pulse at the right edge instead of over the sheep
+local SIDE_CLICK_SIZE = Vector2.new(190, 150)
+local SIDE_CLICK_EDGE_GAP = 24 -- pixels from the right edge of the screen
+local SIDE_CLICK_NUDGE = 14 -- how far the hand jabs left on each pulse
+local SIDE_CLICK_PULSE = TweenInfo.new(0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+
+--// Confetti on finishing
+local CONFETTI_COUNT = 90
+local CONFETTI_SIZE = NumberRange.new(10, 18) -- pixels along the long side
+local CONFETTI_FALL_SECONDS = NumberRange.new(1.8, 3)
+local CONFETTI_DRIFT = 140 -- pixels each piece can drift sideways as it falls
+local CONFETTI_SPIN = 720 -- degrees each piece can turn as it falls
+local CONFETTI_COLORS = {
+	Color3.fromRGB(255, 90, 90),
+	Color3.fromRGB(255, 200, 60),
+	Color3.fromRGB(110, 220, 110),
+	Color3.fromRGB(80, 170, 255),
+	Color3.fromRGB(200, 110, 255),
+	Color3.fromRGB(255, 140, 200),
+}
+local MAIN_DONE_ATTRIBUTE = "MainTutorialDone" -- set on the Tutorial gui once this script is finished with it, for CrookTutorialClient
 local TAP_IN = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 local TAP_OUT = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local TAP_PAUSE = 0.55
@@ -127,17 +135,15 @@ local RIPPLE_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirec
 local HINT_RIPPLE_SIZE = 90
 local CLICK_RIPPLE_SIZE = 120
 local RIPPLE_COLOR = Color3.fromRGB(255, 255, 255)
-local TEXT_BUMP = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true)
-local TEXT_BUMP_SCALE = 1.08
 local CHEER_RISE = 60
 local CHEER_TWEEN = TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local CHEER_COLOR = Color3.fromRGB(120, 255, 120)
 
-type Stage = "EquipShears" | "GoToSheep" | "FirstShear" | "Shear" | "Upgrades" | "CloseUpgrades" | "Rebirth" | "Index" | "Explain" | "Done"
+type Stage = "GoToSheep" | "FirstShear" | "Shear" | "Upgrades" | "CloseUpgrades" | "Rebirth" | "Index" | "CloseIndex" | "Done"
 type InputMode = "Mouse" | "Touch" | "Gamepad"
 
 --// State
-local stage: Stage = "EquipShears"
+local stage: Stage = "GoToSheep"
 local shearedBaseline = 0 -- SheepShearedCount the "Shear 3 Sheep" progress counts up from
 local hiddenHudButtons: { GuiObject } = {}
 local hiddenGuis: { ScreenGui } = {}
@@ -152,11 +158,9 @@ local beamConnection: RBXScriptConnection? = nil
 local inputConnection: RBXScriptConnection? = nil
 local focused: GuiObject? = nil -- what the spotlight was last tweened over, and where it was
 local focusedPosition, focusedSize = Vector2.zero, Vector2.zero
-local hintTarget: (Model | GuiObject)? = nil -- what the tapping hand points at
+local hintTarget: GuiObject? = nil -- what the tapping hand points at
 local hintRipplePoint = Vector2.zero -- where the hand's taps ripple (the target's centre), in tutorialGui pixels
 local lastClickAt = 0
-local lastTextKey = ""
-local stageStartedAt = 0
 local barMilestone = 0 -- BAR_MILESTONES already cheered this Rebirth stage
 local indexHasUnclaimed: boolean? = nil -- from IndexState; nil until it arrives
 
@@ -178,15 +182,7 @@ beam.FaceCamera = false -- the ends' rotation sets which way the beam lies
 beam.Enabled = false
 beam.Parent = workspace.Terrain
 
--- The hotbar is CoreGui, so the spotlight points at this see-through stand-in sized over it.
-local hotbarFrame = Instance.new("Frame")
-hotbarFrame.Name = "TutorialHotbar"
-hotbarFrame.BackgroundTransparency = 1
-hotbarFrame.AnchorPoint = Vector2.new(0.5, 1)
-hotbarFrame.Position = UDim2.new(0.5, 0, 1, -HOTBAR_BOTTOM_GAP)
-hotbarFrame.Parent = spotlightFrame.Parent
-
---// Click hint instances: a zero-size frame placed on the target, holding the hand and the word.
+--// Click hint instances: a zero-size frame placed on the target button, holding the hand above it and the word above that.
 local hint = Instance.new("Frame")
 hint.Name = "TutorialClickHint"
 hint.BackgroundTransparency = 1
@@ -198,10 +194,11 @@ hint.Parent = tutorialGui
 local hand = Instance.new("TextLabel")
 hand.Name = "Hand"
 hand.BackgroundTransparency = 1
+hand.AnchorPoint = Vector2.new(0.5, 1)
 hand.Size = UDim2.fromOffset(HAND_SIZE, HAND_SIZE)
 hand.Font = Enum.Font.GothamBold
 hand.TextScaled = true
-hand.Text = "👆"
+hand.Text = "👇"
 hand.ZIndex = HINT_Z_INDEX + 2
 hand.Parent = hint
 
@@ -209,6 +206,7 @@ local hintLabel = Instance.new("TextLabel")
 hintLabel.Name = "Action"
 hintLabel.BackgroundTransparency = 1
 hintLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+hintLabel.Position = UDim2.fromOffset(0, -(HAND_GAP + HAND_SIZE + HINT_LABEL_SIZE.Y / 2))
 hintLabel.Size = UDim2.fromOffset(HINT_LABEL_SIZE.X, HINT_LABEL_SIZE.Y)
 hintLabel.Font = Enum.Font.FredokaOne
 hintLabel.TextScaled = true
@@ -224,6 +222,48 @@ hintLabelStroke.Parent = hintLabel
 local hintLabelScale = Instance.new("UIScale")
 hintLabelScale.Parent = hintLabel
 tweenService:Create(hintLabelScale, LABEL_PULSE, { Scale = 1.15 }):Play()
+
+--// Side click cue instances: a hand pointing in from the right edge over a pulsing "CLICK!".
+local sideClick = Instance.new("Frame")
+sideClick.Name = "TutorialSideClick"
+sideClick.BackgroundTransparency = 1
+sideClick.AnchorPoint = Vector2.new(1, 0.5)
+sideClick.Position = UDim2.new(1, -SIDE_CLICK_EDGE_GAP, 0.5, 0)
+sideClick.Size = UDim2.fromOffset(SIDE_CLICK_SIZE.X, SIDE_CLICK_SIZE.Y)
+sideClick.ZIndex = HINT_Z_INDEX
+sideClick.Visible = false
+sideClick.Parent = tutorialGui
+
+local sideHand = Instance.new("TextLabel")
+sideHand.Name = "Hand"
+sideHand.BackgroundTransparency = 1
+sideHand.Size = UDim2.fromScale(1, 0.6)
+sideHand.Font = Enum.Font.GothamBold
+sideHand.TextScaled = true
+sideHand.Text = "👈"
+sideHand.ZIndex = HINT_Z_INDEX + 2
+sideHand.Parent = sideClick
+tweenService:Create(sideHand, SIDE_CLICK_PULSE, { Position = UDim2.fromOffset(-SIDE_CLICK_NUDGE, 0) }):Play()
+
+local sideLabel = Instance.new("TextLabel")
+sideLabel.Name = "Action"
+sideLabel.BackgroundTransparency = 1
+sideLabel.Position = UDim2.fromScale(0, 0.6)
+sideLabel.Size = UDim2.fromScale(1, 0.4)
+sideLabel.Font = Enum.Font.FredokaOne
+sideLabel.TextScaled = true
+sideLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+sideLabel.ZIndex = HINT_Z_INDEX + 2
+sideLabel.Parent = sideClick
+
+local sideLabelStroke = Instance.new("UIStroke")
+sideLabelStroke.Color = Color3.fromRGB(0, 0, 0)
+sideLabelStroke.Thickness = 3
+sideLabelStroke.Parent = sideLabel
+
+local sideClickScale = Instance.new("UIScale")
+sideClickScale.Parent = sideClick
+tweenService:Create(sideClickScale, SIDE_CLICK_PULSE, { Scale = 1.12 }):Play()
 
 --// Rebirth progress bar: a back, a fill that grows to the wool owned, and "120 / 200 Wool" over both.
 local progressBar = Instance.new("Frame")
@@ -311,6 +351,24 @@ local function isHoldingShear(): boolean
 	return tool ~= nil and tool:GetAttribute(SHEAR_RANGE_ATTRIBUTE) ~= nil
 end
 
+-- Holds the shears out for the player (the tutorial needs them in hand), once they've landed in the Backpack.
+local function equipShears()
+	if isHoldingShear() then
+		return
+	end
+	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if not humanoid or not backpack then
+		return
+	end
+	for _, tool in backpack:GetChildren() do
+		if tool:IsA("Tool") and tool:GetAttribute(SHEAR_RANGE_ATTRIBUTE) ~= nil then
+			humanoid:EquipTool(tool)
+			return
+		end
+	end
+end
+
 -- False while the object, one of its parents or its ScreenGui is hidden.
 local function isShown(guiObject: GuiObject): boolean
 	local gui = guiObject:FindFirstAncestorOfClass("ScreenGui")
@@ -331,6 +389,18 @@ end
 local function isWindowOpen(name: string): boolean
 	local window = windowsManager.get(name)
 	return window ~= nil and window.isOpen()
+end
+
+-- Main.Buttons, or one of its buttons, in the current Main (a respawn swaps in a fresh copy).
+local function getHudButtons(): Instance?
+	local main = playerGui:FindFirstChild("Main")
+	return main and main:FindFirstChild("Buttons")
+end
+
+local function getHudButton(name: string): GuiObject?
+	local buttons = getHudButtons()
+	local button = buttons and buttons:FindFirstChild(name)
+	return if button and button:IsA("GuiObject") then button else nil
 end
 
 local function formatHealth(value: number): string
@@ -358,25 +428,14 @@ local function getShearAction(): string
 		else "Click anywhere on the screen"
 end
 
-local function getEquipText(): string
-	local mode = getInputMode()
-	return if mode == "Touch" then "Tap your Shears at the bottom to hold them"
-		elseif mode == "Gamepad" then "Press L1 or R1 to hold your Shears"
-		else "Press 1 or click your Shears at the bottom to hold them"
-end
-
 local function getHintWord(): string
 	local mode = getInputMode()
 	return if mode == "Touch" then "TAP!" elseif mode == "Gamepad" then "R2!" else "CLICK!"
 end
 
--- Offsets between a ScreenGui's pixels and the viewport (WorldToViewportPoint) / input positions, which differ by the top bar.
+-- Offset between a ScreenGui's pixels and input positions, which differ by the top bar.
 local function getGuiInset(): Vector2
 	return (guiService:GetGuiInset())
-end
-
-local function viewportToGui(point: Vector2): Vector2
-	return if tutorialGui.IgnoreGuiInset then point else point - getGuiInset()
 end
 
 local function inputToGui(point: Vector2): Vector2
@@ -415,17 +474,9 @@ local function popOut(guiObject: GuiObject)
 	uiScale.Scale = fullScale
 end
 
--- Shows the instruction; the box bumps when the instruction itself changes (not just its numbers).
+-- Shows the instruction straight away, with no animation.
 local function setText(text: string)
 	tutorialText.Text = text
-
-	local key = string.gsub(text, "%d", "")
-	if key ~= lastTextKey then
-		lastTextKey = key
-		local uiScale, fullScale = getPopScale(tutorialFrame)
-		uiScale.Scale = fullScale
-		tweenService:Create(uiScale, TEXT_BUMP, { Scale = fullScale * TEXT_BUMP_SCALE }):Play()
-	end
 end
 
 --// Ripples and the click hint -------------------------------------------------------
@@ -456,44 +507,35 @@ local function spawnRipple(position: Vector2, size: number)
 	debris:AddItem(ring, RIPPLE_TWEEN.Time + 0.1)
 end
 
--- Points the tapping hand at a sheep (the hand sits under it) or a GuiObject (the hand sits above it); nil hides it.
-local function setHint(target: (Model | GuiObject)?)
+-- Points the tapping hand down at a GuiObject; nil hides it.
+local function setHint(target: GuiObject?)
 	hintTarget = target
 end
 
+-- Shows or hides the "CLICK!" cue at the right edge, used instead of the hand while the player shears a sheep.
+local function setSideClick(visible: boolean)
+	sideClick.Visible = visible
+	if visible then
+		sideLabel.Text = getHintWord()
+	end
+end
+
 --[[
-	Where the hand's fingertip goes, where its taps ripple and whether it comes from above; nil when the target can't be placed.
+	Where the hand's fingertip goes and where its taps ripple; nil when the target isn't shown.
 	A button is tapped a little way down from its top edge and ripples from its centre, so both land on the button itself.
 ]]
-local function getHintPoint(): (Vector2?, Vector2, boolean)
+local function getHintPoint(): (Vector2?, Vector2)
 	local target = hintTarget
-	if not target then
-		return nil, Vector2.zero, false
+	if not target or not isShown(target) then
+		return nil, Vector2.zero
 	end
-
-	if target:IsA("GuiObject") then
-		if not isShown(target) then
-			return nil, Vector2.zero, false
-		end
-		local position, size = target.AbsolutePosition, target.AbsoluteSize
-		return position + Vector2.new(size.X / 2, size.Y * BUTTON_TAP_DEPTH), position + size / 2, true
-	end
-
-	local root = getRoot(target :: Model)
-	local camera = workspace.CurrentCamera
-	if not root or not camera then
-		return nil, Vector2.zero, false
-	end
-	local viewportPoint, onScreen = camera:WorldToViewportPoint(root.Position)
-	local point = if onScreen
-		then viewportToGui(Vector2.new(viewportPoint.X, viewportPoint.Y))
-		else tutorialGui.AbsoluteSize * HINT_FALLBACK
-	return point, point, false
+	local position, size = target.AbsolutePosition, target.AbsoluteSize
+	return position + Vector2.new(size.X / 2, size.Y * BUTTON_TAP_DEPTH), position + size / 2
 end
 
 -- Runs every frame: keeps the hand on its target.
 local function updateHint()
-	local point, ripplePoint, fromAbove = getHintPoint()
+	local point, ripplePoint = getHintPoint()
 	if not point then
 		hint.Visible = false
 		return
@@ -502,22 +544,12 @@ local function updateHint()
 	hintRipplePoint = ripplePoint
 	hint.Position = UDim2.fromOffset(point.X, point.Y)
 	hintLabel.Text = getHintWord()
-	if fromAbove then
-		hand.Text = "👇"
-		hand.AnchorPoint = Vector2.new(0.5, 1)
-		hintLabel.Position = UDim2.fromOffset(0, -(HAND_GAP + HAND_SIZE + HINT_LABEL_SIZE.Y / 2))
-	else
-		hand.Text = "👆"
-		hand.AnchorPoint = Vector2.new(0.5, 0)
-		hintLabel.Position = UDim2.fromOffset(0, HAND_GAP + HAND_SIZE + HINT_LABEL_SIZE.Y / 2)
-	end
 	hint.Visible = true
 end
 
--- The hand's resting offset from the fingertip point, and the offset it taps in to.
+-- The hand's resting offset from the fingertip point, and the offset it taps in to (it sits above, so both go up).
 local function getHandOffsets(): (UDim2, UDim2)
-	local direction = if hand.AnchorPoint.Y > 0.5 then -1 else 1
-	return UDim2.fromOffset(0, direction * (HAND_GAP + HAND_TRAVEL)), UDim2.fromOffset(0, direction * HAND_GAP)
+	return UDim2.fromOffset(0, -(HAND_GAP + HAND_TRAVEL)), UDim2.fromOffset(0, -HAND_GAP)
 end
 
 -- Taps the hand in and out forever, rippling at the fingertip on each tap.
@@ -678,30 +710,12 @@ local function point(target: GuiObject?)
 	end
 end
 
--- Sizes the hotbar stand-in to one slot per Tool the player has, then spotlights it.
-local function pointAtHotbar()
-	local toolCount = 0
-	for _, container in { player:FindFirstChildOfClass("Backpack") or false, player.Character or false } do
-		if container then
-			for _, child in container:GetChildren() do
-				if child:IsA("Tool") then
-					toolCount += 1
-				end
-			end
-		end
-	end
-	local slots = math.max(toolCount, 1)
-	hotbarFrame.Size = UDim2.fromOffset(slots * HOTBAR_SLOT_SIZE + (slots - 1) * HOTBAR_SLOT_GAP, HOTBAR_SLOT_SIZE)
-	point(hotbarFrame)
-	setHint(hotbarFrame)
-end
-
 --// Stages ------------------------------------------------------------------------------
 
 -- Turns off every ScreenGui but the tutorial's; run each tick, since respawned or newly opened guis come back on.
 local function hideOtherGuis()
 	for _, gui in playerGui:GetChildren() do
-		if gui:IsA("ScreenGui") and gui ~= tutorialGui and gui.Enabled then
+		if gui:IsA("ScreenGui") and gui ~= tutorialGui and gui.Enabled and not KEEP_GUIS[gui.Name] then
 			gui.Enabled = false
 			table.insert(hiddenGuis, gui)
 		end
@@ -719,12 +733,15 @@ end
 local function setStage(newStage: Stage, quiet: boolean?)
 	local advanced = (STAGE_ORDER[newStage] or 0) > (STAGE_ORDER[stage] or 0)
 	stage = newStage
-	stageStartedAt = os.clock()
 	barMilestone = 0
+	if newStage == "Index" then
+		indexHasUnclaimed = nil -- asked again, since sheep found since the last IndexState make it stale
+	end
 	setHighlights({})
 	beamSheep = nil
 	firstSheep = nil
 	setHint(nil)
+	setSideClick(false)
 	point(nil)
 	progressBar.Visible = false
 	if STAGE_ORDER[newStage] then
@@ -751,44 +768,24 @@ local function requestState(eventName: any)
 	end
 end
 
-local function promptEquip()
-	setText(getEquipText())
-	pointAtHotbar()
-end
-
--- Shearing for wool after the first sheep: the beam leads to the closest sheep, and once there the hand comes back if the player stops clicking.
+-- Shearing for wool after the first sheep: the beam leads to the closest sheep, and once there the side "CLICK!" comes back if the player stops clicking.
 local function guideShearing(nearText: string, farText: string)
-	if not isHoldingShear() then
-		promptEquip()
-		return
-	end
+	equipShears()
 	point(nil)
+	setHint(nil)
 
-	local nearest, near = guideToSheep()
+	local _, near = guideToSheep()
 	if near then
 		setText(nearText)
-		setHint(if os.clock() - lastClickAt >= IDLE_HINT_SECONDS then nearest else nil)
+		setSideClick(os.clock() - lastClickAt >= IDLE_HINT_SECONDS)
 	else
 		setText(farText)
-		setHint(nil)
 	end
-end
-
--- "Equip Shears": the spotlight and hand sit on the hotbar until a shear is held out.
-local function updateEquipShears()
-	if isHoldingShear() then
-		setStage("GoToSheep")
-		return
-	end
-	promptEquip()
 end
 
 -- "Go to a Sheep": the beam leads to the Huge tutorial sheep, or to the closest sheep before it lands (or once it's gone).
 local function updateGoToSheep()
-	if not isHoldingShear() then
-		setStage("EquipShears")
-		return
-	end
+	equipShears()
 
 	local bigSheep = getTutorialSheep()
 	local playerRoot = getRoot(player.Character)
@@ -817,10 +814,7 @@ local function updateFirstShear()
 		setStage("Shear")
 		return
 	end
-	if not isHoldingShear() then
-		setStage("EquipShears")
-		return
-	end
+	equipShears()
 
 	local sheep = firstSheep
 	local playerRoot = getRoot(player.Character)
@@ -833,7 +827,7 @@ local function updateFirstShear()
 	end
 
 	setHighlights({ sheep })
-	setHint(sheep)
+	setSideClick(true)
 	local action = getShearAction()
 	local health = sheep:GetAttribute("ShearHealth")
 	local maxHealth = sheep:GetAttribute("MaxShearHealth")
@@ -883,8 +877,8 @@ local function updateUpgrades()
 	if not upgradeStates then
 		requestState(network.RemoteEvents.RequestUpgradeState)
 		setText("Open Upgrades to spend your Wool")
-		point(upgradesButton)
-		setHint(upgradesButton)
+		point(getHudButton("Upgrades"))
+		setHint(getHudButton("Upgrades"))
 		return
 	end
 	local index, card = getUpgradeStep()
@@ -913,8 +907,8 @@ local function updateUpgrades()
 	beamSheep = nil
 	if not shopOpen then
 		setText(`{progress} Open Upgrades. Upgrades make you earn Wool faster!`)
-		point(upgradesButton)
-		setHint(upgradesButton)
+		point(getHudButton("Upgrades"))
+		setHint(getHudButton("Upgrades"))
 	else
 		local cardFrame = upgradeCards:FindFirstChild(card.id)
 		local purchase = cardFrame and cardFrame:FindFirstChild("Purchase")
@@ -939,8 +933,13 @@ end
 local function showRebirthProgress(cost: number)
 	local frameSize = tutorialFrame.AbsoluteSize
 	local framePosition = tutorialFrame.AbsolutePosition
-	-- Below whichever ends lower, the box or its text (which can spill past it), so the bar never covers the instruction.
-	local bottom = math.max(framePosition.Y + frameSize.Y, tutorialText.AbsolutePosition.Y + tutorialText.AbsoluteSize.Y)
+	-- Below whichever ends lower: the box, the text label, or the drawn text (TextBounds, which can spill past the label).
+	local textTop, textHeight = tutorialText.AbsolutePosition.Y, tutorialText.AbsoluteSize.Y
+	local spill = math.max(tutorialText.TextBounds.Y - textHeight, 0)
+	local textBottom = textTop + textHeight + if tutorialText.TextYAlignment == Enum.TextYAlignment.Top then spill
+		elseif tutorialText.TextYAlignment == Enum.TextYAlignment.Center then spill / 2
+		else 0
+	local bottom = math.max(framePosition.Y + frameSize.Y, textBottom)
 	progressBar.Size = UDim2.fromOffset(frameSize.X * BAR_WIDTH_SCALE, BAR_HEIGHT)
 	progressBar.Position = UDim2.fromOffset(framePosition.X + frameSize.X / 2, bottom + BAR_GAP)
 	progressBar.Visible = true
@@ -978,8 +977,8 @@ local function updateRebirth()
 	beamSheep = nil
 	if not isWindowOpen("Rebirth") then
 		setText("You have enough Wool! Open Rebirth")
-		point(rebirthHudButton)
-		setHint(rebirthHudButton)
+		point(getHudButton("Rebirth"))
+		setHint(getHudButton("Rebirth"))
 	else
 		setText("Press Rebirth! Luck brings rarer Sheep")
 		point(rebirthButton)
@@ -996,23 +995,29 @@ local function showHudButton(button: GuiObject)
 	button.Visible = true
 end
 
--- After the rebirth: open the Index and claim the Luck waiting for the sheep found so far.
+-- After the rebirth: open the Index (the Rebirth window is closed so its button shows) and claim the Luck waiting there.
 local function updateIndex()
-	showHudButton(indexHudButton)
+	local indexHudButton = getHudButton("Index")
+	if indexHudButton then
+		showHudButton(indexHudButton)
+	end
 	if indexHasUnclaimed == nil then
 		requestState(network.RemoteEvents.RequestIndexState)
 	end
 
 	if not isWindowOpen("Index") then
 		if indexHasUnclaimed == false then
-			setStage("Explain")
+			stage = "Done" -- nothing to claim (e.g. resumed after claiming)
 			return
+		end
+		if windowsManager.anyOpen() then
+			windowsManager.closeAll()
 		end
 		setText("Open the Index to see every Sheep you've found!")
 		point(indexHudButton)
 		setHint(indexHudButton)
 	elseif indexHasUnclaimed == false then
-		setStage("Explain")
+		setStage("CloseIndex")
 	else
 		local target = if isShown(indexClaimAllButton) then indexClaimAllButton else indexClaimButton
 		setText("Press Claim! Every new Sheep you find gives you Luck")
@@ -1021,29 +1026,18 @@ local function updateIndex()
 	end
 end
 
--- The closing tour: closes any window, then spotlights each EXPLAIN_STEPS button with its sentence before the completed label.
-local function updateExplain()
-	local open = isWindowOpen("Index")
-	if open then
-		setText("Close the Index")
-		point(indexExit)
-		setHint(indexExit)
-		stageStartedAt = os.clock() -- the tour starts once it's closed
-		return
-	end
-
-	local step = EXPLAIN_STEPS[math.floor((os.clock() - stageStartedAt) / EXPLAIN_SECONDS) + 1]
-	if not step then
+-- The last step: close the Index so the completed label and confetti show over the farm.
+local function updateCloseIndex()
+	if not isWindowOpen("Index") then
 		stage = "Done"
 		return
 	end
-	setText(step.text)
-	point(step.button)
-	setHint(nil)
+	setText("Close the Index")
+	point(indexExit)
+	setHint(indexExit)
 end
 
 local UPDATERS: { [Stage]: () -> () } = {
-	EquipShears = updateEquipShears,
 	GoToSheep = updateGoToSheep,
 	FirstShear = updateFirstShear,
 	Shear = updateShear,
@@ -1051,14 +1045,18 @@ local UPDATERS: { [Stage]: () -> () } = {
 	CloseUpgrades = updateCloseUpgrades,
 	Rebirth = updateRebirth,
 	Index = updateIndex,
-	Explain = updateExplain,
+	CloseIndex = updateCloseIndex,
 }
 
 --// Lifecycle ---------------------------------------------------------------------------
 
 -- Hides every HUD button the tutorial doesn't use; showHudButtons puts them back.
 local function hideHudButtons()
-	for _, button in hudButtons:GetChildren() do
+	local buttons = getHudButtons()
+	if not buttons then
+		return
+	end
+	for _, button in buttons:GetChildren() do
 		if button:IsA("GuiObject") and button.Visible and not KEEP_HUD_BUTTONS[button.Name] then
 			button.Visible = false
 			table.insert(hiddenHudButtons, button)
@@ -1088,14 +1086,46 @@ local function stop()
 	beam:Destroy()
 	beamStart:Destroy()
 	beamEnd:Destroy()
-	hotbarFrame:Destroy()
 	hint:Destroy()
+	sideClick:Destroy()
 	progressBar:Destroy()
-	tutorialMain.Visible = false
+	tutorialFrame.Visible = false
 	spotlightFrame.Visible = false
 	tutorialGui.Enabled = false
 	showHudButtons()
 	showOtherGuis()
+end
+
+-- Showers coloured rectangles down from above the screen, spinning and drifting as they fall; the gui removes itself afterwards.
+local function playConfetti()
+	local random = Random.new()
+	local confettiGui = Instance.new("ScreenGui")
+	confettiGui.Name = "TutorialConfetti"
+	confettiGui.IgnoreGuiInset = true
+	confettiGui.ResetOnSpawn = false
+	confettiGui.DisplayOrder = DISPLAY_ORDER + 1
+	confettiGui.Parent = playerGui
+
+	for _ = 1, CONFETTI_COUNT do
+		local length = random:NextNumber(CONFETTI_SIZE.Min, CONFETTI_SIZE.Max)
+		local startX = random:NextNumber()
+		local piece = Instance.new("Frame")
+		piece.Name = "Confetti"
+		piece.BorderSizePixel = 0
+		piece.AnchorPoint = Vector2.new(0.5, 0.5)
+		piece.Size = UDim2.fromOffset(length, length * 0.5)
+		piece.Position = UDim2.fromScale(startX, random:NextNumber(-0.25, -0.02))
+		piece.Rotation = random:NextNumber(0, 360)
+		piece.BackgroundColor3 = CONFETTI_COLORS[random:NextInteger(1, #CONFETTI_COLORS)]
+		piece.Parent = confettiGui
+
+		local fall = TweenInfo.new(random:NextNumber(CONFETTI_FALL_SECONDS.Min, CONFETTI_FALL_SECONDS.Max), Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		tweenService:Create(piece, fall, {
+			Position = UDim2.new(startX, random:NextNumber(-CONFETTI_DRIFT, CONFETTI_DRIFT), 1.1, 0),
+			Rotation = piece.Rotation + random:NextNumber(-CONFETTI_SPIN, CONFETTI_SPIN),
+		}):Play()
+	end
+	debris:AddItem(confettiGui, CONFETTI_FALL_SECONDS.Max + 0.2)
 end
 
 -- Pops the completed label and Tip in over the dimmed screen, holds them, then pops them out.
@@ -1117,10 +1147,8 @@ end
 
 local function start(firstStage: Stage)
 	local startRebirths = getNumberAttribute("Rebirths")
-	tutorialGui.ResetOnSpawn = false
 	tutorialGui.DisplayOrder = DISPLAY_ORDER
 	tutorialGui.Enabled = true
-	tutorialMain.Visible = true
 	tutorialFrame.Visible = true
 	tutorialText.Visible = true
 	tutorialText.RichText = true
@@ -1143,6 +1171,7 @@ local function start(firstStage: Stage)
 				setStage("Index")
 			end
 		end
+		setSideClick(false) -- the updater turns it back on (in the same frame) while the player should be shearing
 		UPDATERS[stage]()
 		if HIDE_UI_STAGES[stage] then
 			hideOtherGuis()
@@ -1151,9 +1180,11 @@ local function start(firstStage: Stage)
 	end
 
 	stop()
+	playConfetti()
 	showCompleted()
 end
 
+tutorialGui.ResetOnSpawn = false -- CrookTutorialClient keeps using it after this script is done
 tutorialGui.Enabled = false
 spotlightFrame.Visible = false -- FocusUI shows it when there's a button to point at
 darkOverlay.Visible = false
@@ -1193,10 +1224,11 @@ local forced = ALWAYS_IN_STUDIO and runService:IsStudio()
 if forced then
 	print("[TutorialClient] running from the start (ALWAYS_IN_STUDIO)")
 	shearedBaseline = getNumberAttribute("SheepShearedCount")
-	start("EquipShears")
+	start("GoToSheep")
 elseif getNumberAttribute("Rebirths") >= 1 or getNumberAttribute("Prestiges") >= 1 then
 	stop()
 else
 	local sheared = getNumberAttribute("SheepShearedCount")
-	start(if sheared >= SHEEP_TO_SHEAR then "Upgrades" elseif sheared >= 1 then "Shear" else "EquipShears")
+	start(if sheared >= SHEEP_TO_SHEAR then "Upgrades" elseif sheared >= 1 then "Shear" else "GoToSheep")
 end
+tutorialGui:SetAttribute(MAIN_DONE_ATTRIBUTE, true)

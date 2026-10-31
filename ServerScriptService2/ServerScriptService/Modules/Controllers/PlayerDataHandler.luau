@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Temporary DataStore save for each player's farm (wool, luck, Gems, sheep capacity, upgrades, rebirths, Prestiges, shears, sheep sheared).
+	ProfileService save for each player's farm (wool, luck, Gems, sheep capacity, upgrades, rebirths, Prestiges, shears, sheep sheared).
 	Wool and Luck are mirrored to Player.Inventory IntValues and the other numbers to player attributes for the client.
 
 	Location: ServerScriptService.Modules.Controllers.PlayerDataHandler
@@ -11,19 +11,23 @@
 local dataStoreService = game:GetService("DataStoreService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
+local runService = game:GetService("RunService")
 
 --// Modules
+local profileService = require(script.Parent.Parent.Packages.ProfileService) :: any
 local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
 local AbilityData = require(script.Parent.Parent.Constants.AbilityData)
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
 
 --// Configs
-local DATASTORE_NAME = "PlayerData_Temp_v2"
+local PROFILE_STORE_NAME = "PlayerData1"
+local STUDIO_PROFILE_STORE_NAME = "PlayerDataTest1"
 local KEY_PREFIX = "Player_"
-local LOAD_ATTEMPTS = 3
+local LEGACY_DATASTORE_NAME = "PlayerData_Temp_v2" -- the old plain DataStore, copied into a player's profile once
+local LEGACY_MIGRATED_TAG = "LegacyMigrated"
+local LEGACY_LOAD_ATTEMPTS = 3
 local RETRY_SECONDS = 1
-local AUTOSAVE_SECONDS = 120
 local INVENTORY_NAME = "Inventory"
 local INVENTORY_KEYS = { Wool = true, Luck = true } -- the rest of the numbers become player attributes
 local RENAMED_KEYS = { WoolGainLevel = "MoreWoolLevel" } -- old save key -> current key
@@ -50,42 +54,69 @@ export type Data = {
 	BestFind: string, -- SheepData type key of the rarest sheep ever shorn; "" = none yet
 	SheepIndex: { [string]: string }, -- sheep type -> "Found" | "Claimed" (kept through rebirths)
 	PodiumSheep: { [string]: any }, -- podium name -> SheepHandler.SavedSheep standing on it
+	CrookTutorialDone: number, -- 1 once the Shepherd's Crook tutorial has been shown (a number so it mirrors to an attribute)
 }
 
-local function getDefaultData(): Data
-	return {
-		Wool = 100, -- starter wool: with the tutorial's first 3 sheep it pays for its 3 upgrades in one shop visit
-		Luck = 0,
-		Gems = 0,
-		MaxSheep = FarmData.StartingMaxSheep,
-		SheepCount = nil,
-		MoreWoolLevel = 0,
-		SpeedLevel = 0,
-		DamageLevel = 0,
-		RespawnLevel = 0,
-		Rebirths = 0,
-		Prestiges = 0,
-		ShearId = ShearData.DefaultShearId,
-		OwnedShears = { ShearData.DefaultShearId },
-		AbilityEquipped = AbilityData.DefaultAbilityId,
-		OwnedAbilities = { AbilityData.DefaultAbilityId },
-		AbilityPity = 0,
-		SheepShearedCount = 0,
-		BestFind = "",
-		SheepIndex = {},
-		PodiumSheep = {},
-	}
-end
+local DataTemplate = {
+	-- Currencies
+	Wool = 100, -- starter wool: with the tutorial's first 3 sheep it pays for its 3 upgrades in one shop visit
+	Luck = 0,
+	Gems = 0,
+
+	-- Farm
+	MaxSheep = FarmData.StartingMaxSheep,
+	SheepCount = nil,
+
+	-- Upgrades
+	MoreWoolLevel = 0,
+	SpeedLevel = 0,
+	DamageLevel = 0,
+	RespawnLevel = 0,
+
+	-- Progression
+	Rebirths = 0,
+	Prestiges = 0,
+
+	-- Shears
+	ShearId = ShearData.DefaultShearId,
+	OwnedShears = { ShearData.DefaultShearId },
+
+	-- Abilities
+	AbilityEquipped = AbilityData.DefaultAbilityId,
+	OwnedAbilities = { AbilityData.DefaultAbilityId },
+	AbilityPity = 0,
+
+	-- Index
+	SheepShearedCount = 0,
+	BestFind = "",
+	SheepIndex = {},
+	PodiumSheep = {},
+
+	-- Tutorials
+	CrookTutorialDone = 0,
+}
+
+-- Creating a profile store (Studio saves go to a separate test store)
+local profileStore = profileService.GetProfileStore(
+	if runService:IsStudio() then STUDIO_PROFILE_STORE_NAME else PROFILE_STORE_NAME,
+	DataTemplate
+)
 
 --// State
-local dataStore: DataStore? = nil
-local profiles: { [Player]: Data } = {}
-local canSave: { [Player]: boolean } = {} -- false when loading failed, so defaults never overwrite a real save
+local profiles: { [Player]: any } = {}
 
 local PlayerDataHandler = {}
 
 PlayerDataHandler.Loaded = Signal.new() -- (player, data)
 PlayerDataHandler.Changed = Signal.new() -- (player, key, value)
+
+local function deepCopy(original: { [any]: any }): { [any]: any }
+	local copy = {}
+	for key, value in original do
+		copy[key] = if type(value) == "table" then deepCopy(value) else value
+	end
+	return copy
+end
 
 --// Mirroring -------------------------------------------------------------------------
 
@@ -124,26 +155,54 @@ local function mirror(player: Player, key: string, value: any)
 	end
 end
 
---// Loading and saving ------------------------------------------------------------------
+--// Loading ---------------------------------------------------------------------------
 
-local function getKey(player: Player): string
-	return KEY_PREFIX .. player.UserId
+-- Copies the old plain DataStore save into a fresh profile once; false if it couldn't be read (so nothing is lost by playing on).
+local function migrateLegacyData(player: Player, profile: any): boolean
+	if profile:GetMetaTag(LEGACY_MIGRATED_TAG) then
+		return true
+	end
+
+	for attempt = 1, LEGACY_LOAD_ATTEMPTS do
+		local success, result = pcall(function()
+			return dataStoreService:GetDataStore(LEGACY_DATASTORE_NAME):GetAsync(KEY_PREFIX .. player.UserId)
+		end)
+		if success then
+			if type(result) == "table" then
+				for key, value in result do
+					profile.Data[key] = value
+				end
+			end
+			profile:SetMetaTag(LEGACY_MIGRATED_TAG, true)
+			return true
+		end
+		warn(`PlayerDataHandler: reading {player.Name}'s old save failed (attempt {attempt}): {result}`)
+		task.wait(RETRY_SECONDS)
+	end
+	return false
 end
 
--- Fills in any field the save is missing (e.g. one added after the player last played).
-local function reconcile(saved: any): Data
-	local data = getDefaultData() :: any
-	if type(saved) == "table" then
-		for oldKey, value in saved do
-			local key = RENAMED_KEYS[oldKey] or oldKey
-			if REMOVED_KEYS[key] then
-				continue
-			end
-			if data[key] == nil or type(data[key]) == type(value) then
-				data[key] = value
-			end
+-- Renames/removes old keys, fills in any field the save is missing and drops values of the wrong type.
+local function reconcile(profile: any)
+	local data = profile.Data
+	for oldKey, newKey in RENAMED_KEYS do
+		if data[oldKey] ~= nil then
+			data[newKey] = data[oldKey]
+			data[oldKey] = nil
 		end
 	end
+	for key in REMOVED_KEYS do
+		data[key] = nil
+	end
+
+	profile:Reconcile()
+
+	for key, default in DataTemplate :: any do
+		if type(data[key]) ~= type(default) then
+			data[key] = if type(default) == "table" then deepCopy(default) else default
+		end
+	end
+
 	-- Known abilities only, once each, always with the default; the equipped one must be owned (e.g. one renamed or removed).
 	local ownedAbilities = { AbilityData.DefaultAbilityId }
 	for _, savedId in data.OwnedAbilities do
@@ -157,71 +216,61 @@ local function reconcile(saved: any): Data
 	if not table.find(ownedAbilities, data.AbilityEquipped) then
 		data.AbilityEquipped = AbilityData.DefaultAbilityId
 	end
-	return data :: Data
 end
 
-local function loadData(player: Player): (Data, boolean)
-	if not dataStore then
-		return getDefaultData(), false
+local function loadData(player: Player)
+	for key, value in profiles[player].Data do
+		mirror(player, key, value)
 	end
 
-	for attempt = 1, LOAD_ATTEMPTS do
-		local success, result = pcall(function()
-			return (dataStore :: DataStore):GetAsync(getKey(player))
-		end)
-		if success then
-			return reconcile(result), true
-		end
-		warn(`PlayerDataHandler: loading {player.Name} failed (attempt {attempt}): {result}`)
-		task.wait(RETRY_SECONDS)
-	end
-
-	return getDefaultData(), false
-end
-
-local function saveData(player: Player)
-	local data = profiles[player]
-	if not data or not canSave[player] or not dataStore then
-		return
-	end
-
-	local success, err = pcall(function()
-		(dataStore :: DataStore):SetAsync(getKey(player), data, { player.UserId })
-	end)
-	if not success then
-		warn(`PlayerDataHandler: saving {player.Name} failed: {err}`)
-	end
+	PlayerDataHandler.Loaded:Fire(player, profiles[player].Data)
 end
 
 local function onPlayerAdded(player: Player)
 	getInventory(player)
 
-	local data, loaded = loadData(player)
-	if not player.Parent then
+	local profile = profileStore:LoadProfileAsync(KEY_PREFIX .. player.UserId)
+	if profile == nil then
+		player:Kick("Your data couldn't be loaded, please rejoin.")
 		return
 	end
 
-	profiles[player] = data
-	canSave[player] = loaded
+	profile:AddUserId(player.UserId)
 
-	for key, value in data :: any do
-		mirror(player, key, value)
+	if not migrateLegacyData(player, profile) then
+		profile:Release()
+		player:Kick("Your data couldn't be loaded, please rejoin.")
+		return
 	end
 
-	PlayerDataHandler.Loaded:Fire(player, data)
+	reconcile(profile)
+
+	profile:ListenToRelease(function()
+		profiles[player] = nil
+		player:Kick("Your data was loaded on another server, please rejoin.")
+	end)
+
+	if player:IsDescendantOf(players) then
+		profiles[player] = profile
+		loadData(player)
+	else
+		profile:Release()
+	end
 end
 
 local function onPlayerRemoving(player: Player)
-	saveData(player)
-	profiles[player] = nil
-	canSave[player] = nil
+	local profile = profiles[player]
+	if profile then
+		profile:Release()
+	end
 end
 
 --// Public API ------------------------------------------------------------------------
 
 -- The player's data, or nil until it has loaded.
 function PlayerDataHandler.getData(player: Player): Data?
-	return profiles[player]
+	local profile = profiles[player]
+	return if profile then profile.Data else nil
 end
 
 -- Yields until the player's data has loaded; nil if they left first.
@@ -229,16 +278,16 @@ function PlayerDataHandler.waitForData(player: Player): Data?
 	while player.Parent and not profiles[player] do
 		task.wait()
 	end
-	return profiles[player]
+	return PlayerDataHandler.getData(player)
 end
 
 function PlayerDataHandler.get(player: Player, key: string): any
-	local data = profiles[player] :: any
+	local data = PlayerDataHandler.getData(player) :: any
 	return if data then data[key] else nil
 end
 
 function PlayerDataHandler.set(player: Player, key: string, value: any)
-	local data = profiles[player] :: any
+	local data = PlayerDataHandler.getData(player) :: any
 	if not data then
 		return
 	end
@@ -254,7 +303,7 @@ function PlayerDataHandler.reset(player: Player)
 		return
 	end
 
-	for key, value in getDefaultData() :: any do
+	for key, value in deepCopy(DataTemplate) do
 		PlayerDataHandler.set(player, key, value)
 	end
 	PlayerDataHandler.set(player, "SheepCount", nil)
@@ -286,41 +335,15 @@ end
 --// Lifecycle -----------------------------------------------------------------------
 
 function PlayerDataHandler.Setup()
-	local success, result = pcall(function()
-		return dataStoreService:GetDataStore(DATASTORE_NAME)
-	end)
-	if success then
-		dataStore = result
-	else
-		warn(`PlayerDataHandler: DataStores unavailable, progress won't save ({result}).`)
-	end
-
 	players.PlayerAdded:Connect(onPlayerAdded)
 	players.PlayerRemoving:Connect(onPlayerRemoving)
 	for _, player in players:GetPlayers() do
 		task.spawn(onPlayerAdded, player)
 	end
 
-	task.spawn(function()
-		while true do
-			task.wait(AUTOSAVE_SECONDS)
-			for player in profiles do
-				task.spawn(saveData, player)
-			end
-		end
-	end)
-
 	game:BindToClose(function()
-		local pending = 0
-		for player in profiles do
-			pending += 1
-			task.spawn(function()
-				saveData(player)
-				pending -= 1
-			end)
-		end
-		while pending > 0 do
-			task.wait()
+		for _, player in players:GetPlayers() do
+			onPlayerRemoving(player)
 		end
 	end)
 end

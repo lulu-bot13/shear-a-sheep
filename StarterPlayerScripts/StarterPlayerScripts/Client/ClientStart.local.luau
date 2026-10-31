@@ -25,9 +25,10 @@ moduleLoader.Init()
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local mainGui = playerGui:WaitForChild("Main")
-local woolAmountLabel = mainGui:WaitForChild("WoolAmount") :: TextLabel
-local luckAmountLabel = mainGui:WaitForChild("LuckAmount") :: TextLabel
-local gemAmountLabel = mainGui:WaitForChild("GemAmount") :: TextLabel
+local currencyFrame = mainGui:WaitForChild("CurrencyFrame")
+local woolAmountLabel = currencyFrame:WaitForChild("WoolAmount") :: TextLabel
+local luckAmountLabel = currencyFrame:WaitForChild("LuckAmount") :: TextLabel
+local gemAmountLabel = currencyFrame:WaitForChild("GemAmount") :: TextLabel
 local sheepCountLabel = mainGui:WaitForChild("SheepCount"):WaitForChild("Count") :: TextLabel
 local sheepPenCount = mainGui:WaitForChild("SheepPenCount")
 local sheepPenCountLabel = (if sheepPenCount:IsA("TextLabel") then sheepPenCount else sheepPenCount:FindFirstChildWhichIsA("TextLabel", true)) :: TextLabel

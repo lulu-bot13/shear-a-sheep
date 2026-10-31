@@ -750,7 +750,12 @@ local function prepareNewModel(sheepModel: Model, root: BasePart)
 		end
 	end
 	createHealthHud(root)
-	bindAnimations(sheepModel, sheepModel:FindFirstChildOfClass("Humanoid") :: Humanoid)
+
+	-- Sheep never fall over; a Halloween spawn buried in the floor would otherwise come out ragdolled.
+	local humanoid = sheepModel:FindFirstChildOfClass("Humanoid") :: Humanoid
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+	bindAnimations(sheepModel, humanoid)
 end
 
 local function acquireModel(sheepType: string): Model?
@@ -997,6 +1002,14 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 			sheepModel:PivotTo(emerged) -- where the clients' rise ends
 			sheepModel:SetAttribute(RISING, nil)
 			place()
+
+			-- It sat anchored underground with no floor below, so its humanoid thinks it is falling; stand it up.
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+			local humanoid = sheepModel:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+			end
 		end)
 	elseif size.id ~= HUGE_TIER then
 		place()

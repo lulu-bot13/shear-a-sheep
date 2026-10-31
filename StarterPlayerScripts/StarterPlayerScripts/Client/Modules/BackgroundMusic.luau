@@ -1,5 +1,5 @@
 --[[
-	Plays every song in SoundService.BackgroundMusic one after another on loop (night-only songs just during Night), client side only.
+	Plays the songs in SoundService.BackgroundMusic on loop, client side only: Halloween songs during Night, the rest otherwise.
 	setEnabled / toggle turn the music on and off (for the settings menu).
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Modules.BackgroundMusic
@@ -11,7 +11,7 @@ local soundService = game:GetService("SoundService")
 --// Configs
 local WEATHER_ATTRIBUTE = "Weather"
 local NIGHT = "Night"
-local NIGHT_ONLY_SONGS = { ["Night of the Ghouls"] = true } -- skipped unless it's Night
+local NIGHT_ONLY_SONGS = { ["Night of the Ghouls"] = true } -- the Halloween songs; only these play during Night
 
 --// Instances
 local musicGroup = soundService:WaitForChild("BackgroundMusic") :: SoundGroup
@@ -21,11 +21,16 @@ local songs: { Sound } = {}
 local currentIndex = 0
 local enabled = true
 local started = false
+local wasNight = false
 
 local BackgroundMusic = {}
 
+local function isNight(): boolean
+	return workspace:GetAttribute(WEATHER_ATTRIBUTE) == NIGHT
+end
+
 local function canPlay(song: Sound): boolean
-	return not NIGHT_ONLY_SONGS[song.Name] or workspace:GetAttribute(WEATHER_ATTRIBUTE) == NIGHT
+	return (NIGHT_ONLY_SONGS[song.Name] == true) == isNight()
 end
 
 local function playNext()
@@ -40,14 +45,20 @@ local function playNext()
 	end
 end
 
--- Night ending mid-song cuts a night-only song and moves on.
+-- Night starting or ending cuts the current song so the Halloween music swaps in (or out) straight away.
 local function onWeatherChanged()
+	local night = isNight()
+	if night == wasNight then
+		return
+	end
+	wasNight = night
+
 	local song = songs[currentIndex]
-	if song and not canPlay(song) then
+	if song then
 		song:Stop()
-		if enabled then
-			playNext()
-		end
+	end
+	if enabled then
+		playNext()
 	end
 end
 
@@ -56,6 +67,7 @@ function BackgroundMusic.start()
 		return
 	end
 	started = true
+	wasNight = isNight()
 
 	for _, child in musicGroup:GetChildren() do
 		if child:IsA("Sound") then

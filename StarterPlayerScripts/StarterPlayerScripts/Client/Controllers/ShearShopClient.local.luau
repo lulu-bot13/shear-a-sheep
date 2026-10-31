@@ -48,8 +48,8 @@ local CLOSE_DISTANCE = 6 -- studs outside the hitbox before the shop closes itse
 local DEFAULT_SHEAR_ID = "DefaultShear"
 local DISTANCE_CHECK_SECONDS = 0.25
 local MESSAGE_SECONDS = 1.3
--- Main HUD children left up while the shop is open; Ability is hidden by AbilityClient whenever any window is open.
-local HUD_KEEP = { WoolAmount = true, SheepCount = true, Ability = true }
+-- Main HUD children (and CurrencyFrame children) left up while the shop is open; Ability is hidden by AbilityClient whenever any window is open.
+local HUD_KEEP = { CurrencyFrame = true, WoolAmount = true, SheepCount = true, Ability = true }
 
 local REASON_TEXT = {
 	NoWool = "Not enough wool",
@@ -386,10 +386,13 @@ local function hideHud()
 	if not hud then
 		return
 	end
-	for _, child in hud:GetChildren() do
-		if child:IsA("GuiObject") and child.Visible and not HUD_KEEP[child.Name] then
-			child.Visible = false
-			table.insert(hiddenHud, child)
+	local currencyFrame = hud:FindFirstChild("CurrencyFrame")
+	for _, container in { hud, currencyFrame } do
+		for _, child in container:GetChildren() do
+			if child:IsA("GuiObject") and child.Visible and not HUD_KEEP[child.Name] then
+				child.Visible = false
+				table.insert(hiddenHud, child)
+			end
 		end
 	end
 end

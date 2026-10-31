@@ -10,6 +10,7 @@
 local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
+local starterPack = game:GetService("StarterPack")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
@@ -59,6 +60,47 @@ end
 local function isHoldingCrook(player: Player): boolean
 	local tool = player.Character and player.Character:FindFirstChild(CROOK_NAME)
 	return tool ~= nil and tool:IsA("Tool")
+end
+
+local function getNumber(player: Player, key: string): number
+	local value = PlayerDataHandler.get(player, key)
+	return if type(value) == "number" then value else 0
+end
+
+-- The crook is earned by rebirthing once; a Prestige (which resets Rebirths) keeps it.
+local function hasCrookUnlocked(player: Player): boolean
+	return getNumber(player, "Rebirths") > 0 or getNumber(player, "Prestiges") > 0
+end
+
+local function getCrookTemplate(): Tool?
+	local template = starterPack:FindFirstChild(CROOK_NAME) or replicatedStorage.Assets:FindFirstChild(CROOK_NAME, true)
+	return if template and template:IsA("Tool") then template else nil
+end
+
+-- Takes the crook away from a player who hasn't unlocked it (the StarterPack hands it out), or gives back a missing one.
+local function syncCrook(player: Player)
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if not backpack or not PlayerDataHandler.getData(player) then
+		return
+	end
+
+	local unlocked = hasCrookUnlocked(player)
+	local found = false
+	for _, container in { backpack, player.Character } do
+		local tool = container and container:FindFirstChild(CROOK_NAME)
+		if tool and tool:IsA("Tool") then
+			if unlocked and not found then
+				found = true
+			else
+				tool:Destroy()
+			end
+		end
+	end
+
+	local template = getCrookTemplate()
+	if unlocked and not found and template then
+		template:Clone().Parent = backpack
+	end
 end
 
 -- The plot (a child of Plots) the instance sits in.
@@ -398,6 +440,17 @@ local function onCharacterAdded(player: Player, character: Model)
 			dropCarried(player)
 		end)
 	end
+
+	-- The StarterPack fills the Backpack around spawn; a locked (or second) crook is taken out as soon as it lands.
+	local backpack = player:WaitForChild("Backpack", 10)
+	if backpack then
+		backpack.ChildAdded:Connect(function(child: Instance)
+			if child.Name == CROOK_NAME then
+				task.defer(syncCrook, player)
+			end
+		end)
+	end
+	syncCrook(player)
 end
 
 local function onPlayerAdded(player: Player)
@@ -412,7 +465,11 @@ local function onPlayerAdded(player: Player)
 	end
 
 	task.spawn(function()
-		if PlayerDataHandler.waitForData(player) and PlotHandler.waitForPlot(player) then
+		if not PlayerDataHandler.waitForData(player) then
+			return
+		end
+		syncCrook(player)
+		if PlotHandler.waitForPlot(player) then
 			restorePodiums(player)
 		end
 	end)
@@ -446,6 +503,8 @@ function SheepCarryHandler.Start()
 	PlayerDataHandler.Changed:Connect(function(player: Player, key: string)
 		if key == "PodiumSheep" and not savingPodiums then
 			restorePodiums(player)
+		elseif key == "Rebirths" or key == "Prestiges" then
+			syncCrook(player)
 		end
 	end)
 	players.PlayerAdded:Connect(onPlayerAdded)

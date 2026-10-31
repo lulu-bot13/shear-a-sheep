@@ -51,6 +51,7 @@ export type EnumType = "ShearSwing"
 	| "HalloweenSheepSpawn"
 	| "AnalyticsEvent"
 	| "RequestTutorialSheep"
+	| "CrookTutorialDone"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	ShearSwing = "ShearSwing",
@@ -95,6 +96,7 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	HalloweenSheepSpawn = "HalloweenSheepSpawn",
 	AnalyticsEvent = "AnalyticsEvent",
 	RequestTutorialSheep = "RequestTutorialSheep",
+	CrookTutorialDone = "CrookTutorialDone",
 }
 
 return RemoteEventName

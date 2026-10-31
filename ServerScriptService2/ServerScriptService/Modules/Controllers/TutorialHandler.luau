@@ -2,7 +2,7 @@
 
 --[[
 	Drops the tutorial's first sheep when TutorialClient asks: a Huge Basic Sheep whose health is cut right down after it spawns,
-	so the player's first shear is quick. Only for players who haven't sheared yet (or anyone in Studio), once per session.
+	so the player's first shear is quick (new players, or anyone in Studio). Also saves that the Crook tutorial has been shown.
 ]]--
 
 --// Services
@@ -21,6 +21,8 @@ local TUTORIAL_SHEEP_HEALTH = 40 -- two swings of the default shears (a normal H
 local TUTORIAL_ATTRIBUTE = "TutorialSheep" -- TutorialClient leads the player to the sheep with this
 local SPAWN_ATTEMPTS = 15 -- the farm may still be starting when the client asks
 local RETRY_SECONDS = 1
+local CROOK_TUTORIAL_KEY = "CrookTutorialDone" -- PlayerDataHandler field, 1 once CrookTutorialClient has run
+local CROOK_DONE_COOLDOWN = 1
 
 --// State
 local requested: { [Player]: boolean } = {}
@@ -63,10 +65,20 @@ local function onRequest(player: Player)
 	spawnTutorialSheep(player)
 end
 
+-- The Crook tutorial is shown once per save, so it's marked done as soon as the client finishes it.
+local function onCrookTutorialDone(player: Player)
+	if getNumber(player, CROOK_TUTORIAL_KEY) ~= 1 then
+		PlayerDataHandler.set(player, CROOK_TUTORIAL_KEY, 1)
+	end
+end
+
 function TutorialHandler.Start()
 	network.waitUntilReadyAsync()
 
 	network.connectEvent(network.RemoteEvents.RequestTutorialSheep, onRequest)
+	network.connectEvent(network.RemoteEvents.CrookTutorialDone, onCrookTutorialDone, {
+		network.Middleware.RateLimit(CROOK_DONE_COOLDOWN),
+	})
 
 	players.PlayerRemoving:Connect(function(player: Player)
 		requested[player] = nil
