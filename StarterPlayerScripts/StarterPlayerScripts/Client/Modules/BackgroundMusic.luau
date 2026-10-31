@@ -1,5 +1,5 @@
 --[[
-	Plays every song in SoundService.BackgroundMusic one after another on loop, client side only.
+	Plays every song in SoundService.BackgroundMusic one after another on loop (night-only songs just during Night), client side only.
 	setEnabled / toggle turn the music on and off (for the settings menu).
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Modules.BackgroundMusic
@@ -7,6 +7,11 @@
 
 --// Services
 local soundService = game:GetService("SoundService")
+
+--// Configs
+local WEATHER_ATTRIBUTE = "Weather"
+local NIGHT = "Night"
+local NIGHT_ONLY_SONGS = { ["Night of the Ghouls"] = true } -- skipped unless it's Night
 
 --// Instances
 local musicGroup = soundService:WaitForChild("BackgroundMusic") :: SoundGroup
@@ -19,14 +24,31 @@ local started = false
 
 local BackgroundMusic = {}
 
+local function canPlay(song: Sound): boolean
+	return not NIGHT_ONLY_SONGS[song.Name] or workspace:GetAttribute(WEATHER_ATTRIBUTE) == NIGHT
+end
+
 local function playNext()
-	if #songs == 0 then
-		return
+	for _ = 1, #songs do
+		currentIndex = currentIndex % #songs + 1
+		local song = songs[currentIndex]
+		if canPlay(song) then
+			song.TimePosition = 0
+			song:Play()
+			return
+		end
 	end
-	currentIndex = currentIndex % #songs + 1
+end
+
+-- Night ending mid-song cuts a night-only song and moves on.
+local function onWeatherChanged()
 	local song = songs[currentIndex]
-	song.TimePosition = 0
-	song:Play()
+	if song and not canPlay(song) then
+		song:Stop()
+		if enabled then
+			playNext()
+		end
+	end
 end
 
 function BackgroundMusic.start()
@@ -55,6 +77,8 @@ function BackgroundMusic.start()
 		end)
 	end
 
+	workspace:GetAttributeChangedSignal(WEATHER_ATTRIBUTE):Connect(onWeatherChanged)
+
 	if enabled then
 		playNext()
 	end
@@ -72,7 +96,7 @@ function BackgroundMusic.setEnabled(isEnabled: boolean)
 		if song then
 			song:Pause()
 		end
-	elseif song then
+	elseif song and canPlay(song) then
 		song:Resume()
 	elseif started then
 		playNext()

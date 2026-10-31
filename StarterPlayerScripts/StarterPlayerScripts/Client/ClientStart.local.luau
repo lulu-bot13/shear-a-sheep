@@ -1,5 +1,5 @@
 --[[
-	Starts the client network and keeps the Main HUD's wool, luck, Gems and sheep sheared labels updated.
+	Starts the client network and keeps the Main HUD's wool, luck, Gems, sheep sheared and pen count labels updated.
 	Wool, luck and Gems pop with a light green tint when they go up; the sheep sheared count pops a "+N".
 ]]--
 
@@ -29,6 +29,8 @@ local woolAmountLabel = mainGui:WaitForChild("WoolAmount") :: TextLabel
 local luckAmountLabel = mainGui:WaitForChild("LuckAmount") :: TextLabel
 local gemAmountLabel = mainGui:WaitForChild("GemAmount") :: TextLabel
 local sheepCountLabel = mainGui:WaitForChild("SheepCount"):WaitForChild("Count") :: TextLabel
+local sheepPenCount = mainGui:WaitForChild("SheepPenCount")
+local sheepPenCountLabel = (if sheepPenCount:IsA("TextLabel") then sheepPenCount else sheepPenCount:FindFirstChildWhichIsA("TextLabel", true)) :: TextLabel
 local inventory = player:WaitForChild("Inventory")
 local woolAmountValue = inventory:WaitForChild("Wool") :: IntValue
 local luckAmountValue = inventory:WaitForChild("Luck") :: IntValue
@@ -187,14 +189,24 @@ local function updateSheepCountLabel()
 	lastSheepCount = count
 end
 
+-- Sheep in the player's pen out of their capacity, e.g. 2/20 (set by SheepSpawnHandler).
+local function updateSheepPenCountLabel()
+	local count = player:GetAttribute("PenCount")
+	local maximum = player:GetAttribute("PenMax")
+	sheepPenCountLabel.Text = `{if type(count) == "number" then count else 0}/{if type(maximum) == "number" then maximum else 0}`
+end
+
 updateWoolAmountLabel()
 updateLuckAmountLabel()
 updateGemAmountLabel()
 updateSheepCountLabel()
+updateSheepPenCountLabel()
 
 woolAmountValue.Changed:Connect(updateWoolAmountLabel)
 luckAmountValue.Changed:Connect(updateLuckAmountLabel)
 player:GetAttributeChangedSignal("Gems"):Connect(updateGemAmountLabel)
 player:GetAttributeChangedSignal("SheepShearedCount"):Connect(updateSheepCountLabel)
+player:GetAttributeChangedSignal("PenCount"):Connect(updateSheepPenCountLabel)
+player:GetAttributeChangedSignal("PenMax"):Connect(updateSheepPenCountLabel)
 player:GetAttributeChangedSignal("WoolLabelHold"):Connect(updateWoolAmountLabel)
 player:GetAttributeChangedSignal("LuckLabelHold"):Connect(updateLuckAmountLabel)

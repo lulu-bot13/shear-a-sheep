@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep -v -i \"\\\\.png$\")"
+      "Bash(grep -v -i \"\\\\.png$\")",
+      "Read(//d/Vscode/shear-a-sheep/Constants/**)",
+      "Bash(awk -F'\"' '{print $2}')"
     ]
   }
 }

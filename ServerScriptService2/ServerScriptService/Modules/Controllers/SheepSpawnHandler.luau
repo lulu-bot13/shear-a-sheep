@@ -16,6 +16,7 @@ local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
 local WeatherData = require(script.Parent.Parent.Constants.WeatherData)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local PlotHandler = require(script.Parent.PlotHandler)
+local PodiumBonusHandler = require(script.Parent.PodiumBonusHandler)
 local SheepHandler = require(script.Parent.SheepHandler)
 local SheepWanderHandler = require(script.Parent.SheepWanderHandler)
 local WeatherHandler = require(script.Parent.WeatherHandler)
@@ -41,11 +42,15 @@ local function setCapacityText(plot: Instance, current: number, maximum: number)
 	end
 end
 
+-- Also mirrors the numbers onto PenCount/PenMax attributes for the Main HUD's SheepPenCount label.
 local function updateCapacityLabel(player: Player)
 	local plot = activePlots[player]
 	local maxSheep = PlayerDataHandler.get(player, "MaxSheep")
 	if plot and type(maxSheep) == "number" then
-		setCapacityText(plot, SheepHandler.getSheepCount(player), maxSheep)
+		local count = SheepHandler.getSheepCount(player)
+		setCapacityText(plot, count, maxSheep)
+		player:SetAttribute("PenCount", count)
+		player:SetAttribute("PenMax", maxSheep)
 	end
 end
 
@@ -60,10 +65,10 @@ local function getMaxSheep(player: Player): number
 	return math.min(getNumber(player, "MaxSheep"), FarmData.MaxSheepCap)
 end
 
--- Seconds between refills, shortened by the player's Faster Respawn level and the weather.
+-- Seconds between refills, shortened by the player's Faster Respawn level, the weather and their podium sheep.
 local function getSpawnInterval(player: Player): number
 	local interval = UpgradeData.getSpawnInterval(FarmData.SpawnInterval, getNumber(player, "RespawnLevel"))
-	return interval * WeatherHandler.getRespawnMultiplier()
+	return interval * WeatherHandler.getRespawnMultiplier() * PodiumBonusHandler.getRespawnMultiplier(player)
 end
 
 -- Pooled models keep their attributes, so Charged is always rewritten (true or cleared).
@@ -90,7 +95,7 @@ local function spawnOne(player: Player): boolean
 		getNumber(player, "Luck"),
 		getNumber(player, "Rebirths"),
 		getNumber(player, "Prestiges"),
-		WeatherHandler.getLuckMultiplier(),
+		WeatherHandler.getLuckMultiplier() * PodiumBonusHandler.getLuckMultiplier(player),
 		WeatherHandler.isHalloween()
 	)
 	if not sheep then

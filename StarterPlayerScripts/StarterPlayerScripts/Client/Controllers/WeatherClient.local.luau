@@ -116,7 +116,7 @@ local function updateLabel()
 	end
 	local text = WEATHER_TEXT[current] or WEATHER_TEXT.Clear
 	local endsAt = workspace:GetAttribute(ENDS_AT_ATTRIBUTE)
-	if current ~= CLEAR and type(endsAt) == "number" then
+	if type(endsAt) == "number" then
 		label.Text = `{text.label}  {formatTime(endsAt - workspace:GetServerTimeNow())}`
 	else
 		label.Text = text.label

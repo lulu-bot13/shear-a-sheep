@@ -21,6 +21,7 @@ local AnnouncementHandler = require(script.Parent.AnnouncementHandler)
 local GemHandler = require(script.Parent.GemHandler)
 local IndexHandler = require(script.Parent.IndexHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
+local PodiumBonusHandler = require(script.Parent.PodiumBonusHandler)
 local SheepHandler = require(script.Parent.SheepHandler)
 local ShearShopHandler = require(script.Parent.ShearShopHandler)
 local SheepWanderHandler = require(script.Parent.SheepWanderHandler)
@@ -62,11 +63,12 @@ local function getNumber(player: Player, key: string): number
 	return if type(value) == "number" then value else 0
 end
 
--- Wool for shearing this sheep bare: its own wool times the Prestige and More Wool multipliers.
+-- Wool for shearing this sheep bare: its own wool times the Prestige, More Wool and podium multipliers.
 local function getWoolReward(player: Player, sheep: Model): number
 	local baseWool = sheep:GetAttribute("WoolAmount")
 	local multiplier = PrestigeData.getWoolMultiplier(getNumber(player, "Prestiges"))
 		* UpgradeData.getMoreWoolMultiplier(getNumber(player, "MoreWoolLevel"))
+		* PodiumBonusHandler.getWoolMultiplier(player)
 	return math.floor((if type(baseWool) == "number" then baseWool else 0) * multiplier)
 end
 

@@ -16,6 +16,7 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local PlotHandler = require(script.Parent.PlotHandler)
+local PodiumBonusHandler = require(script.Parent.PodiumBonusHandler)
 local SheepHandler = require(script.Parent.SheepHandler)
 local SheepWanderHandler = require(script.Parent.SheepWanderHandler)
 
@@ -159,6 +160,7 @@ local function carry(player: Player, sheep: Model, source: string)
 		return
 	end
 
+	PodiumBonusHandler.hideStats(sheep)
 	setCarryPhysics(sheep, true)
 	root.Anchored = false
 	local _, yaw = playerRoot.CFrame:ToOrientation()
@@ -197,6 +199,7 @@ local function returnToPen(player: Player, sheep: Model, position: Vector3)
 end
 
 local function discard(sheep: Model)
+	PodiumBonusHandler.hideStats(sheep)
 	setCarryPhysics(sheep, false)
 	SheepHandler.discardSheep(sheep)
 end
@@ -259,6 +262,7 @@ local function display(prompt: ProximityPrompt, sheep: Model)
 	sheep.Parent = top.Parent or top
 	hideHealthHud(sheep)
 	SheepHandler.setHudVisible(sheep, true)
+	PodiumBonusHandler.showStats(sheep, SheepHandler.saveSheep(sheep))
 
 	displayed[prompt] = sheep
 	setOccupied(prompt, true)
