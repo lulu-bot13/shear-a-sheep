@@ -14,7 +14,9 @@ local players = game:GetService("Players")
 
 --// Modules
 local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
+local network = require(replicatedStorage.Shared.Utils.Network)
 local PlotHandler = require(script.Parent.PlotHandler)
+local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local MutationData = require(script.Parent.Parent.Constants.MutationData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local SheepSizeData = require(script.Parent.Parent.Constants.SheepSizeData)
@@ -28,12 +30,18 @@ local sheepHudTemplate = replicatedStorage.Assets.UI.SheepHUD :: BillboardGui
 local sheepHudNameLabel = sheepHudTemplate:FindFirstChild("NameLabel", true) :: TextLabel? -- the health bar copies its font
 local hudStudsOffset = sheepHudTemplate.StudsOffset
 local hudWorldOffset = sheepHudTemplate.StudsOffsetWorldSpace
+local hudSize = sheepHudTemplate.Size
 local walkAnimation = replicatedStorage.Assets.Animations.SheepWalking :: Animation
 local vfxFolder = replicatedStorage.Assets:FindFirstChild("VFX")
 local mutationVfx = vfxFolder and vfxFolder:FindFirstChild("Mutations") -- a folder or attachment per mutation id
 if not mutationVfx then
 	warn("SheepHandler: no Assets.VFX.Mutations folder in ReplicatedStorage, so mutated sheep get no VFX.")
 end
+local hugeSpawnVfx = vfxFolder and vfxFolder:FindFirstChild("HugeSpawnVFX") -- played by SheepSizeClient
+local hugeWindup = hugeSpawnVfx and hugeSpawnVfx:GetAttribute("WindupSeconds")
+local halloweenSpawnVfx = vfxFolder and vfxFolder:FindFirstChild("HalloweenSpawnVFX") -- played by HalloweenSpawnClient
+local pitOpen = halloweenSpawnVfx and halloweenSpawnVfx:GetAttribute("OpenSeconds")
+local pitRise = halloweenSpawnVfx and halloweenSpawnVfx:GetAttribute("RiseSeconds")
 
 --// Configs
 local SHEEPS_FOLDER_NAME = "Sheeps" -- lives inside each plot
@@ -51,19 +59,18 @@ local SIZE_COLOR = "SizeColor" -- the tier's name colour; nil for plain sizes
 local WEIGHT = "Weight" -- kg
 local SPAWNED_AT = "SpawnedAt" -- server time, so clients only celebrate fresh spawns (not ones streaming in)
 local HEALTH_HUD_NAME = "HealthHUD"
-local HEALTH_HUD_SIZE = Vector2.new(4.5, 1.3) -- studs
+local HEALTH_HUD_SIZE = UDim2.fromScale(4.5, 1.3) -- studs
+local HUD_SCALE = 0.75 -- billboard size for adult and Giant sheep (and Normal/Huge sizes), times the full size
+local FULL_HUD_SIZE_TIER = "Tiny" -- SheepSizeData tier whose billboards stay full size, like babies'
 local HEALTH_FULL_COLOR = Color3.fromRGB(110, 220, 120)
 local HEALTH_EMPTY_COLOR = Color3.fromRGB(230, 90, 80)
 local WALK_MIN_SPEED = 0.1 -- below this the sheep counts as standing still
 local TAIL_PART_NAME = "Tail" -- used for tail VFX when the model has one; otherwise the back of the Torso
-local RAINBOW_GRADIENT_NAME = "RainbowGradient"
-local RAINBOW_COLORS = ColorSequence.new({
-	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 80, 80)),
-	ColorSequenceKeypoint.new(0.25, Color3.fromRGB(255, 220, 80)),
-	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(90, 230, 120)),
-	ColorSequenceKeypoint.new(0.75, Color3.fromRGB(90, 160, 255)),
-	ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 110, 255)),
-}) -- MutationClient animates it; this is what shows before it does
+local HUGE_TIER = "Huge" -- fresh spawns of this tier wait out the HugeSpawnVFX windup before appearing
+local HUGE_WINDUP_SECONDS = if type(hugeWindup) == "number" then hugeWindup else 0.7
+local RISING = "Rising" -- true while a Halloween spawn climbs out of its pit; nothing shears or picks it up meanwhile
+local PIT_OPEN_SECONDS = if type(pitOpen) == "number" then pitOpen else 0.45
+local PIT_RISE_SECONDS = if type(pitRise) == "number" then pitRise else 1.3
 
 --// Object pool keys
 local SHEEP_POOL = "SheepModel" -- keyed by sheep type name, since meshes differ per type
@@ -74,10 +81,44 @@ local HUD_KEY = "SheepHUD"
 local sheepById: { [number]: Model } = {}
 local woolConnections: { [number]: RBXScriptConnection } = {}
 local countByOwner: { [number]: number? } = {}
+local pendingSheep: { [Model]: number } = {} -- Huge windups and Halloween rises, by owner id: counted but not yet registered
 local nextSheepId = 0
 local random = Random.new()
 
 local SheepHandler = {}
+
+--[[
+	Every Baby/Giant type needs a model in its SheepData variant folder in ReplicatedStorage, so clients can show it too.
+	Any that wasn't built in Studio is made here from the adult's model scaled by the variant's scale.
+]]
+local function createVariantModels()
+	for _, variant in SheepData.Variants do
+		local folder = sheepModels:FindFirstChild(variant.folder)
+		if not folder then
+			folder = Instance.new("Folder")
+			folder.Name = variant.folder
+			folder.Parent = sheepModels
+		end
+
+		for sheepType, info in SheepData.Sheep do
+			if info.variant ~= variant.id or folder:FindFirstChild(sheepType) then
+				continue
+			end
+			local adult = sheepModels:FindFirstChild(info.adult or "")
+			if not adult or not adult:IsA("Model") then
+				warn(`SheepHandler: no '{info.adult}' model in Assets.Models.Sheeps to make '{sheepType}' from.`)
+				continue
+			end
+
+			local model = adult:Clone()
+			model.Name = sheepType
+			model:ScaleTo(model:GetScale() * variant.scale)
+			model.Parent = folder
+		end
+	end
+end
+
+createVariantModels()
 
 SheepHandler.CountChanged = Signal.new() -- (player, count)
 
@@ -188,22 +229,13 @@ end
 
 --// Size --------------------------------------------------------------------------------------
 
---[[
-	The sheep's name for a RichText label: mutation and size prefixes (if any) in their colours; babies keep the size
-	prefix plain. Rainbow names stay plain throughout so the gradient colours all of it.
-]]
-local function formatName(name: string, size: SheepSizeData.SizeInfo?, baby: boolean?, mutation: MutationData.MutationInfo?): string
-	local rainbow = mutation ~= nil and mutation.rainbowName == true
-	local text = name
-	if size and size.prefix then
-		local prefix = if size.color and not baby and not rainbow then `<font color="#{size.color:ToHex()}">{size.prefix}</font>` else size.prefix
-		text = `{prefix} {text}`
+-- The sheep's name for a RichText label: the size prefix (if any) in its colour; babies keep it plain. Mutations show only as VFX.
+local function formatName(name: string, size: SheepSizeData.SizeInfo?, baby: boolean?): string
+	if not size or not size.prefix then
+		return name
 	end
-	if mutation then
-		local prefix = if rainbow then mutation.id else `<font color="#{mutation.color:ToHex()}">{mutation.id}</font>`
-		text = `{prefix} {text}`
-	end
-	return text
+	local prefix = if size.color and not baby then `<font color="#{size.color:ToHex()}">{size.prefix}</font>` else size.prefix
+	return `{prefix} {name}`
 end
 
 -- The same name without colours, for the SheepName attribute.
@@ -212,10 +244,19 @@ local function getPlainName(info: SheepData.SheepInfo, size: SheepSizeData.SizeI
 	return if mutation then `{mutation.id} {name}` else name
 end
 
--- Raises a billboard with the model so it stays over a scaled sheep's back.
-local function setHudOffset(hud: BillboardGui, scaleRatio: number)
+-- Babies and Tiny sheep keep their billboards at full size; everything else gets HUD_SCALE.
+local function getHudScale(info: SheepData.SheepInfo, size: SheepSizeData.SizeInfo): number
+	return if info.baby or size.id == FULL_HUD_SIZE_TIER then 1 else HUD_SCALE
+end
+
+-- Raises a billboard with the model so it stays over a scaled sheep's back, and sizes it to `baseSize` * `hudScale`.
+local function placeHud(hud: BillboardGui, scaleRatio: number, baseSize: UDim2, hudScale: number)
 	hud.StudsOffset = hudStudsOffset * scaleRatio
 	hud.StudsOffsetWorldSpace = hudWorldOffset * scaleRatio
+	hud.Size = UDim2.new(
+		baseSize.X.Scale * hudScale, baseSize.X.Offset * hudScale,
+		baseSize.Y.Scale * hudScale, baseSize.Y.Offset * hudScale
+	)
 end
 
 --[[
@@ -235,26 +276,6 @@ local function scaleModel(sheep: Model, scale: number): number
 end
 
 --// Mutation ----------------------------------------------------------------------------------
-
--- Rainbow names get a white base under a tagged gradient for MutationClient to animate; any other name loses an old one.
-local function styleMutationName(label: TextLabel, mutation: MutationData.MutationInfo?)
-	local gradient = label:FindFirstChild(RAINBOW_GRADIENT_NAME)
-	if not mutation or not mutation.rainbowName then
-		if gradient then
-			gradient:Destroy()
-		end
-		return
-	end
-
-	label.TextColor3 = Color3.new(1, 1, 1)
-	if not gradient then
-		local newGradient = Instance.new("UIGradient")
-		newGradient.Name = RAINBOW_GRADIENT_NAME
-		newGradient.Color = RAINBOW_COLORS
-		collectionService:AddTag(newGradient, MutationData.RainbowGradientTag)
-		newGradient.Parent = label
-	end
-end
 
 --[[
 	The middle of the sheep's back end in its root's space: a Tail part if the model has one, otherwise the end of the
@@ -329,7 +350,7 @@ local function createHealthHud(root: BasePart)
 
 	local hud = Instance.new("BillboardGui")
 	hud.Name = HEALTH_HUD_NAME
-	hud.Size = UDim2.fromScale(HEALTH_HUD_SIZE.X, HEALTH_HUD_SIZE.Y)
+	hud.Size = HEALTH_HUD_SIZE
 	hud.StudsOffset = sheepHudTemplate.StudsOffset
 	hud.StudsOffsetWorldSpace = sheepHudTemplate.StudsOffsetWorldSpace
 	hud.MaxDistance = sheepHudTemplate.MaxDistance
@@ -409,7 +430,7 @@ local function updateHealthHud(sheep: Model)
 	local sheepType = sheep:GetAttribute("SheepType")
 	local info = if type(sheepType) == "string" then SheepData.Sheep[sheepType] else nil
 	nameLabel.Text = if info
-		then formatName(info.name, SheepSizeData.get(sheep:GetAttribute(SIZE_TIER)), info.baby, MutationData.get(sheep:GetAttribute(MutationData.Attribute)))
+		then formatName(info.name, SheepSizeData.get(sheep:GetAttribute(SIZE_TIER)), info.baby)
 		else tostring(sheep:GetAttribute("SheepName") or "Sheep")
 	fill.Size = UDim2.fromScale(ratio, 1)
 	fill.Visible = ratio > 0
@@ -440,6 +461,7 @@ local function resetSheepForPool(sheep: Instance)
 
 	sheep:SetAttribute(OWNER_ATTRIBUTE, nil)
 	sheep:SetAttribute("Grazing", nil)
+	sheep:SetAttribute(RISING, nil)
 
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
 	if humanoid then
@@ -563,6 +585,12 @@ function SheepHandler.clearSheep(player: Player)
 			releaseSheep(id)
 		end
 	end
+	for sheep, ownerId in pendingSheep do
+		if ownerId == player.UserId then
+			pendingSheep[sheep] = nil
+			poolSheep(sheep)
+		end
+	end
 	countByOwner[player.UserId] = nil
 end
 
@@ -615,10 +643,11 @@ local function acquireModel(sheepType: string): Model?
 		return pooled :: Model
 	end
 
-	local babyModels = sheepModels:FindFirstChild("BabySheeps")
-	local template = sheepModels:FindFirstChild(sheepType) or (babyModels and babyModels:FindFirstChild(sheepType))
+	local variant = SheepData.getVariant(sheepType)
+	local folder = if variant then sheepModels:FindFirstChild(variant.folder) else sheepModels
+	local template = folder and folder:FindFirstChild(sheepType)
 	if not template or not template:IsA("Model") then
-		warn(`SheepHandler: '{sheepType}' is not a model in Assets.Models.Sheeps or Sheeps.BabySheeps.`)
+		warn(`SheepHandler: '{sheepType}' is not a model in Assets.Models.Sheeps{if variant then "." .. variant.folder else ""}.`)
 		return nil
 	end
 
@@ -636,15 +665,7 @@ local function acquireModel(sheepType: string): Model?
 end
 
 -- Fills in and (re)parents a SheepHUD billboard under the sheep's HumanoidRootPart.
-local function attachHud(
-	root: BasePart,
-	info: SheepData.SheepInfo,
-	oddsText: string,
-	size: SheepSizeData.SizeInfo,
-	weight: number,
-	scaleRatio: number,
-	mutation: MutationData.MutationInfo?
-)
+local function attachHud(root: BasePart, info: SheepData.SheepInfo, oddsText: string, size: SheepSizeData.SizeInfo, scaleRatio: number)
 	local hud = (ObjectPool.acquire(HUD_POOL, HUD_KEY) or sheepHudTemplate:Clone()) :: BillboardGui
 
 	local card = hud:FindFirstChild("Card")
@@ -655,9 +676,8 @@ local function attachHud(
 
 	if nameLabel then
 		nameLabel.RichText = true
-		nameLabel.Text = formatName(info.name, size, info.baby, mutation)
+		nameLabel.Text = formatName(info.name, size, info.baby)
 		SheepStyle.apply(nameLabel, SheepStyle.getMood(info.rarity, info.baby))
-		styleMutationName(nameLabel, mutation)
 	end
 	if rarityLabel then
 		rarityLabel.Text = info.rarity
@@ -666,10 +686,10 @@ local function attachHud(
 		rarityPill.BackgroundColor3 = info.color
 	end
 	if oddsLabel then
-		oddsLabel.Text = `{oddsText} · {weight} kg`
+		oddsLabel.Text = oddsText
 	end
 
-	setHudOffset(hud, scaleRatio)
+	placeHud(hud, scaleRatio, hudSize, getHudScale(info, size))
 	hud.Name = "SheepHUD"
 	hud.Enabled = true
 	hud.Adornee = root
@@ -732,15 +752,17 @@ end
 
 --[[
 	Rolls a sheep type with the player's Luck, rebirths and Prestiges and drops it at `position` on their plot.
-	Returns the sheep and its id, or nil if it couldn't be spawned.
+	Halloween sheep can only roll when `halloween` is true. Returns the sheep and its id, or nil if it couldn't be spawned.
+	A Huge sheep is counted at once but only registered and shown after the HugeSpawnVFX windup; during Halloween every
+	sheep (Huge too) instead rises out of a pit and is registered once it is out.
 ]]
-function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number, rebirths: number, prestiges: number, luckBoost: number?): (Model?, number?)
+function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number, rebirths: number, prestiges: number, luckBoost: number?, halloween: boolean?): (Model?, number?)
 	local sheepFolder = getSheepFolder(player)
 	if not sheepFolder then
 		return nil, nil
 	end
 
-	local sheepType = SheepData.roll(luck, rebirths, prestiges, random, luckBoost)
+	local sheepType = SheepData.roll(luck, rebirths, prestiges, random, luckBoost, halloween)
 	local info = sheepType and SheepData.Sheep[sheepType]
 	if not sheepType or not info then
 		return nil, nil
@@ -752,11 +774,12 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 	end
 
 	local root = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
-	local oddsText = SheepData.getOddsText(sheepType, luck, rebirths, prestiges, luckBoost)
+	local oddsText = SheepData.getOddsText(sheepType, luck, rebirths, prestiges, luckBoost, halloween)
 
 	local size = SheepSizeData.roll(random)
 	local mutation = MutationData.roll(random)
-	local weight, weightWool = SheepSizeData.rollWeight(size, info.baby == true, random)
+	local variant = SheepData.getVariant(sheepType)
+	local weight, weightWool = SheepSizeData.rollWeight(size, if variant then variant.weight else 1, random)
 	local lift = scaleModel(sheepModel, size.scale)
 	local scaleRatio = getScaleRatio(sheepModel)
 	local maxHealth = math.floor(info.ShearHealth * size.health + 0.5)
@@ -765,14 +788,12 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 	local healthHud = root:FindFirstChild(HEALTH_HUD_NAME)
 	if healthHud and healthHud:IsA("BillboardGui") then
 		local healthName = healthHud:FindFirstChild("NameLabel") :: TextLabel
-		setHudOffset(healthHud, scaleRatio)
+		placeHud(healthHud, scaleRatio, HEALTH_HUD_SIZE, getHudScale(info, size))
 		SheepStyle.apply(healthName, SheepStyle.getMood(info.rarity, info.baby))
-		styleMutationName(healthName, mutation)
 	end
 
 	nextSheepId += 1
 	local id = nextSheepId
-	sheepById[id] = sheepModel
 
 	sheepModel:SetAttribute("id", id)
 	sheepModel:SetAttribute(OWNER_ATTRIBUTE, player.UserId)
@@ -789,29 +810,90 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 	sheepModel:SetAttribute(SIZE_TIER, size.id)
 	sheepModel:SetAttribute(SIZE_COLOR, size.color)
 	sheepModel:SetAttribute(WEIGHT, weight)
-	sheepModel:SetAttribute(SPAWNED_AT, workspace:GetServerTimeNow())
 	sheepModel:SetAttribute("Charged", nil) -- SheepSpawnHandler charges it after; pooled models must not keep an old charge
 
-	sheepModel:PivotTo(CFrame.new(position + Vector3.new(0, lift, 0)) * CFrame.Angles(0, random:NextNumber(0, math.pi * 2), 0))
-	root.Anchored = false
-	collectionService:AddTag(sheepModel, SHEEP_TAG)
-	sheepModel.Parent = sheepFolder
+	local yaw = random:NextNumber(0, math.pi * 2)
+	sheepModel:PivotTo(CFrame.new(position + Vector3.new(0, lift, 0)) * CFrame.Angles(0, yaw, 0))
 
-	-- The server walks the sheep, so it keeps physics ownership (no handing it to a nearby player).
-	pcall(function()
-		root:SetNetworkOwner(nil)
-	end)
-
-	attachHud(root, info, oddsText, size, weight, scaleRatio, mutation)
-	addMutationVfx(sheepModel, root, mutation, scaleRatio)
-
-	-- Shearing only ever changes ShearHealth; the wool and health bar follow it.
-	updateWoolVisual(sheepModel)
-	updateHealthHud(sheepModel)
-	woolConnections[id] = sheepModel:GetAttributeChangedSignal("ShearHealth"):Connect(function()
+	local function dress()
+		attachHud(root, info, oddsText, size, scaleRatio)
+		addMutationVfx(sheepModel, root, mutation, scaleRatio)
 		updateWoolVisual(sheepModel)
 		updateHealthHud(sheepModel)
-	end)
+	end
+
+	local function place()
+		sheepById[id] = sheepModel
+		sheepModel:SetAttribute(SPAWNED_AT, workspace:GetServerTimeNow())
+		root.Anchored = false
+		collectionService:AddTag(sheepModel, SHEEP_TAG)
+		sheepModel.Parent = sheepFolder
+
+		-- The server walks the sheep, so it keeps physics ownership (no handing it to a nearby player).
+		pcall(function()
+			root:SetNetworkOwner(nil)
+		end)
+
+		-- Shearing only ever changes ShearHealth; the wool and health bar follow it.
+		woolConnections[id] = sheepModel:GetAttributeChangedSignal("ShearHealth"):Connect(function()
+			updateWoolVisual(sheepModel)
+			updateHealthHud(sheepModel)
+		end)
+	end
+
+	if halloween then
+		--[[
+			Clients open HalloweenSpawnVFX at its feet and raise it out of the floor. Until it is out it sits anchored
+			its own height underground, untagged and unregistered (so nothing walks, shears or picks it up) but counted.
+		]]
+		local floor = CFrame.new(position - Vector3.new(0, FarmData.SpawnDropHeight, 0)) * CFrame.Angles(0, yaw, 0)
+		local boxCFrame, boxSize = sheepModel:GetBoundingBox()
+		local footDepth = sheepModel:GetPivot().Position.Y - (boxCFrame.Position.Y - boxSize.Y / 2)
+		local emerged = floor + Vector3.new(0, footDepth, 0)
+
+		pendingSheep[sheepModel] = player.UserId
+		sheepModel:SetAttribute(RISING, true)
+		root.Anchored = true
+		sheepModel:PivotTo(emerged - Vector3.new(0, boxSize.Y, 0))
+		sheepModel.Parent = sheepFolder
+		dress()
+
+		network.fireAllClients(network.RemoteEvents.HalloweenSheepSpawn, {
+			floor = floor,
+			emerged = emerged,
+			sheep = sheepModel,
+			ownerId = player.UserId,
+			sizeTier = size.id,
+			scale = size.scale,
+			openSeconds = PIT_OPEN_SECONDS,
+			riseSeconds = PIT_RISE_SECONDS,
+		})
+		task.delay(PIT_OPEN_SECONDS + PIT_RISE_SECONDS, function()
+			if pendingSheep[sheepModel] ~= player.UserId then
+				return -- the farm was cleared during the rise, which already pooled it
+			end
+			pendingSheep[sheepModel] = nil
+			sheepModel:PivotTo(emerged) -- where the clients' rise ends
+			sheepModel:SetAttribute(RISING, nil)
+			place()
+		end)
+	elseif size.id ~= HUGE_TIER then
+		place()
+		dress()
+	else
+		-- Clients play HugeSpawnVFX on the ground below; the sheep lands as its windup ends. It counts meanwhile so the cap holds.
+		pendingSheep[sheepModel] = player.UserId
+		local ground = CFrame.new(position - Vector3.new(0, FarmData.SpawnDropHeight, 0)) * CFrame.Angles(0, yaw, 0)
+		network.fireAllClients(network.RemoteEvents.HugeSheepSpawn, ground, player.UserId)
+		task.delay(HUGE_WINDUP_SECONDS, function()
+			if pendingSheep[sheepModel] ~= player.UserId then
+				return -- the farm was cleared during the windup, which already pooled it
+			end
+			pendingSheep[sheepModel] = nil
+			place()
+			dress()
+		end)
+	end
 
 	setCount(player.UserId, (countByOwner[player.UserId] or 0) + 1)
 	return sheepModel, id
@@ -882,9 +964,8 @@ function SheepHandler.loadSheep(player: Player, saved: any): Model?
 	local healthHud = root:FindFirstChild(HEALTH_HUD_NAME)
 	if healthHud and healthHud:IsA("BillboardGui") then
 		local healthName = healthHud:FindFirstChild("NameLabel") :: TextLabel
-		setHudOffset(healthHud, scaleRatio)
+		placeHud(healthHud, scaleRatio, HEALTH_HUD_SIZE, getHudScale(info, size))
 		SheepStyle.apply(healthName, SheepStyle.getMood(info.rarity, info.baby))
-		styleMutationName(healthName, mutation)
 	end
 
 	local odds = if type(saved.odds) == "string" then saved.odds else ""
@@ -906,7 +987,7 @@ function SheepHandler.loadSheep(player: Player, saved: any): Model?
 	sheepModel:SetAttribute(SPAWNED_AT, nil) -- not a fresh spawn, so no spawn celebration
 	sheepModel:SetAttribute("Charged", if saved.charged == true then true else nil)
 
-	attachHud(root, info, odds, size, weight, scaleRatio, mutation)
+	attachHud(root, info, odds, size, scaleRatio)
 	addMutationVfx(sheepModel, root, mutation, scaleRatio)
 	updateWoolVisual(sheepModel)
 	collectionService:RemoveTag(sheepModel, SHEEP_TAG) -- a pooled model may still carry it

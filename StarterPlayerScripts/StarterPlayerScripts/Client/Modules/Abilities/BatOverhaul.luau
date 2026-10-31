@@ -23,6 +23,7 @@ local BAT_IMAGE = "rbxassetid://85493305397361"
 local SHEEP_TAG = "Sheep"
 local SWARM_SOUND_NAME = "BatSwarm" -- optional Sounds in SoundService.UISounds
 local LEAVE_SOUND_NAME = "BatLeave"
+local BATS_SOUND_NAME = "Bats" -- in SoundService.AbilitySounds; plays through the whole effect
 local FLAP_SPEED = 22 -- radians per second of the wing-beat squash
 local FLAP_SQUASH = 0.35 -- share of a bat's height each beat squashes away
 local ARRIVE_JITTER = 0.3 -- seconds each bat may set off late, so they don't move as one block
@@ -154,6 +155,27 @@ local function playSoundAt(name: string, position: Vector3)
 	copy.Parent = attachment
 	copy:Play()
 	debris:AddItem(attachment, math.max(copy.TimeLength, 1) + 0.5)
+end
+
+-- A copy of the Bats sound at the plot that starts in `delay` seconds; destroying the returned attachment stops it.
+local function startBatsSound(position: Vector3, delay: number): Attachment?
+	local abilitySounds = soundService:FindFirstChild("AbilitySounds")
+	local template = abilitySounds and abilitySounds:FindFirstChild(BATS_SOUND_NAME)
+	if not template or not template:IsA("Sound") then
+		return nil
+	end
+
+	local attachment = Instance.new("Attachment")
+	attachment.WorldPosition = position
+	attachment.Parent = workspace.Terrain
+	local sound = template:Clone()
+	sound.Parent = attachment
+	task.delay(delay, function()
+		if sound.Parent then
+			sound:Play()
+		end
+	end)
+	return attachment
 end
 
 local function buildEntries(list: { any }): { SheepEntry }
@@ -503,6 +525,7 @@ function BatOverhaul.onEffect(caster: Player?, info: any)
 
 	local secondsToStart = timeline.startsAt - workspace:GetServerTimeNow()
 	local total = arrive + swarm + leave
+	local batsSound = startBatsSound(center, math.max(secondsToStart, 0))
 	task.delay(math.max(secondsToStart, 0), playSoundAt, SWARM_SOUND_NAME, center)
 	task.delay(math.max(secondsToStart + arrive + swarm, 0), playSoundAt, LEAVE_SOUND_NAME, center)
 	scheduleTufts(entries, secondsToStart + arrive, swarm, math.max(math.floor(pulses), 1))
@@ -520,6 +543,9 @@ function BatOverhaul.onEffect(caster: Player?, info: any)
 			end
 			if screenGui then
 				screenGui:Destroy()
+			end
+			if batsSound then
+				batsSound:Destroy()
 			end
 			return
 		end

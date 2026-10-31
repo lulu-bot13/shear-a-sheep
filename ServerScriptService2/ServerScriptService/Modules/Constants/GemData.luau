@@ -8,7 +8,7 @@
 
 local gemData = {}
 
-gemData.SheepDropChance = 1 / 1000 -- rolled once for every sheep shorn bare
+gemData.SheepDropChance = 1 / 40 -- rolled once for every sheep shorn bare; paired with AbilityData.RollCost
 gemData.SheepDropAmount = 1
 
 return gemData

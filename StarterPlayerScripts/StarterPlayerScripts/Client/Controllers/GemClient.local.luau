@@ -19,7 +19,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 
 --// Sounds
 local uiSounds = soundService:FindFirstChild("UISounds")
-local gemSound = if uiSounds then uiSounds:FindFirstChild("LuckClaimed") :: Sound? else nil
+local gemSound = if uiSounds then uiSounds:FindFirstChild("DiamondPickup") :: Sound? else nil
 
 --// Configs
 local POP_IN = TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out)

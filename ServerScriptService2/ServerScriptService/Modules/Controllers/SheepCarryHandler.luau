@@ -358,7 +358,7 @@ local function onPickUp(player: Player, sheep: any)
 	local playerRoot = getRoot(player.Character)
 	local root = getRoot(sheep)
 	if type(id) ~= "number" or SheepHandler.getSheep(id) ~= sheep or SheepHandler.getOwnerId(sheep) ~= player.UserId
-		or type(health) ~= "number" or health <= 0 or not playerRoot or not root
+		or type(health) ~= "number" or health <= 0 or sheep:GetAttribute("Rising") or not playerRoot or not root
 		or (root.Position - playerRoot.Position).Magnitude > PICK_UP_RANGE
 	then
 		return

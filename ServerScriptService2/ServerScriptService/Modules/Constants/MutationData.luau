@@ -10,7 +10,7 @@ export type MutationInfo = {
 	chance: number, -- 1 in this many spawns
 	wool: number, -- WoolAmount multiplier
 	luck: number, -- LuckAmount multiplier
-	color: Color3, -- prefix colour on the billboards
+	color: Color3, -- prefix colour on the unlock popup
 	rainbowName: boolean?, -- the whole name cycles through the rainbow (MutationClient animates it)
 	tailAttachments: { string }?, -- attachments moved to the sheep's tail instead of its middle
 }

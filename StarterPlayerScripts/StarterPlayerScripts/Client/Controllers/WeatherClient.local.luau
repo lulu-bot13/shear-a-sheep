@@ -12,6 +12,7 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local chargedSheep = require(script.Parent.Parent.Modules.ChargedSheep)
+local halloweenMap = require(script.Parent.Parent.Modules.HalloweenMap)
 local lightning = require(script.Parent.Parent.Modules.Lightning)
 local weatherEffects = require(script.Parent.Parent.Modules.WeatherEffects)
 
@@ -20,16 +21,17 @@ local WEATHER_ATTRIBUTE = "Weather"
 local ENDS_AT_ATTRIBUTE = "WeatherEndsAt"
 local STORM = "Thunderstorm"
 local CLEAR = "Clear"
+local HALLOWEEN = "Night" -- Halloween mode is on while it's Night (WeatherData.Halloween on the server)
 
 local WEATHER_TEXT: { [string]: { label: string, announcement: string, color: Color3 } } = {
 	Clear = { label = "☀️ Clear", announcement = "The skies have cleared", color = Color3.fromRGB(255, 225, 120) },
-	Rain = { label = "🌧️ Rain", announcement = "It's raining! Sheep regrow faster", color = Color3.fromRGB(140, 195, 255) },
+	Rain = { label = "🌧️ Rain", announcement = "It's raining! Sheep respawn faster", color = Color3.fromRGB(140, 195, 255) },
 	Thunderstorm = {
 		label = "⛈️ Thunderstorm",
 		announcement = "Thunderstorm! Charged sheep give 3x wool",
 		color = Color3.fromRGB(150, 210, 255),
 	},
-	Night = { label = "🌙 Night", announcement = "Night falls... rarer sheep roam", color = Color3.fromRGB(190, 180, 255) },
+	Night = { label = "🎃 Hollow Night", announcement = "the dead arise from their graves...", color = Color3.fromRGB(190, 180, 255) },
 }
 
 local LABEL_TIMEOUT = 10 -- seconds to wait for the Studio-built Main.Weather label
@@ -56,13 +58,10 @@ gui.ResetOnSpawn = false
 gui.Parent = playerGui
 
 -- The Studio-built label (Main.Weather) shows the weather name + time left.
-local weatherLabel: TextLabel? = nil
 do
 	local main = playerGui:WaitForChild("Main", LABEL_TIMEOUT)
 	local found = if main then main:WaitForChild("Weather", LABEL_TIMEOUT) else nil
-	if found and found:IsA("TextLabel") then
-		weatherLabel = found
-	else
+	if not (found and found:IsA("TextLabel")) then
 		warn("WeatherClient: PlayerGui.Main.Weather TextLabel not found, weather timer hidden")
 	end
 end
@@ -103,18 +102,21 @@ local function formatTime(seconds: number): string
 	return string.format("%d:%02d", whole // 60, whole % 60)
 end
 
+-- Looked up each time so a Main recreated on respawn still gets updated.
+local function getLabel(): TextLabel?
+	local main = playerGui:FindFirstChild("Main")
+	local label = if main then main:FindFirstChild("Weather") else nil
+	return if label and label:IsA("TextLabel") then label else nil
+end
+
 local function updateLabel()
-	local label = weatherLabel
+	local label = getLabel()
 	if not label then
-		return
-	end
-	if current == CLEAR then
-		label.Visible = false
 		return
 	end
 	local text = WEATHER_TEXT[current] or WEATHER_TEXT.Clear
 	local endsAt = workspace:GetAttribute(ENDS_AT_ATTRIBUTE)
-	if type(endsAt) == "number" then
+	if current ~= CLEAR and type(endsAt) == "number" then
 		label.Text = `{text.label}  {formatTime(endsAt - workspace:GetServerTimeNow())}`
 	else
 		label.Text = text.label
@@ -231,6 +233,7 @@ local function setWeather(weather: string, instant: boolean)
 	weatherToken += 1
 
 	weatherEffects.apply(weather, instant)
+	halloweenMap.setActive(weather == HALLOWEEN, instant)
 	updateLabel()
 	if not instant then
 		announce(weather)
@@ -240,6 +243,7 @@ local function setWeather(weather: string, instant: boolean)
 	end
 end
 
+halloweenMap.start()
 -- Joining mid-weather snaps straight to it, with no announcement.
 setWeather(readWeather(), true)
 chargedSheep.start(strikeSheep)
@@ -251,7 +255,5 @@ workspace:GetAttributeChangedSignal(ENDS_AT_ATTRIBUTE):Connect(updateLabel)
 
 while true do
 	task.wait(TIMER_TICK)
-	if current ~= CLEAR then
-		updateLabel()
-	end
+	updateLabel()
 end

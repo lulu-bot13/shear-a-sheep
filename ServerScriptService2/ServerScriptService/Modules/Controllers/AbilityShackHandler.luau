@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	The Ability Shack: rolls a weighted ability for RollCost wool at workspace.Base.CenterPlaza.AbilityShack.Podium
+	The Ability Shack: rolls a weighted ability for RollCost Gems at workspace.Base.CenterPlaza.AbilityShack.Podium
 	(with pity and duplicate refunds) and equips owned ones; the client only requests and displays.
 	Location: ServerScriptService.Modules.Controllers.AbilityShackHandler
 ]]--
@@ -15,6 +15,7 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 local AbilityData = require(script.Parent.Parent.Constants.AbilityData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
+local WeatherHandler = require(script.Parent.WeatherHandler)
 
 --// Configs
 local SHACK_NAME = "AbilityShack"
@@ -36,7 +37,8 @@ export type AbilityEntry = {
 	color: Color3,
 	cooldown: number,
 	duration: number,
-	chance: number, -- 0-1 chance per roll; 0 = can't be rolled
+	chance: number, -- 0-1 chance per roll right now; 0 = can't be rolled
+	halloween: boolean, -- only rollable during Halloween
 	owned: boolean,
 }
 
@@ -52,13 +54,13 @@ export type State = {
 export type RollEntry = {
 	id: string,
 	isNew: boolean,
-	refund: number, -- wool given back for a duplicate
+	refund: number, -- Gems given back for a duplicate
 	guaranteed: boolean, -- the pity roll
 }
 
 export type RollResult = {
 	success: boolean,
-	reason: string?, -- "TooFar", "Closed" or "NoWool" when not successful
+	reason: string?, -- "TooFar", "Closed" or "NoGems" when not successful
 	results: { RollEntry }?, -- one per roll, in order
 	roller: Player?, -- set only on the light copy sent to players nearby
 }
@@ -96,12 +98,12 @@ local function isNearPodium(player: Player): boolean
 	return (rootPart.Position - podium.Position).Magnitude <= ROLL_RANGE
 end
 
--- The entry with the lowest chance, which spectators see.
+-- The entry with the lowest chance (at Halloween odds, so a Halloween ability ranks by its own rarity), which spectators see.
 local function getRarestEntry(entries: { RollEntry }?): RollEntry?
 	local best: RollEntry? = nil
 	local bestChance = math.huge
 	for _, entry in (entries or {}) :: { RollEntry } do
-		local chance = AbilityData.getChance(entry.id)
+		local chance = AbilityData.getChance(entry.id, true)
 		if not best or chance < bestChance then
 			best = entry
 			bestChance = chance
@@ -114,6 +116,7 @@ end
 
 function AbilityShackHandler.getState(player: Player): State
 	local abilities: { AbilityEntry } = {}
+	local halloween = WeatherHandler.isHalloween()
 	for _, id in AbilityData.Order do
 		local info = AbilityData.Abilities[id]
 		table.insert(abilities, {
@@ -124,7 +127,8 @@ function AbilityShackHandler.getState(player: Player): State
 			color = SheepData.RarityColors[info.rarity] or SheepData.RarityColors.Common,
 			cooldown = info.cooldown,
 			duration = info.duration,
-			chance = AbilityData.getChance(id),
+			chance = AbilityData.getChance(id, halloween),
+			halloween = info.halloween == true,
 			owned = isOwned(player, id),
 		})
 	end
@@ -149,8 +153,8 @@ function AbilityShackHandler.roll(player: Player, count: any?): RollResult
 		return { success = false, reason = "Closed" }
 	elseif not isNearPodium(player) then
 		return { success = false, reason = "TooFar" }
-	elseif not PlayerDataHandler.spend(player, "Wool", AbilityData.RollCost * rolls) then
-		return { success = false, reason = "NoWool" }
+	elseif not PlayerDataHandler.spend(player, "Gems", AbilityData.RollCost * rolls) then
+		return { success = false, reason = "NoGems" }
 	end
 
 	local pity = getNumber(player, "AbilityPity")
@@ -163,9 +167,10 @@ function AbilityShackHandler.roll(player: Player, count: any?): RollResult
 	local results: { RollEntry } = {}
 	local totalRefund = 0
 	local gainedAny = false
+	local halloween = WeatherHandler.isHalloween()
 	for _ = 1, rolls do
 		local guaranteed = pity + 1 >= AbilityData.PityRolls
-		local ability = AbilityData.roll(random, guaranteed)
+		local ability = AbilityData.roll(random, guaranteed, halloween)
 		local isNew = not ownedSet[ability.id]
 		local refund = 0
 
@@ -186,7 +191,7 @@ function AbilityShackHandler.roll(player: Player, count: any?): RollResult
 		PlayerDataHandler.set(player, "OwnedAbilities", owned)
 	end
 	if totalRefund > 0 then
-		PlayerDataHandler.increment(player, "Wool", totalRefund)
+		PlayerDataHandler.increment(player, "Gems", totalRefund)
 	end
 	PlayerDataHandler.set(player, "AbilityPity", pity)
 
@@ -320,6 +325,13 @@ function AbilityShackHandler.Start()
 	PlayerDataHandler.Changed:Connect(function(player: Player, key: string)
 		if key == "OwnedAbilities" or key == "AbilityEquipped" or key == "AbilityPity" then
 			pushState(player)
+		end
+	end)
+
+	-- Halloween abilities join or leave the roll chances.
+	WeatherHandler.HalloweenChanged:Connect(function()
+		for _, player in players:GetPlayers() do
+			task.spawn(pushState, player)
 		end
 	end)
 

@@ -13,8 +13,10 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local MutationData = require(script.Parent.Parent.Constants.MutationData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
+local WeatherHandler = require(script.Parent.WeatherHandler)
 
 --// Configs
 local CLAIM_COOLDOWN = 0.25
@@ -24,14 +26,15 @@ local CLAIMED = "Claimed"
 
 -- One card in the Index UI.
 export type EntryState = {
-	id: string, -- SheepData type key (also the model name in Assets.Models.Sheeps)
+	id: string, -- SheepData type key (also its model's name in Assets.Models.Sheeps or its Baby/Giant folder)
 	name: string,
 	rarity: string,
 	color: Color3,
 	indexLuck: number,
-	odds: number, -- N in "1 in N" with the player's Luck, rebirths and Prestiges
+	odds: number, -- N in "1 in N" with the player's Luck, rebirths and Prestiges (Halloween sheep: their Halloween odds)
 	status: string, -- "Locked", "Found" or "Claimed"
-	tier: string, -- the Index tab it's listed under: "Baby" or "Normal"
+	halloween: boolean, -- only spawns during Halloween
+	variant: string?, -- "Baby" or "Giant"; nil for the adult
 }
 
 local IndexHandler = {}
@@ -56,10 +59,11 @@ end
 
 --// Public API ------------------------------------------------------------------------
 
--- Every sheep type's card, commonest first.
+-- Every sheep type's card: a row of Baby, adult, Giant per type, commonest first.
 function IndexHandler.getState(player: Player): { EntryState }
 	local index = getIndex(player)
 	local luck, rebirths, prestiges = getNumber(player, "Luck"), getNumber(player, "Rebirths"), getNumber(player, "Prestiges")
+	local halloween = WeatherHandler.isHalloween()
 	local state: { EntryState } = {}
 	for _, sheepType in SheepData.IndexOrder do
 		local info = SheepData.Sheep[sheepType]
@@ -69,9 +73,10 @@ function IndexHandler.getState(player: Player): { EntryState }
 			rarity = info.rarity,
 			color = info.color,
 			indexLuck = SheepData.getIndexLuck(sheepType),
-			odds = SheepData.getOdds(sheepType, luck, rebirths, prestiges) or 1,
+			odds = SheepData.getOdds(sheepType, luck, rebirths, prestiges, nil, halloween) or 1,
 			status = index[sheepType] or "Locked",
-			tier = if info.baby then "Baby" else "Normal",
+			halloween = info.halloween == true,
+			variant = info.variant,
 		})
 	end
 	return state
@@ -82,15 +87,19 @@ function IndexHandler.getClaimedLuck(player: Player): number
 	return SheepData.getClaimedIndexLuck(getIndex(player))
 end
 
--- Marks the type as found the first time the player shears one bare, and shows them the unlock popup.
-function IndexHandler.discover(player: Player, sheepType: any)
+-- Marks the type as found the first time the player shears one bare, and shows them the unlock popup with that sheep's weight and mutation.
+function IndexHandler.discover(player: Player, sheepType: any, sheep: Model?)
 	if type(sheepType) ~= "string" or not SheepData.Sheep[sheepType] or not PlayerDataHandler.getData(player) then
 		return
 	end
 	if getIndex(player)[sheepType] == nil then
 		setStatus(player, sheepType, FOUND)
 		local info = SheepData.Sheep[sheepType]
-		network.fireClient(network.RemoteEvents.SheepUnlocked, player, sheepType, info.name, info.rarity, info.color)
+		local weight = if sheep then sheep:GetAttribute("Weight") else nil
+		local mutation = if sheep then MutationData.get(sheep:GetAttribute(MutationData.Attribute)) else nil
+		network.fireClient(network.RemoteEvents.SheepUnlocked, player, sheepType, info.name, info.rarity, info.color,
+			if type(weight) == "number" then weight else nil,
+			if mutation then { name = mutation.id, color = mutation.color, rainbow = mutation.rainbowName == true } else nil)
 	end
 end
 

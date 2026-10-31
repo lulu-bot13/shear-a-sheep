@@ -7,7 +7,11 @@
 	Location: ServerScriptService.Modules.Controllers.WeatherHandler
 ]]--
 
+--// Services
+local replicatedStorage = game:GetService("ReplicatedStorage")
+
 --// Modules
+local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
 local WeatherData = require(script.Parent.Parent.Constants.WeatherData)
 
 --// Configs
@@ -20,6 +24,8 @@ local pendingChange: thread? = nil -- the delay that ends the current weather
 local random = Random.new()
 
 local WeatherHandler = {}
+
+WeatherHandler.HalloweenChanged = Signal.new() -- (halloween: boolean)
 
 --// Helpers -------------------------------------------------------------------
 
@@ -66,6 +72,11 @@ function WeatherHandler.getWeather(): string
 	return current
 end
 
+-- Halloween mode (Halloween-only sheep and abilities) is on while it's Night.
+function WeatherHandler.isHalloween(): boolean
+	return current == WeatherData.Halloween
+end
+
 function WeatherHandler.getRespawnMultiplier(): number
 	return getInfo().RespawnMultiplier
 end
@@ -92,10 +103,14 @@ function WeatherHandler.setWeather(name: string, duration: number?): boolean
 	end
 
 	local seconds = duration or (if name == WeatherData.Clear then getClearSeconds() else info.Duration)
+	local wasHalloween = WeatherHandler.isHalloween()
 	current = name
 	workspace:SetAttribute(WEATHER_ATTRIBUTE, name)
 	workspace:SetAttribute(ENDS_AT_ATTRIBUTE, workspace:GetServerTimeNow() + seconds)
 	pendingChange = task.delay(seconds, advance)
+	if WeatherHandler.isHalloween() ~= wasHalloween then
+		WeatherHandler.HalloweenChanged:Fire(WeatherHandler.isHalloween())
+	end
 	return true
 end
 

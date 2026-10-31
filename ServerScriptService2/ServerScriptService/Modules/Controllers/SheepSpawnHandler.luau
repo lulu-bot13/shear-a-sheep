@@ -90,7 +90,8 @@ local function spawnOne(player: Player): boolean
 		getNumber(player, "Luck"),
 		getNumber(player, "Rebirths"),
 		getNumber(player, "Prestiges"),
-		WeatherHandler.getLuckMultiplier()
+		WeatherHandler.getLuckMultiplier(),
+		WeatherHandler.isHalloween()
 	)
 	if not sheep then
 		return false

@@ -1,6 +1,6 @@
 --[[
 	The Ability Shack at workspace.Base.CenterPlaza.AbilityShack.Podium: the roll carousel (AbilityRollEffect) and the Studio-built Abilities window for rolling and equipping.
-	Only requests and displays; AbilityShackHandler rolls, spends wool and equips.
+	Only requests and displays; AbilityShackHandler rolls, spends Gems and equips.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AbilityShackClient
 ]]--
 
@@ -18,7 +18,6 @@ local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
 local abilitiesGui = playerGui:WaitForChild("Abilities") :: ScreenGui
 local main = abilitiesGui:WaitForChild("Main") :: Frame
 local inventoryList = main:WaitForChild("Inventory") :: ScrollingFrame
@@ -52,9 +51,11 @@ local PANEL_COLOR = Color3.fromRGB(30, 32, 44)
 local EQUIP_COLOR = Color3.fromRGB(64, 190, 90)
 local ROLL_COLOR = Color3.fromRGB(235, 160, 40)
 local OPEN_COLOR = Color3.fromRGB(70, 120, 220)
+local HALLOWEEN_ONLY_TEXT = "Halloween only" -- a Halloween ability's chance outside Halloween
+local UNAVAILABLE_DARKEN = 0.5 -- how much darker a roll chance card is while it can't be rolled
 
 local REASON_TEXT = {
-	NoWool = "Not enough wool",
+	NoGems = "Not enough Gems",
 	TooFar = "Get closer to the podium",
 	Closed = "The Ability Shack is closed",
 	NotOwned = "Roll it at the Ability Shack first",
@@ -71,6 +72,7 @@ type Entry = {
 	cooldown: number,
 	duration: number,
 	chance: number,
+	halloween: boolean,
 	owned: boolean,
 }
 
@@ -309,20 +311,22 @@ end
 local function refreshRollChances(current: State)
 	clearClones(rollChances)
 	for index, entry in current.abilities do
-		if entry.chance <= 0 then
+		-- Halloween abilities stay listed (dimmed) outside Halloween; anything else that can't roll is hidden.
+		local halloweenOnly = entry.halloween and entry.chance <= 0
+		if entry.chance <= 0 and not halloweenOnly then
 			continue
 		end
 
 		local card = chanceTemplate:Clone()
 		card.Name = entry.id
 		card.LayoutOrder = index
-		card.BackgroundColor3 = entry.color
+		card.BackgroundColor3 = if halloweenOnly then entry.color:Lerp(BLACK, UNAVAILABLE_DARKEN) else entry.color
 		card.Visible = true
 		setText(card, "AbilityName", entry.name)
 		setText(card, "Rarity", entry.rarity)
 		local chance = card:FindFirstChild("Chance")
 		if chance and chance:IsA("TextLabel") then
-			chance.Text = formatPercent(entry.chance)
+			chance.Text = if halloweenOnly then HALLOWEEN_ONLY_TEXT else formatPercent(entry.chance)
 			chance.Visible = true
 		end
 		local badge = card:FindFirstChild("Owned")
@@ -462,7 +466,7 @@ local function showResults(results: { any }, best: Entry)
 			if result.isNew then
 				row.detail.Text = if result.guaranteed then "NEW! (pity)" else "NEW!"
 			else
-				row.detail.Text = if (result.refund or 0) > 0 then `+{formatWithCommas(result.refund)} Wool` else "Owned"
+				row.detail.Text = if (result.refund or 0) > 0 then `+{formatWithCommas(result.refund)} Gems` else "Owned"
 			end
 		end
 	end
@@ -508,8 +512,9 @@ local function requestRoll(amount: number)
 		return
 	end
 	local current = state
-	if current and wool.Value < current.cost * amount then
-		alerts.show(REASON_TEXT.NoWool, "error")
+	local gems = player:GetAttribute("Gems")
+	if current and (if type(gems) == "number" then gems else 0) < current.cost * amount then
+		alerts.show(REASON_TEXT.NoGems, "error")
 		return
 	end
 

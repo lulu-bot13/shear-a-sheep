@@ -19,13 +19,13 @@ local upgradeData = {}
 
 upgradeData.Upgrades = {
 	Capacity = { id = "Capacity", displayName = "Sheep Capacity", icon = "rbxassetid://92809451973771", baseCost = 40, costGrowth = 1.55 },
-	MoreWool = { id = "MoreWool", displayName = "More Wool", icon = "rbxassetid://80186787578807", baseCost = 45, costGrowth = 1.7 }, -- level 1 = the tutorial's first 3 sheep
+	MoreWool = { id = "MoreWool", displayName = "More Wool", icon = "rbxassetid://80186787578807", baseCost = 45, costGrowth = 1.7, maxLevel = 48 }, -- level 1 = the tutorial's first 3 sheep
 	FasterSpeed = { id = "FasterSpeed", displayName = "Faster Speed", icon = "rbxassetid://73292507992618", baseCost = 100, costGrowth = 2.2, maxLevel = 8 },
 	ShearDamage = { id = "ShearDamage", displayName = "Shear Damage", icon = "rbxassetid://74100799276370", baseCost = 60, costGrowth = 1.8, maxLevel = 10 },
 	FasterRespawn = { id = "FasterRespawn", displayName = "Faster Respawn", icon = "rbxassetid://75508274630013", baseCost = 120, costGrowth = 1.9, maxLevel = 8 },
 } :: { [string]: UpgradeInfo }
 
-upgradeData.Order = { "Capacity", "MoreWool", "FasterSpeed", "ShearDamage", "FasterRespawn" } -- top to bottom in the UpgradeShop
+upgradeData.Order = { "MoreWool", "Capacity", "FasterSpeed", "ShearDamage", "FasterRespawn" } -- top to bottom in the UpgradeShop
 
 upgradeData.MoreWoolPerLevel = 0.25 -- each More Wool level adds this to the wool multiplier
 upgradeData.BaseWalkSpeed = 16 -- Roblox's default walk speed

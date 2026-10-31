@@ -21,22 +21,20 @@ export type SizeInfo = {
 local sheepSizeData = {}
 
 --[[
-	Average wool per sheep is ~1.16x a Normal one (wool per swing ~1.05x), so spawn-capped farms earn a bit more.
-	Odds: Normal 82%, Big 1 in 8, Huge 1 in 22, Giant 1 in 83, Colossal 1 in 333. SheepSizeClient mirrors the announced ids.
+	Average wool per sheep is ~1.04x a Normal one, so spawn-capped farms earn a bit more.
+	Odds: Tiny 1 in 7, Normal 80%, Huge 1 in 20. SheepSizeClient mirrors the announced ids.
 ]]
 sheepSizeData.Tiers = {
-	{ id = "Normal",   chance = 8200, scale = 1,    health = 1,    wool = 1,   minWeight = 40,  maxWeight = 60 },
-	{ id = "Big",      chance = 1200, scale = 1.2,  health = 1.35, wool = 1.5, minWeight = 60,  maxWeight = 110,
-		prefix = "Big", color = Color3.fromRGB(125, 211, 252) },
-	{ id = "Huge",     chance = 450,  scale = 1.45, health = 1.9,  wool = 2.3, minWeight = 110, maxWeight = 200,
-		prefix = "Huge", color = Color3.fromRGB(74, 222, 128) },
-	{ id = "Giant",    chance = 120,  scale = 1.75, health = 2.8,  wool = 3.6, minWeight = 200, maxWeight = 400,
-		prefix = "Giant", color = Color3.fromRGB(250, 204, 21) },
-	{ id = "Colossal", chance = 30,   scale = 2.1,  health = 4.2,  wool = 6,   minWeight = 400, maxWeight = 800,
-		prefix = "Colossal", color = Color3.fromRGB(244, 63, 94) },
+	{ id = "Tiny",   chance = 1500, scale = 0.7, health = 0.7, wool = 0.6, minWeight = 15,  maxWeight = 40,
+		prefix = "Tiny", color = Color3.fromRGB(125, 211, 252) },
+	{ id = "Normal", chance = 8000, scale = 1,   health = 1,   wool = 1,   minWeight = 40,  maxWeight = 60 },
+	{ id = "Huge",   chance = 500,  scale = 1.6, health = 2.2, wool = 3,   minWeight = 110, maxWeight = 250,
+		prefix = "Huge", color = Color3.fromRGB(250, 204, 21) },
 } :: { SizeInfo }
 
-sheepSizeData.BabyWeightScale = 0.4 -- babies weigh this fraction of the tier's range
+-- Saved sheep from the old five tiers load as their nearest new one.
+local LEGACY_IDS = { Big = "Normal", Giant = "Huge", Colossal = "Huge" }
+
 sheepSizeData.WeightWoolSpread = 0.1 -- the heaviest sheep in a tier gives this much more wool, the lightest this much less
 
 local byId: { [string]: SizeInfo } = {}
@@ -47,7 +45,7 @@ for _, tier in sheepSizeData.Tiers do
 end
 
 function sheepSizeData.get(id: any): SizeInfo?
-	return if type(id) == "string" then byId[id] else nil
+	return if type(id) == "string" then byId[LEGACY_IDS[id] or id] else nil
 end
 
 function sheepSizeData.roll(random: Random): SizeInfo
@@ -63,14 +61,12 @@ function sheepSizeData.roll(random: Random): SizeInfo
 end
 
 --[[
-	A weight inside the tier's range (whole kg) and its wool factor: 1 - spread at the lightest, 1 + spread at the heaviest.
+	A weight inside the tier's range times `scale` (a Baby/Giant variant's weight; whole kg) and its wool factor:
+	1 - spread at the lightest, 1 + spread at the heaviest.
 ]]
-function sheepSizeData.rollWeight(tier: SizeInfo, baby: boolean, random: Random): (number, number)
+function sheepSizeData.rollWeight(tier: SizeInfo, scale: number, random: Random): (number, number)
 	local t = random:NextNumber()
-	local weight = tier.minWeight + (tier.maxWeight - tier.minWeight) * t
-	if baby then
-		weight *= sheepSizeData.BabyWeightScale
-	end
+	local weight = (tier.minWeight + (tier.maxWeight - tier.minWeight) * t) * scale
 	return math.max(math.floor(weight + 0.5), 1), 1 + sheepSizeData.WeightWoolSpread * (t * 2 - 1)
 end
 

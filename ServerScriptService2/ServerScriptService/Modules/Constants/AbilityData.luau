@@ -11,6 +11,7 @@ export type AbilityInfo = {
 	description: string,
 	rarity: string, -- SheepData.RarityColors key
 	chance: number, -- Ability Shack roll weight; 0 = can't be rolled
+	halloween: boolean?, -- only rollable during Halloween (owners keep and use it any time)
 	duration: number, -- seconds the ability lasts
 	cooldown: number, -- seconds from the ability ending until it can be used again
 	stats: { [string]: number }, -- read by the ability's own module
@@ -19,7 +20,7 @@ export type AbilityInfo = {
 local abilityData = {}
 
 abilityData.DefaultAbilityId = "Spin"
-abilityData.RollCost = 2500 -- wool per Ability Shack roll
+abilityData.RollCost = 4 -- Gems per Ability Shack roll: ~160 sheep shorn bare at GemData's 1/40 drop, so ~10 min of play
 
 abilityData.Abilities = {
 	Spin = {
@@ -75,6 +76,7 @@ abilityData.Abilities = {
 		description = "A swarm of bats covers your plot while your shears fly at every sheep; when the bats leave, they're all bare.",
 		rarity = "Legendary",
 		chance = 18,
+		halloween = true,
 		duration = 4.4, -- covers the 0.2s start lead + arrive + swarm + leave
 		cooldown = 45,
 		stats = {
@@ -115,44 +117,48 @@ abilityData.RenamedAbilities = { PumpkinSplash = "BatOverhaul" } :: { [string]: 
 abilityData.PityRolls = 10 -- this many rolls in a row without a pity rarity makes the last one a guaranteed pity rarity
 abilityData.PityRarities = { Legendary = true, Mythic = true }
 abilityData.PityLabel = "Legendary+"
-abilityData.DuplicateRefund = { -- fraction of RollCost given back as wool for rolling one already owned
+abilityData.DuplicateRefund = { -- fraction of RollCost given back as Gems (rounded down) for rolling one already owned
 	Rare = 0.25,
 	Epic = 0.4,
 	Legendary = 0.6,
 	Mythic = 1,
 }
 
-local function getWeight(ability: AbilityInfo, pityOnly: boolean): number
-	return if pityOnly and not abilityData.PityRarities[ability.rarity] then 0 else math.max(ability.chance, 0)
+-- Halloween abilities weigh 0 unless `halloween` is true.
+local function getWeight(ability: AbilityInfo, pityOnly: boolean, halloween: boolean?): number
+	if (pityOnly and not abilityData.PityRarities[ability.rarity]) or (ability.halloween and not halloween) then
+		return 0
+	end
+	return math.max(ability.chance, 0)
 end
 
-local function getTotalWeight(pityOnly: boolean): number
+local function getTotalWeight(pityOnly: boolean, halloween: boolean?): number
 	local total = 0
 	for _, id in abilityData.Order do
-		total += getWeight(abilityData.Abilities[id], pityOnly)
+		total += getWeight(abilityData.Abilities[id], pityOnly, halloween)
 	end
 	return total
 end
 
--- 0-1 chance a normal roll lands on this ability.
-function abilityData.getChance(id: string): number
+-- 0-1 chance a normal roll lands on this ability; Halloween abilities are 0 unless `halloween` is true.
+function abilityData.getChance(id: string, halloween: boolean?): number
 	local ability = abilityData.get(id)
-	local total = getTotalWeight(false)
-	return if ability and total > 0 then getWeight(ability, false) / total else 0
+	local total = getTotalWeight(false, halloween)
+	return if ability and total > 0 then getWeight(ability, false, halloween) / total else 0
 end
 
--- A weighted pick from every rollable ability, or only the pity rarities when `pityOnly`.
-function abilityData.roll(random: Random, pityOnly: boolean): AbilityInfo
-	local total = getTotalWeight(pityOnly)
+-- A weighted pick from every rollable ability, or only the pity rarities when `pityOnly`. Halloween abilities need `halloween`.
+function abilityData.roll(random: Random, pityOnly: boolean, halloween: boolean?): AbilityInfo
+	local total = getTotalWeight(pityOnly, halloween)
 	if total <= 0 then
-		return if pityOnly then abilityData.roll(random, false) else abilityData.Abilities[abilityData.DefaultAbilityId]
+		return if pityOnly then abilityData.roll(random, false, halloween) else abilityData.Abilities[abilityData.DefaultAbilityId]
 	end
 
 	local pick = random:NextNumber() * total
 	local last = abilityData.Abilities[abilityData.DefaultAbilityId]
 	for _, id in abilityData.Order do
 		local ability = abilityData.Abilities[id]
-		local weight = getWeight(ability, pityOnly)
+		local weight = getWeight(ability, pityOnly, halloween)
 		if weight > 0 then
 			last = ability
 			pick -= weight

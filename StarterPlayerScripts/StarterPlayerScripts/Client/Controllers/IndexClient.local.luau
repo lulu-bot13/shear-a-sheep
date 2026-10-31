@@ -17,12 +17,12 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 local alertPulse = require(script.Parent.Parent.Modules.AlertPulse)
 local announcements = require(script.Parent.Parent.Modules.Announcements)
 local luckRain = require(script.Parent.Parent.Modules.LuckRain)
+local sheepModels = require(script.Parent.Parent.Modules.SheepModels)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-local sheepModels = replicatedStorage:WaitForChild("Assets"):WaitForChild("Models"):WaitForChild("Sheeps")
 local hudButtons = playerGui:WaitForChild("Main"):WaitForChild("Buttons")
 local openButton = hudButtons:WaitForChild("Index") :: GuiButton
 
@@ -52,10 +52,6 @@ local unlockBar = mainFrame:FindFirstChild("UnlockBar", true) :: GuiObject
 local unlockProgress = unlockBar:WaitForChild("Progress") :: GuiObject
 local unlockText = unlockBar:WaitForChild("ProgressText") :: TextLabel
 
--- Tier tabs under the Index: every button in TierTabs with a "Tier" attribute is a page showing only that tier's sheep.
-local tierTabs = mainFrame:FindFirstChild("TierTabs")
-local emptyTierLabel = mainFrame:FindFirstChild("EmptyTierLabel") :: TextLabel?
-
 --// Sounds
 local luckClaimedSound = soundService:WaitForChild("UISounds"):FindFirstChild("LuckClaimed")
 
@@ -68,12 +64,12 @@ local ALERT_COLOR = Color3.fromRGB(235, 50, 50)
 local MODEL_FRONT_YAW = 0 -- turn this if a sheep model's face isn't on its front (-Z) side
 local CAMERA_PITCH = math.rad(15)
 local CAMERA_FOV = 40
+local PREVIEW_FILL = { Baby = 0.55, Giant = 1 } -- how much of the frame each variant fills, so Giants look biggest
+local ADULT_PREVIEW_FILL = 0.75
 local SPIN_SPEED = math.rad(60) -- per second, for the selected sheep
 local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so card sizes aren't measured
-local CELLS_PER_ROW: number? = nil -- nil = however many fit the Studio CellSize/CellPadding X scale
+local CELLS_PER_ROW: number? = 3 -- a sheep's Baby, adult and Giant side by side; nil = however many fit the Studio CellSize/CellPadding X scale
 local CELL_ASPECT_RATIO = 1.25 -- grid cell height / width
-local DEFAULT_TIER = "Normal" -- the page the Index opens on
-local INACTIVE_TAB_DARKEN = 0.4 -- how much darker the tabs that aren't open are
 local UNLOCK_BAR_TWEEN = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 type Card = {
@@ -97,9 +93,6 @@ local selectedId: string? = nil
 local previews: { [ViewportFrame]: Preview } = {}
 local spinConnection: RBXScriptConnection? = nil
 local spinAngle = 0
-local tierButtons: { [string]: GuiButton } = {}
-local tierButtonColors: { [GuiButton]: Color3 } = {}
-local currentTier: string? = nil -- nil = no tabs, so every sheep shows
 
 local rewardAmountColor = rewardAmount.TextColor3
 local claimButtonText = claimButton.Text
@@ -172,14 +165,6 @@ local function pop(gui: GuiObject)
 	end
 	scale.Scale = 1.1
 	tweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-end
-
--- The Index tab a sheep is listed under (the server sends it; Baby<Type> ids fall back to "Baby").
-local function getTier(entry: any): string
-	if type(entry.tier) == "string" then
-		return entry.tier
-	end
-	return if string.match(entry.id, "^Baby") then "Baby" else "Normal"
 end
 
 local function playLuckClaimedSound()
@@ -287,13 +272,12 @@ local function setPreviewAngle(viewport: ViewportFrame, angle: number)
 	end
 end
 
--- Puts a scriptless copy of the sheep model in a ViewportFrame, facing the camera.
-local function buildPreview(viewport: ViewportFrame, sheepType: string)
+-- Puts a scriptless copy of the sheep model in a ViewportFrame, facing the camera and filling as much of it as its variant does.
+local function buildPreview(viewport: ViewportFrame, entry: any)
 	clearPreview(viewport)
 
-	local babyModels = sheepModels:FindFirstChild("BabySheeps")
-	local template = sheepModels:FindFirstChild(sheepType) or (babyModels and babyModels:FindFirstChild(sheepType))
-	if not template or not template:IsA("Model") then
+	local template = sheepModels.find(entry.id)
+	if not template then
 		return
 	end
 
@@ -316,7 +300,8 @@ local function buildPreview(viewport: ViewportFrame, sheepType: string)
 	-- The camera sits off the model's front (-Z), a little above, looking back at it.
 	local boxCFrame, boxSize = model:GetBoundingBox()
 	local center = boxCFrame.Position
-	local distance = (boxSize.Magnitude * 0.5) / math.tan(math.rad(CAMERA_FOV / 2))
+	local fill = PREVIEW_FILL[entry.variant] or ADULT_PREVIEW_FILL
+	local distance = (boxSize.Magnitude * 0.5) / math.tan(math.rad(CAMERA_FOV / 2)) / fill
 	local direction = (CFrame.Angles(0, math.pi + MODEL_FRONT_YAW, 0) * CFrame.Angles(-CAMERA_PITCH, 0, 0)).LookVector
 	camera.CFrame = CFrame.lookAt(center - direction * distance, center)
 
@@ -378,7 +363,9 @@ local function renderInfo()
 	infoName.Text = if locked then LOCKED_TEXT else entry.name
 	infoRarity.Text = if locked then LOCKED_TEXT else entry.rarity
 	infoRarity.TextColor3 = if locked then CLAIMED_COLOR else entry.color
-	infoChances.Text = `1 in {formatWithCommas(entry.odds)}`
+	infoChances.Text = if entry.halloween
+		then `1 in {formatWithCommas(entry.odds)} (Halloween only)`
+		else `1 in {formatWithCommas(entry.odds)}`
 	infoViewport.ImageColor3 = if locked then LOCKED_TINT else Color3.new(1, 1, 1)
 
 	if status == "Claimed" then
@@ -405,7 +392,7 @@ local function selectCard(card: Card)
 
 		selectedId = card.id
 		spinAngle = 0
-		buildPreview(infoViewport, card.id)
+		buildPreview(infoViewport, card.entry)
 	end
 	renderInfo()
 	startSpin()
@@ -423,51 +410,6 @@ local function findUnclaimed(id: string?): Card?
 		end
 	end
 	return nil
-end ---------------------------------------------------------------------
-
--- Shows only the open tier's cards, lights up its tab and dims the others.
-local function renderTier()
-	local shown = 0
-	for _, card in cards do
-		local visible = currentTier == nil or getTier(card.entry) == currentTier
-		card.frame.Visible = visible
-		if visible then
-			shown += 1
-		end
-	end
-
-	if emptyTierLabel then
-		emptyTierLabel.Visible = #entries > 0 and shown == 0
-	end
-
-	for tier, button in tierButtons do
-		local color = tierButtonColors[button]
-		button.BackgroundColor3 = if tier == currentTier then color else color:Lerp(Color3.new(0, 0, 0), INACTIVE_TAB_DARKEN)
-	end
-end
-
--- Opens a tier's page; a selected sheep from another tier is let go.
-local function setTier(tier: string)
-	if tier == currentTier then
-		return
-	end
-	currentTier = tier
-
-	local selected = if selectedId then cards[selectedId] else nil
-	if selected and getTier(selected.entry) ~= tier then
-		if selected.viewport then
-			setPreviewAngle(selected.viewport, 0)
-		end
-		selectedId = nil
-		clearPreview(infoViewport)
-		renderInfo()
-	end
-
-	if cardContainer:IsA("ScrollingFrame") then
-		cardContainer.CanvasPosition = Vector2.zero
-	end
-	renderTier()
-	task.defer(updateCanvasSize)
 end
 
 -- Shows ClaimAllFrame while more than one sheep is waiting to be claimed.
@@ -487,16 +429,12 @@ local function renderClaimAll()
 	alertBadge.Visible = count > 0
 end
 
--- Opens a sheep waiting to be claimed in the InfoFrame (on its tier's page); with none waiting the selection stays as it is.
+-- Opens a sheep waiting to be claimed in the InfoFrame; with none waiting the selection stays as it is.
 local function focusUnclaimed(id: string?)
 	local card = findUnclaimed(id)
-	if not card then
-		return
+	if card then
+		selectCard(card)
 	end
-	if currentTier then
-		setTier(getTier(card.entry))
-	end
-	selectCard(card)
 end
 
 -- Fills the UnlockBar with the share of sheep types that aren't Locked any more.
@@ -561,7 +499,7 @@ local function createCard(entry: any, order: number): Card
 	}
 
 	if viewport then
-		buildPreview(viewport, entry.id)
+		buildPreview(viewport, entry)
 	end
 
 	-- The Template isn't a button, so an invisible one covering the card takes the clicks.
@@ -598,7 +536,6 @@ local function render()
 		refreshCard(card)
 	end
 
-	renderTier()
 	renderInfo()
 	renderClaimAll()
 	renderUnlockBar()
@@ -620,22 +557,6 @@ local indexWindow = windowsManager.register("Index", {
 })
 
 cardTemplate.Visible = false
-
-if tierTabs then
-	for _, button in tierTabs:GetChildren() do
-		local tier = button:GetAttribute("Tier")
-		if button:IsA("GuiButton") and type(tier) == "string" then
-			tierButtons[tier] = button
-			tierButtonColors[button] = button.BackgroundColor3
-			button.Activated:Connect(function()
-				pop(button)
-				setTier(tier)
-			end)
-		end
-	end
-	currentTier = if tierButtons[DEFAULT_TIER] then DEFAULT_TIER else next(tierButtons)
-end
-renderTier()
 claimAllFrame.Visible = false
 alertBadge.Visible = false
 alertPulse.attach(alertBadge)

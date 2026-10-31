@@ -17,7 +17,10 @@ export type SheepInfo = {
 	LuckAmount: number, -- Luck the player earns for shearing it bare
 	IndexLuck: number?, -- permanent Luck for claiming it in the Index once; nil = worked out from its odds
 	luckDrops: boolean?, -- shearing it only drops Luck on the ground (its wool still pays out)
-	baby: boolean?, -- its model lives in Assets.Models.Sheeps.BabySheeps
+	baby: boolean?, -- a scaled-down copy of its adult
+	variant: string?, -- "Baby" or "Giant" for a copy of an adult type (see Variants); nil = the adult itself
+	adult: string?, -- variants only: the adult type it's a copy of
+	halloween: boolean?, -- only spawns during Halloween mode (Night)
 	rarity: string,
 	color: Color3,
 	chance: number, -- base spawn weight (before luck)
@@ -155,6 +158,7 @@ sheepData.Sheep = {
 		ShearHealth = 150,
 		WoolAmount = 40,
 		LuckAmount = 6,
+		halloween = true,
 		rarity = "Legendary",
 		color = rarityColors.Legendary,
 		chance = 500,
@@ -175,6 +179,7 @@ sheepData.Sheep = {
 		ShearHealth = 185,
 		WoolAmount = 55,
 		LuckAmount = 11,
+		halloween = true,
 		rarity = "Epic",
 		color = rarityColors.Epic,
 		chance = 5000,
@@ -195,6 +200,7 @@ sheepData.Sheep = {
 		ShearHealth = 240,
 		WoolAmount = 95,
 		LuckAmount = 45,
+		halloween = true,
 		rarity = "Legendary",
 		color = rarityColors.Legendary,
 		chance = 200,
@@ -239,39 +245,147 @@ sheepData.Sheep = {
 		color = rarityColors.Mythic,
 		chance = 80,
 	},
+	Mustache = {
+		id = "Mustache_Sheep",
+		name = "Mustache Sheep",
+		ShearHealth = 180,
+		WoolAmount = 36,
+		LuckAmount = 4,
+		rarity = "Uncommon",
+		color = rarityColors.Uncommon,
+		chance = 15000,
+	},
+	Cactus = {
+		id = "Cactus_Sheep",
+		name = "Cactus Sheep",
+		ShearHealth = 220,
+		WoolAmount = 54,
+		LuckAmount = 9,
+		rarity = "Rare",
+		color = rarityColors.Rare,
+		chance = 6000,
+	},
+	Square = {
+		id = "Square_Sheep",
+		name = "Square Sheep",
+		ShearHealth = 245,
+		WoolAmount = 64,
+		LuckAmount = 13,
+		rarity = "Epic",
+		color = rarityColors.Epic,
+		chance = 2500,
+	},
+	Ninja = {
+		id = "Ninja_Sheep",
+		name = "Ninja Sheep",
+		ShearHealth = 255,
+		WoolAmount = 70,
+		LuckAmount = 15,
+		rarity = "Epic",
+		color = rarityColors.Epic,
+		chance = 1500,
+	},
+	Princess = {
+		id = "Princess_Sheep",
+		name = "Princess Sheep",
+		ShearHealth = 420,
+		WoolAmount = 175,
+		LuckAmount = 130,
+		rarity = "Mythic",
+		color = rarityColors.Mythic,
+		chance = 10, -- the rarest sheep
+	},
+	Robot = {
+		id = "Robot_Sheep",
+		name = "Robot Sheep",
+		ShearHealth = 300,
+		WoolAmount = 100,
+		LuckAmount = 38,
+		rarity = "Legendary",
+		color = rarityColors.Legendary,
+		chance = 150,
+	},
+	Wizard = {
+		id = "Wizard_Sheep",
+		name = "Wizard Sheep",
+		ShearHealth = 320,
+		WoolAmount = 112,
+		LuckAmount = 50,
+		rarity = "Legendary",
+		color = rarityColors.Legendary,
+		chance = 100,
+	},
+	Alien = {
+		id = "Alien_Sheep",
+		name = "Alien Sheep",
+		ShearHealth = 380,
+		WoolAmount = 155,
+		LuckAmount = 110,
+		rarity = "Mythic",
+		color = rarityColors.Mythic,
+		chance = 25,
+	},
 
 } :: { [string]: SheepInfo }
 
+export type VariantInfo = {
+	id: string, -- prefix of the type key and name: "Baby" -> BabyBasic / "Baby Basic Sheep"
+	folder: string, -- its models live in Assets.Models.Sheeps.<folder>, named by type key
+	share: number, -- of the adult's spawn weight
+	scale: number, -- times the adult model's scale, for models SheepHandler makes
+	health: number, -- ShearHealth multiplier
+	wool: number, -- WoolAmount multiplier
+	luck: number, -- LuckAmount multiplier
+	weight: number, -- times the size tier's weight range
+}
+
 --[[
-	Baby sheep: every "Baby<Type>" model in Assets.Models.Sheeps.BabySheeps becomes a copy of <Type>.
-	The type's spawn weight is split between them, so its overall odds stay the same: BABY_SHARE of the time it's the baby.
+	Every type gets a Baby and a Giant copy. Their models live in Assets.Models.Sheeps.BabySheeps / GiantSheeps;
+	SheepHandler makes any that are missing by scaling the adult's model. The type's spawn weight is split between
+	the three, so its overall odds stay the same (adult 30%, baby 60%, giant 10%).
 ]]
-sheepData.BABY_SHARE = 0.6
+sheepData.Variants = {
+	{ id = "Baby", folder = "BabySheeps", share = 0.6, scale = 0.6, health = 1, wool = 1, luck = 1, weight = 0.4 },
+	{ id = "Giant", folder = "GiantSheeps", share = 0.1, scale = 1.5, health = 1.8, wool = 2.5, luck = 2, weight = 2.5 },
+} :: { VariantInfo }
 
-local babyModels = game:GetService("ReplicatedStorage").Assets.Models.Sheeps:FindFirstChild("BabySheeps")
-if babyModels then
-	for _, model in babyModels:GetChildren() do
-		local baseKey = string.match(model.Name, "^Baby(.+)$")
-		local base = baseKey and sheepData.Sheep[baseKey]
-		if not model:IsA("Model") or not base or base.baby then
-			warn(`SheepData: '{model.Name}' in BabySheeps doesn't match a sheep type (expected Baby<Type>).`)
-			continue
-		end
+local variantsById: { [string]: VariantInfo } = {}
+for _, variant in sheepData.Variants do
+	variantsById[variant.id] = variant
+end
 
-		sheepData.Sheep[model.Name] = {
-			id = `Baby_{base.id}`,
-			name = `Baby {base.name}`,
-			ShearHealth = base.ShearHealth,
-			WoolAmount = base.WoolAmount,
-			LuckAmount = base.LuckAmount,
+local adultKeys: { string } = {}
+for key in sheepData.Sheep do
+	table.insert(adultKeys, key)
+end
+for _, key in adultKeys do
+	local base = sheepData.Sheep[key]
+	local adultShare = 1
+	for _, variant in sheepData.Variants do
+		sheepData.Sheep[`{variant.id}{key}`] = {
+			id = `{variant.id}_{base.id}`,
+			name = `{variant.id} {base.name}`,
+			ShearHealth = math.floor(base.ShearHealth * variant.health + 0.5),
+			WoolAmount = math.floor(base.WoolAmount * variant.wool + 0.5),
+			LuckAmount = math.floor(base.LuckAmount * variant.luck + 0.5),
 			luckDrops = base.luckDrops,
-			baby = true,
+			baby = variant.id == "Baby" or nil,
+			variant = variant.id,
+			adult = key,
+			halloween = base.halloween,
 			rarity = base.rarity,
 			color = base.color,
-			chance = base.chance * sheepData.BABY_SHARE,
+			chance = base.chance * variant.share,
 		}
-		base.chance *= 1 - sheepData.BABY_SHARE
+		adultShare -= variant.share
 	end
+	base.chance *= adultShare
+end
+
+-- The Baby/Giant variant a sheep type is; nil for an adult or an unknown type.
+function sheepData.getVariant(name: string): VariantInfo?
+	local info = sheepData.Sheep[name]
+	return if info and info.variant then variantsById[info.variant] else nil
 end
 
 --[[
@@ -291,27 +405,32 @@ function sheepData.getLuckFactor(luck: number, rebirths: number, prestiges: numb
 	return luckPart * RebirthData.getLuckMultiplier(rebirths) * PrestigeData.getLuckMultiplier(prestiges) * (boost or 1)
 end
 
-local function getWeight(info: SheepInfo, luckFactor: number): number
+-- Halloween sheep weigh 0 unless `halloween` is true.
+local function getWeight(info: SheepInfo, luckFactor: number, halloween: boolean?): number
+	if info.halloween and not halloween then
+		return 0
+	end
 	return info.chance * luckFactor ^ (tierIndex[info.rarity] or 0)
 end
 
-local function getTotalWeight(luckFactor: number): number
+local function getTotalWeight(luckFactor: number, halloween: boolean?): number
 	local total = 0
 	for _, info in sheepData.Sheep do
-		total += getWeight(info, luckFactor)
+		total += getWeight(info, luckFactor, halloween)
 	end
 	return total
 end
 
 -- Picks a sheep type name for a player with this much Luck, rebirths and Prestiges; `boost` multiplies the luck factor (e.g. Night).
-function sheepData.roll(luck: number, rebirths: number, prestiges: number, random: Random?, boost: number?): string?
+-- Halloween sheep can only be picked when `halloween` is true.
+function sheepData.roll(luck: number, rebirths: number, prestiges: number, random: Random?, boost: number?, halloween: boolean?): string?
 	local luckFactor = sheepData.getLuckFactor(luck, rebirths, prestiges, boost)
-	local roll = (random or Random.new()):NextNumber() * getTotalWeight(luckFactor)
+	local roll = (random or Random.new()):NextNumber() * getTotalWeight(luckFactor, halloween)
 
 	local cumulative = 0
 	for name, info in sheepData.Sheep do
-		cumulative += getWeight(info, luckFactor)
-		if roll <= cumulative then
+		cumulative += getWeight(info, luckFactor, halloween)
+		if roll < cumulative then
 			return name
 		end
 	end
@@ -319,18 +438,20 @@ function sheepData.roll(luck: number, rebirths: number, prestiges: number, rando
 end
 
 -- N in "1 in N" for this sheep type with this Luck, rebirths and Prestiges (all 0 = base odds); nil for an unknown type.
-function sheepData.getOdds(name: string, luck: number, rebirths: number, prestiges: number, boost: number?): number?
+-- A Halloween sheep outside Halloween gets its Halloween odds, so the Index can still show them.
+function sheepData.getOdds(name: string, luck: number, rebirths: number, prestiges: number, boost: number?, halloween: boolean?): number?
 	local info = sheepData.Sheep[name]
 	if not info then
 		return nil
 	end
 
+	local includeHalloween = halloween or info.halloween
 	local luckFactor = sheepData.getLuckFactor(luck, rebirths, prestiges, boost)
-	return math.max(1, math.floor(getTotalWeight(luckFactor) / getWeight(info, luckFactor) + 0.5))
+	return math.max(1, math.floor(getTotalWeight(luckFactor, includeHalloween) / getWeight(info, luckFactor, includeHalloween) + 0.5))
 end
 
-function sheepData.getOddsText(name: string, luck: number, rebirths: number, prestiges: number, boost: number?): string
-	local odds = sheepData.getOdds(name, luck, rebirths, prestiges, boost)
+function sheepData.getOddsText(name: string, luck: number, rebirths: number, prestiges: number, boost: number?, halloween: boolean?): string
+	local odds = sheepData.getOdds(name, luck, rebirths, prestiges, boost, halloween)
 	return if odds then `1 in {odds}` else "1 in ?"
 end
 
@@ -344,7 +465,7 @@ end
 sheepData.INDEX_LUCK_BASE = 5
 sheepData.INDEX_LUCK_EXPONENT = 0.6
 
-local baseTotalWeight = getTotalWeight(1)
+local baseTotalWeight = getTotalWeight(1, true) -- Halloween sheep included, so Index Luck doesn't depend on the season
 
 function sheepData.getIndexLuck(name: string): number
 	local info = sheepData.Sheep[name]
@@ -369,14 +490,16 @@ function sheepData.getClaimedIndexLuck(index: { [string]: string }): number
 	return total
 end
 
--- Every sheep type key, commonest first: the order the Index shows them in.
-local indexOrder: { string } = {}
-for name in sheepData.Sheep do
-	table.insert(indexOrder, name)
-end
-table.sort(indexOrder, function(a: string, b: string): boolean
+-- The order the Index shows them in: a row per adult type (commonest first) of its Baby, itself, then its Giant.
+table.sort(adultKeys, function(a: string, b: string): boolean
 	return sheepData.Sheep[a].chance > sheepData.Sheep[b].chance
 end)
+local indexOrder: { string } = {}
+for _, key in adultKeys do
+	table.insert(indexOrder, `Baby{key}`)
+	table.insert(indexOrder, key)
+	table.insert(indexOrder, `Giant{key}`)
+end
 
 sheepData.IndexOrder = indexOrder
 sheepData.RarityColors = rarityColors

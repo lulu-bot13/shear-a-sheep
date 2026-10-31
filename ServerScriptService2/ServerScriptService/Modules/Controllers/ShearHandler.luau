@@ -162,7 +162,7 @@ local function finishSheep(player: Player, sheep: Model, sheepId: number)
 
 	SheepHandler.vanishSheep(sheepId)
 	updateBestFind(player, sheepType)
-	IndexHandler.discover(player, sheepType)
+	IndexHandler.discover(player, sheepType, sheep)
 	PlayerDataHandler.increment(player, "SheepShearedCount", 1)
 	GemHandler.rollSheepDrop(player)
 end
@@ -185,7 +185,9 @@ function ShearHandler.shearSheep(
 		local health = sheep:GetAttribute("ShearHealth")
 		local maxHealth = sheep:GetAttribute("MaxShearHealth")
 		local root = getRootPart(sheep)
-		if type(sheepId) ~= "number" or type(health) ~= "number" or health <= 0 or not root or not SheepHandler.getSheep(sheepId) then
+		if type(sheepId) ~= "number" or type(health) ~= "number" or health <= 0 or not root or not SheepHandler.getSheep(sheepId)
+			or sheep:GetAttribute("Rising")
+		then
 			continue
 		end
 

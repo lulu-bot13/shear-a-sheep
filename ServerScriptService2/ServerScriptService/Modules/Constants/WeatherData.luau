@@ -17,6 +17,7 @@ export type WeatherInfo = {
 local weatherData = {}
 
 weatherData.Clear = "Clear"
+weatherData.Halloween = "Night" -- Halloween mode runs while this weather is up (the client checks the same name)
 
 --// Cycle ---------------------------------------------------------------------------------
 

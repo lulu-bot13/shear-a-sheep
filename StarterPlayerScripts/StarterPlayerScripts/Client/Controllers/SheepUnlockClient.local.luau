@@ -1,11 +1,12 @@
 --[[
-	The "new sheep" popup (StarterGui.SheepUnlocked): pops up for ~2 seconds with the unlocked sheep spinning in the Unlocked frame.
+	The "new sheep" popup (StarterGui.SheepUnlocked): pops up for ~2 seconds with the unlocked sheep spinning, its mutation and weight.
 	Each new unlock replaces the sheep shown in that one frame; one preview model per sheep type is cached, so nothing is cloned again.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.SheepUnlockClient
 ]]--
 
 --// Services
+local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
@@ -14,11 +15,11 @@ local soundService = game:GetService("SoundService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local sheepModels = require(script.Parent.Parent.Modules.SheepModels)
 
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-local sheepModels = replicatedStorage:WaitForChild("Assets"):WaitForChild("Models"):WaitForChild("Sheeps")
 
 local unlockGui = playerGui:WaitForChild("SheepUnlocked") :: ScreenGui
 local container = unlockGui:WaitForChild("UnlockedSheepContainer") :: GuiObject
@@ -39,6 +40,7 @@ local SPIN_SPEED = math.rad(180) -- per second
 local MODEL_FRONT_YAW = 0 -- turn this if a sheep model's face isn't on its front (-Z) side
 local CAMERA_PITCH = math.rad(15)
 local CAMERA_FOV = 40
+local RAINBOW_TAG = "RainbowName" -- mirrors MutationData.RainbowGradientTag
 
 type Preview = {
 	model: Model,
@@ -46,11 +48,19 @@ type Preview = {
 	cameraCFrame: CFrame,
 }
 
+type Mutation = {
+	name: string,
+	color: Color3,
+	rainbow: boolean, -- the whole name cycles through the rainbow instead
+}
+
 type Unlock = {
 	sheepType: string,
 	name: string,
 	rarity: string,
 	color: Color3,
+	weight: number?, -- kg
+	mutation: Mutation?,
 }
 
 --// State
@@ -59,6 +69,11 @@ local queue: { Unlock } = {}
 local playing = false
 local currentPreview: Preview? = nil
 local spinAngle = 0
+local nameColor = nameLabel.TextColor3 -- restored after a rainbow name
+
+-- MutationClient animates it, but only while it's parented to the name (a Rainbow sheep is showing).
+local rainbowGradient = Instance.new("UIGradient")
+collectionService:AddTag(rainbowGradient, RAINBOW_TAG)
 
 local camera = Instance.new("Camera")
 camera.FieldOfView = CAMERA_FOV
@@ -89,9 +104,8 @@ local function getPreview(sheepType: string): Preview?
 		return cached
 	end
 
-	local babyModels = sheepModels:FindFirstChild("BabySheeps")
-	local source = sheepModels:FindFirstChild(sheepType) or (babyModels and babyModels:FindFirstChild(sheepType))
-	if not source or not source:IsA("Model") then
+	local source = sheepModels.find(sheepType)
+	if not source then
 		return nil
 	end
 
@@ -153,9 +167,21 @@ local function tweenScales(info: TweenInfo, scale: number): Tween
 	return last
 end
 
+-- The mutation prefix in its colour; a rainbow one stays plain so the gradient colours the whole name.
+local function showName(unlock: Unlock)
+	local mutation = unlock.mutation
+	local rainbow = mutation ~= nil and mutation.rainbow
+	nameLabel.RichText = true
+	nameLabel.Text = if mutation and not rainbow then `<font color="#{mutation.color:ToHex()}">{mutation.name}</font> {unlock.name}`
+		elseif mutation then `{mutation.name} {unlock.name}`
+		else unlock.name
+	nameLabel.TextColor3 = if rainbow then Color3.new(1, 1, 1) else nameColor
+	rainbowGradient.Parent = if rainbow then nameLabel else nil
+end
+
 local function play(unlock: Unlock)
-	nameLabel.Text = unlock.name
-	rarityLabel.Text = unlock.rarity
+	showName(unlock)
+	rarityLabel.Text = if unlock.weight then `{unlock.rarity} · {unlock.weight} kg` else unlock.rarity
 	rarityLabel.TextColor3 = unlock.color
 	unlockedFrame.Visible = true
 	showPreview(getPreview(unlock.sheepType))
@@ -177,6 +203,7 @@ local function play(unlock: Unlock)
 
 	unlockGui.Enabled = false
 	showPreview(nil)
+	rainbowGradient.Parent = nil
 end
 
 -- Unlocks that arrive while one is showing wait their turn instead of overlapping.
@@ -197,7 +224,7 @@ unlockGui.Enabled = false
 
 network.waitUntilReadyAsync()
 
-network.connectEvent(network.RemoteEvents.SheepUnlocked, function(sheepType: string, name: string, rarity: string, color: Color3)
-	table.insert(queue, { sheepType = sheepType, name = name, rarity = rarity, color = color })
+network.connectEvent(network.RemoteEvents.SheepUnlocked, function(sheepType: string, name: string, rarity: string, color: Color3, weight: number?, mutation: Mutation?)
+	table.insert(queue, { sheepType = sheepType, name = name, rarity = rarity, color = color, weight = weight, mutation = mutation })
 	task.spawn(playQueue)
 end)
