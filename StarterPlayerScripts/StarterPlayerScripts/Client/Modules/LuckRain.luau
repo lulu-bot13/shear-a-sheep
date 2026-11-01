@@ -7,6 +7,9 @@
 local players = game:GetService("Players")
 local tweenService = game:GetService("TweenService")
 
+--// Modules
+local settings = require(script.Parent.Settings)
+
 --// Configs
 -- Spawning + the slowest fall add up to EFFECT_SECONDS.
 local LUCK_ICON_IMAGE = "rbxassetid://86611651520562" -- empty falls back to a 🍀 emoji
@@ -54,7 +57,7 @@ end
 function LuckRain.play(aboveGui: ScreenGui)
 	effectGui.DisplayOrder = math.max(effectGui.DisplayOrder, aboveGui.DisplayOrder + 1)
 
-	for _ = 1, FALL_ICON_COUNT do
+	for _ = 1, settings.effectCount(FALL_ICON_COUNT) do
 		task.delay(math.random() * FALL_SPAWN_SECONDS, function()
 			local icon = makeLuckIcon(math.random(FALL_MIN_SIZE, FALL_MAX_SIZE))
 			local x = math.random()

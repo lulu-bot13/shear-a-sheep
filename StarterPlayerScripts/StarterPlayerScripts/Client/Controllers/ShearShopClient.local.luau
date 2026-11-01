@@ -48,6 +48,7 @@ local CLOSE_DISTANCE = 6 -- studs outside the hitbox before the shop closes itse
 local DEFAULT_SHEAR_ID = "DefaultShear"
 local DISTANCE_CHECK_SECONDS = 0.25
 local MESSAGE_SECONDS = 1.3
+local UNLOCKED_ATTRIBUTE = "UnlockedShear" -- on the Shop gui: the highest shear just unlocked, for ShearTutorialClient
 -- Main HUD children (and CurrencyFrame children) left up while the shop is open; Ability is hidden by AbilityClient whenever any window is open.
 local HUD_KEEP = { CurrencyFrame = true, WoolAmount = true, SheepCount = true, Ability = true }
 
@@ -142,10 +143,10 @@ local function refreshCard(card: Card)
 		card.purchaseLabel.Text = "EQUIP"
 	elseif state == "locked" then
 		card.purchase.BackgroundColor3 = colors.Locked
-		card.purchaseLabel.Text = "BUY"
+		card.purchaseLabel.Text = "UNLOCK"
 	else
 		card.purchase.BackgroundColor3 = if state == "ready" then colors.Ready else colors.Poor
-		card.purchaseLabel.Text = "BUY"
+		card.purchaseLabel.Text = "UNLOCK"
 	end
 
 	card.purchase:SetAttribute("State", state)
@@ -173,7 +174,8 @@ local function flashMessage(card: Card, text: string)
 	end)
 end
 
--- Pops StarterGui.Alerts.Main.ShearAlert for each shear whose sheep requirement the new count just reached.
+-- Pops StarterGui.Alerts.Main.ShearAlert for each shear whose sheep requirement the new count just reached;
+-- the highest of them goes on the Shop gui's UnlockedShear attribute.
 local function checkShearUnlocks()
 	local count = player:GetAttribute("SheepShearedCount")
 	if type(count) ~= "number" then
@@ -186,10 +188,15 @@ local function checkShearUnlocks()
 		return
 	end
 
+	local highest: string? = nil
 	for _, info in UIData.Shears do
 		if info.sheepRequired > previous and info.sheepRequired <= count and not isOwned(info.id) then
 			announcements.show("ShearAlert", `NEW SHEAR UNLOCKED: {info.displayName}`)
+			highest = info.id -- in progression order, so the last one is the highest
 		end
+	end
+	if highest then
+		shopGui:SetAttribute(UNLOCKED_ATTRIBUTE, highest)
 	end
 end
 

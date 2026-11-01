@@ -32,6 +32,7 @@ local INVENTORY_NAME = "Inventory"
 local INVENTORY_KEYS = { Wool = true, Luck = true } -- the rest of the numbers become player attributes
 local RENAMED_KEYS = { WoolGainLevel = "MoreWoolLevel" } -- old save key -> current key
 local REMOVED_KEYS = { LuckLevel = true } -- dropped from older saves
+local KEPT_ON_RESET = { Settings = true } -- preferences, not progress
 
 export type Data = {
 	Wool: number,
@@ -55,6 +56,10 @@ export type Data = {
 	SheepIndex: { [string]: string }, -- sheep type -> "Found" | "Claimed" (kept through rebirths)
 	PodiumSheep: { [string]: any }, -- podium name -> SheepHandler.SavedSheep standing on it
 	CrookTutorialDone: number, -- 1 once the Shepherd's Crook tutorial has been shown (a number so it mirrors to an attribute)
+	Settings: { [string]: boolean }, -- SettingsData id -> value (kept through rebirths, Prestiges and /resetdata)
+	DailyStreak: number, -- daily rewards claimed in the current streak (kept through rebirths and Prestiges)
+	DailyLastClaim: number, -- os.time() of the last daily reward claim; 0 = never
+	DailyCycles: number, -- full 7-day daily reward loops completed
 }
 
 local DataTemplate = {
@@ -94,6 +99,14 @@ local DataTemplate = {
 
 	-- Tutorials
 	CrookTutorialDone = 0,
+
+	-- Settings
+	Settings = {},
+
+	-- Daily rewards
+	DailyStreak = 0,
+	DailyLastClaim = 0,
+	DailyCycles = 0,
 }
 
 -- Creating a profile store (Studio saves go to a separate test store)
@@ -297,14 +310,16 @@ function PlayerDataHandler.set(player: Player, key: string, value: any)
 	PlayerDataHandler.Changed:Fire(player, key, value)
 end
 
--- Puts every field back to a brand-new player's value, firing Changed for each so other systems update.
+-- Puts every field but the KEPT_ON_RESET ones back to a brand-new player's value, firing Changed for each so other systems update.
 function PlayerDataHandler.reset(player: Player)
 	if not profiles[player] then
 		return
 	end
 
 	for key, value in deepCopy(DataTemplate) do
-		PlayerDataHandler.set(player, key, value)
+		if not KEPT_ON_RESET[key] then
+			PlayerDataHandler.set(player, key, value)
+		end
 	end
 	PlayerDataHandler.set(player, "SheepCount", nil)
 end

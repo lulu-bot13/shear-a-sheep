@@ -23,7 +23,7 @@ network.connectEvent(network.RemoteEvents.Teleport, function(player: Player, des
     -- Teleporting
     local spawnArea = if destination == "plot" then plot:FindFirstChild("SpawnArea") else base:FindFirstChild("CenterPlaza"):FindFirstChild("SpawnArea")
     if not spawnArea then
-        warn(`Spawn area not found: {spawnArea.Name}`)
+        warn(`Spawn area not found: {destination}`)
         return
     end
 

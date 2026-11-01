@@ -17,6 +17,7 @@ local userInputService = game:GetService("UserInputService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local settings = require(script.Parent.Parent.Modules.Settings)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
@@ -665,7 +666,7 @@ local function playPoof(position: Vector3)
 	for _, descendant in poof:GetDescendants() do
 		if descendant:IsA("ParticleEmitter") then
 			local emitCount = descendant:GetAttribute("EmitCount")
-			descendant:Emit(if type(emitCount) == "number" then emitCount else POOF_DEFAULT_EMIT_COUNT)
+			descendant:Emit(settings.effectCount(if type(emitCount) == "number" then emitCount else POOF_DEFAULT_EMIT_COUNT))
 			lifetime = math.max(lifetime, descendant.Lifetime.Max)
 		end
 	end
@@ -754,9 +755,9 @@ local function onShearHit(hits: { { sheep: Model?, position: Vector3, damage: nu
 		local sheep = hit.sheep
 		if sheep and sheep:IsDescendantOf(workspace) then
 			flashTorso(sheep)
-			throwWool(hit.position, hit.color, WOOL_CHUNKS_PER_HIT)
+			throwWool(hit.position, hit.color, settings.effectCount(WOOL_CHUNKS_PER_HIT))
 		else
-			throwWool(hit.position, hit.color, WOOL_CHUNKS_FINISH)
+			throwWool(hit.position, hit.color, settings.effectCount(WOOL_CHUNKS_FINISH))
 			playPoof(hit.position)
 			finishedAny = true
 		end
@@ -779,7 +780,7 @@ local function onShearHit(hits: { { sheep: Model?, position: Vector3, damage: nu
 	if heldTool then
 		for _, descendant in heldTool:GetDescendants() do
 			if descendant:IsA("ParticleEmitter") and descendant.Name == "ElectricBurst" then
-				descendant:Emit(ELECTRIC_BURST_COUNT)
+				descendant:Emit(settings.effectCount(ELECTRIC_BURST_COUNT))
 			end
 		end
 	end

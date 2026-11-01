@@ -14,6 +14,9 @@ local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
 local tweenService = game:GetService("TweenService")
 
+--// Modules
+local settings = require(script.Parent.Parent.Modules.Settings)
+
 --// Configs
 local TAG = "ElectricShear"
 local BURST_COUNT = 18
@@ -30,13 +33,14 @@ end
 
 local function snip(tool: Instance)
 	-- Only tools out in the world (held by a character) show anything; skips the template in ReplicatedStorage.
-	if not tool:IsDescendantOf(workspace) or isLocalPlayersTool(tool) then
+	-- Emit shows even on a disabled emitter, so a hidden player's tool is skipped here.
+	if not tool:IsDescendantOf(workspace) or isLocalPlayersTool(tool) or settings.get("HideOtherPlayers") then
 		return
 	end
 
 	for _, descendant in tool:GetDescendants() do
 		if descendant:IsA("ParticleEmitter") and descendant.Name == "ElectricBurst" then
-			descendant:Emit(BURST_COUNT)
+			descendant:Emit(settings.effectCount(BURST_COUNT))
 		elseif descendant:IsA("PointLight") and descendant.Name == "ElectricGlow" then
 			local rest = (descendant:GetAttribute("RestBrightness") :: number?) or descendant.Brightness
 			descendant:SetAttribute("RestBrightness", rest)

@@ -13,6 +13,9 @@ local runService = game:GetService("RunService")
 local soundService = game:GetService("SoundService")
 local tweenService = game:GetService("TweenService")
 
+--// Modules
+local settings = require(script.Parent.Settings)
+
 --// Sounds
 local weatherSounds = soundService:WaitForChild("Weather", 10)
 local rainSfx = if weatherSounds then weatherSounds:FindFirstChild("Rain") :: Sound? else nil -- fades up to its Studio volume
@@ -36,6 +39,7 @@ local RAIN_COLOR = Color3.fromRGB(175, 195, 220)
 local RAIN_TRANSPARENCY = 0.45
 local PARK_CFRAME = CFrame.new(0, 10000, 0) -- where unused drops wait
 local FIREFLY_AREA = Vector3.new(50, 6, 50) -- box around the character they drift in
+local LOW_GRAPHICS_RAIN = 0.25 -- of each look's rain drops while Low Graphics is on (fireflies are off)
 
 type Look = {
 	clockTime: number?, -- nil keeps the place's own time
@@ -237,6 +241,7 @@ local baseline: Snapshot = {
 	cloudDensity = if clouds then clouds.Density else 0,
 }
 local applied: Snapshot = table.clone(baseline)
+local currentLook: Look = LOOKS.Clear
 local transition: RBXScriptConnection? = nil
 local follow: RBXScriptConnection? = nil
 local rainLoop: RBXScriptConnection? = nil
@@ -404,7 +409,8 @@ local function stepRain(deltaTime: number)
 end
 
 local function setRain(look: Look, instant: boolean)
-	rainTarget = min(look.rainDrops, rainPoolSize)
+	local drops = if settings.get("LowGraphics") then floor(look.rainDrops * LOW_GRAPHICS_RAIN) else look.rainDrops
+	rainTarget = min(drops, rainPoolSize)
 	if instant then
 		rainCount = rainTarget
 	else
@@ -431,8 +437,9 @@ local function followCamera()
 end
 
 local function setEmitters(look: Look)
-	fireflies.Rate = look.fireflyRate
-	fireflies.Enabled = look.fireflyRate > 0
+	local rate = if settings.get("LowGraphics") then 0 else look.fireflyRate
+	fireflies.Rate = rate
+	fireflies.Enabled = rate > 0
 
 	if fireflies.Enabled and not follow then
 		rigFolder.Parent = workspace.CurrentCamera
@@ -471,10 +478,19 @@ end
 -- Moves the scene over to `weather`'s look; `instant` skips the blend (joining mid-weather).
 function WeatherEffects.apply(weather: string, instant: boolean?)
 	local look = LOOKS[weather] or LOOKS.Clear
+	currentLook = look
 	blendTo(resolve(look), instant == true)
 	setRain(look, instant == true)
 	setEmitters(look)
 	setAmbience(look)
 end
+
+-- Low Graphics thins the rain and the fireflies out (or back in) over the current weather straight away.
+settings.changed:Connect(function(id: string)
+	if id == "LowGraphics" then
+		setRain(currentLook, false)
+		setEmitters(currentLook)
+	end
+end)
 
 return WeatherEffects

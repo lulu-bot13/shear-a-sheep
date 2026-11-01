@@ -8,6 +8,9 @@ local debris = game:GetService("Debris")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local soundService = game:GetService("SoundService")
 
+--// Modules
+local settings = require(script.Parent.Parent.Settings)
+
 --// Instances
 local assets = replicatedStorage:WaitForChild("Assets")
 
@@ -58,7 +61,7 @@ local function poof(position: Vector3)
 	for _, descendant in attachment:GetDescendants() do
 		if descendant:IsA("ParticleEmitter") then
 			local emitCount = descendant:GetAttribute("EmitCount")
-			descendant:Emit(if type(emitCount) == "number" then emitCount else DEFAULT_EMIT_COUNT)
+			descendant:Emit(settings.effectCount(if type(emitCount) == "number" then emitCount else DEFAULT_EMIT_COUNT))
 		end
 	end
 end
@@ -69,7 +72,7 @@ local function playSoundAt(name: string, position: Vector3)
 	local copy: Sound
 	if template and template:IsA("Sound") then
 		copy = template:Clone()
-	elseif name == DESPAWN_SOUND_NAME then
+	elseif name == DESPAWN_SOUND_NAME and settings.get("SoundEffects") then -- made here, so no SoundGroup mutes it
 		copy = Instance.new("Sound")
 		copy.SoundId = DESPAWN_SOUND_ID
 	else

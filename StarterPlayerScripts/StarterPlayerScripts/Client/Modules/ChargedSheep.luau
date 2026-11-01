@@ -9,6 +9,9 @@
 --// Services
 local collectionService = game:GetService("CollectionService")
 
+--// Modules
+local settings = require(script.Parent.Settings)
+
 --// Configs
 local SHEEP_TAG = "Sheep"
 local CHARGED_ATTRIBUTE = "Charged"
@@ -97,6 +100,7 @@ local function attachVisual(entry: Entry, root: BasePart)
 	end
 	visual.highlight.Adornee = entry.sheep
 	visual.highlight.Parent = highlightFolder
+	visual.sparks.Enabled = not settings.get("LowGraphics") -- the highlight and glow still mark it
 	visual.attachment.Parent = root
 	entry.visual = visual
 	visualCount += 1
@@ -230,6 +234,17 @@ function ChargedSheep.start(onNewlyCharged: (Model) -> ())
 	onCharged = onNewlyCharged
 	collectionService:GetInstanceAddedSignal(SHEEP_TAG):Connect(onSheepAdded)
 	collectionService:GetInstanceRemovedSignal(SHEEP_TAG):Connect(onSheepRemoved)
+
+	settings.changed:Connect(function(id: string, value: boolean)
+		if id ~= "LowGraphics" then
+			return
+		end
+		for _, entry in entries do
+			if entry.visual then
+				entry.visual.sparks.Enabled = not value
+			end
+		end
+	end)
 end
 
 return ChargedSheep

@@ -11,6 +11,9 @@ local runService = game:GetService("RunService")
 local soundService = game:GetService("SoundService")
 local tweenService = game:GetService("TweenService")
 
+--// Modules
+local settings = require(script.Parent.Settings)
+
 --// Configs
 local FONT = Enum.Font.FredokaOne
 local FX_FOLDER_NAME = "AbilityShackFX"
@@ -197,7 +200,7 @@ local function burst(base: CFrame, color: Color3, count: number, parent: Instanc
 	emitter.Transparency = NumberSequence.new(0.1, 1)
 	emitter.Parent = emitterPart
 	emitterPart.Parent = parent
-	emitter:Emit(count)
+	emitter:Emit(settings.effectCount(count))
 	return emitterPart
 end
 

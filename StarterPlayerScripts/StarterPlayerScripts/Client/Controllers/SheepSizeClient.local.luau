@@ -15,6 +15,7 @@ local tweenService = game:GetService("TweenService")
 --// Modules
 local announcements = require(script.Parent.Parent.Modules.Announcements)
 local network = require(replicatedStorage.Shared.Utils.Network)
+local settings = require(script.Parent.Parent.Modules.Settings)
 
 --// References
 local vfxFolder = replicatedStorage.Assets:FindFirstChild("VFX")
@@ -70,6 +71,7 @@ local function addAura(root: BasePart, color: Color3)
 		NumberSequenceKeypoint.new(1, 0),
 	})
 	sparkles.Transparency = NumberSequence.new(0.3, 1)
+	sparkles.Enabled = not settings.get("LowGraphics") -- the glow stays either way
 	sparkles.Parent = aura
 
 	aura.Parent = root
@@ -195,7 +197,7 @@ local function playHugeSpawn(groundCFrame: CFrame, ownerId: number, landingOnly:
 
 	for _, descendant in effect:GetDescendants() do
 		if descendant:IsA("ParticleEmitter") then
-			local count = getNumber(descendant, "EmitCount", 0)
+			local count = settings.effectCount(getNumber(descendant, "EmitCount", 0))
 			local delay = getNumber(descendant, "EmitDelay", 0) - skipped
 			if delay < 0 then
 				continue -- a windup particle
@@ -263,6 +265,20 @@ for _, sheep in collectionService:GetTagged(SHEEP_TAG) do
 end
 collectionService:GetInstanceAddedSignal(SHEEP_TAG):Connect(onSheepAdded)
 collectionService:GetInstanceRemovedSignal(SHEEP_TAG):Connect(onSheepRemoved)
+
+settings.changed:Connect(function(id: string, value: boolean)
+	if id ~= "LowGraphics" then
+		return
+	end
+	for sheep in tracked do
+		local root = sheep:FindFirstChild("HumanoidRootPart")
+		local aura = root and root:FindFirstChild(AURA_NAME)
+		local sparkles = aura and aura:FindFirstChildOfClass("ParticleEmitter")
+		if sparkles then
+			sparkles.Enabled = not value
+		end
+	end
+end)
 
 network.waitUntilReadyAsync()
 network.connectEvent(network.RemoteEvents.HugeSheepSpawn, playHugeSpawn)

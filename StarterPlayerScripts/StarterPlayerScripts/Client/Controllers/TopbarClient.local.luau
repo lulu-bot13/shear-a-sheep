@@ -1,6 +1,6 @@
 --[[
-	TopbarPlus buttons in the Roblox topbar: Settings (right) toggles the Settings window, Invite Friends (left) opens the invite prompt.
-	The Settings button does nothing until a script registers a "Settings" window with WindowsManager.
+	TopbarPlus buttons in the Roblox topbar: Settings (right) and Daily Rewards (left) toggle their windows, Invite Friends (left) opens the invite prompt.
+	The window buttons do nothing until a script registers that window with WindowsManager.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.TopbarClient
 ]]--
@@ -21,7 +21,9 @@ local player = players.LocalPlayer
 local PLACEHOLDER_ICON = "rbxassetid://0"
 local SETTINGS_ICON = "rbxassetid://104843963165382" -- TODO: upload gear icon
 local FRIENDS_ICON = "rbxassetid://71584993006217" -- TODO: upload friends icon
+local DAILY_REWARDS_ICON = "rbxassetid://84569724458877"
 local SETTINGS_WINDOW_NAME = "Settings"
+local DAILY_REWARDS_WINDOW_NAME = "DailyRewards"
 
 -- Shows the label text instead while the image is still the placeholder, so the button isn't blank.
 local function setIconImage(topbarIcon, image: string, fallbackLabel: string)
@@ -44,6 +46,21 @@ settingsIcon.selected:Connect(function()
 	local settingsWindow = windowsManager.get(SETTINGS_WINDOW_NAME)
 	if settingsWindow then
 		settingsWindow.toggle()
+	end
+end)
+
+--// Daily Rewards
+local dailyRewardsIcon = icon.new()
+	:setName("DailyRewards")
+	:setLabel("Daily Rewards")
+	:align("Left")
+	:oneClick()
+setIconImage(dailyRewardsIcon, DAILY_REWARDS_ICON, "Daily Rewards")
+
+dailyRewardsIcon.selected:Connect(function()
+	local dailyRewardsWindow = windowsManager.get(DAILY_REWARDS_WINDOW_NAME)
+	if dailyRewardsWindow then
+		dailyRewardsWindow.toggle()
 	end
 end)
 

@@ -13,6 +13,7 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local GroundBurst = require(script.Parent.Parent.GroundBurst)
+local settings = require(script.Parent.Parent.Settings)
 
 --// Instances
 local localPlayer = players.LocalPlayer
@@ -65,7 +66,11 @@ local function isValid(entry: Entry): boolean
 	return sheep.Parent ~= nil and collectionService:HasTag(sheep, SHEEP_TAG) and sheep:GetAttribute("id") == entry.id
 end
 
+-- Made here, so no SoundGroup mutes it: the Sound Effects setting is checked instead.
 local function playSound(soundId: string, position: Vector3)
+	if not settings.get("SoundEffects") then
+		return
+	end
 	local attachment = Instance.new("Attachment")
 	attachment.WorldPosition = position
 	attachment.Parent = workspace.Terrain

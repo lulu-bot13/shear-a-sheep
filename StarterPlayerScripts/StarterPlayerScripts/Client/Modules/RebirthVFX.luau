@@ -9,6 +9,9 @@
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
 
+--// Modules
+local settings = require(script.Parent.Settings)
+
 --// Configs
 local TEMPLATE_NAME = "RebirthVFX"
 local ROOT_HEIGHT = 0.5 -- the template's center sits this far above the ground point
@@ -199,7 +202,12 @@ end
 --// API -------------------------------------------------------------------------
 
 -- target is a character, a BasePart, or a ground CFrame / Vector3. Instance targets are followed until removed.
+-- Skipped with Low Graphics on: the rebirth sound and LuckRain still play.
 function RebirthVFX.play(target: Target, options: Options?)
+	if settings.get("LowGraphics") then
+		return
+	end
+
 	local template = findTemplate()
 	if not template then
 		warn("RebirthVFX: template not found in ReplicatedStorage.Assets.VFX or Workspace")

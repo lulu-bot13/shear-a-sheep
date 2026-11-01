@@ -14,6 +14,7 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local settings = require(script.Parent.Parent.Modules.Settings)
 
 --// Instances
 local player = players.LocalPlayer
@@ -318,8 +319,21 @@ end
 
 --// Setup -------------------------------------------------------------------------------
 
+-- The ones the Server Announcements setting can't turn off: the Reaper raid, and anything about this player.
+local function isForMe(announcement: Announcement): boolean
+	if announcement.kind == "ReaperRaid" then
+		return true
+	elseif announcement.kind == "Gift" and announcement.recipientName == player.Name then
+		return true
+	end
+	return announcement.userName == player.Name
+end
+
 local function onAnnouncement(announcement: Announcement)
 	if type(announcement) ~= "table" then
+		return
+	end
+	if not settings.get("Announcements") and not isForMe(announcement) then
 		return
 	end
 

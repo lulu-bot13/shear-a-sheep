@@ -12,6 +12,7 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local settings = require(script.Parent.Parent.Modules.Settings)
 
 --// References
 local vfxFolder = replicatedStorage.Assets:FindFirstChild("VFX")
@@ -66,7 +67,7 @@ local function scheduleParticles(effect: Model)
 		if type(count) == "number" then
 			task.delay(getNumber(descendant, "EmitDelay", 0), function()
 				if descendant.Parent then
-					descendant:Emit(count)
+					descendant:Emit(settings.effectCount(count))
 				end
 			end)
 		end

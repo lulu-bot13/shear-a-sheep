@@ -10,6 +10,9 @@ local lighting = game:GetService("Lighting")
 local soundService = game:GetService("SoundService")
 local tweenService = game:GetService("TweenService")
 
+--// Modules
+local settings = require(script.Parent.Settings)
+
 --// Sounds
 local weatherSounds = soundService:WaitForChild("Weather", 10)
 local thunderSfx = if weatherSounds then weatherSounds:FindFirstChild("ThunderStrike") :: Sound? else nil
@@ -134,8 +137,9 @@ function Lightning.strike(target: Vector3)
 	end)
 
 	-- PlayLocalSound plays a fresh copy, so back-to-back strikes overlap instead of cutting each other off.
+	-- That copy may not go through the Weather group's volume, so the Sound Effects setting is checked here too.
 	local sound = thunderSfx
-	if sound and sound:IsA("Sound") then
+	if sound and sound:IsA("Sound") and settings.get("SoundEffects") then
 		task.delay(THUNDER_DELAY, function()
 			soundService:PlayLocalSound(sound)
 		end)

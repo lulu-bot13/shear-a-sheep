@@ -14,6 +14,7 @@ local moduleLoader = require(replicatedStorage:WaitForChild("Source"):WaitForChi
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 local backgroundMusic = require(script.Parent.Modules.BackgroundMusic)
+require(script.Parent.Modules.Settings) -- first, so the music waits for the saved Music setting
 
 backgroundMusic.start()
 

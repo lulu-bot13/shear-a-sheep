@@ -9,6 +9,9 @@ local players = game:GetService("Players")
 local runService = game:GetService("RunService")
 local tweenService = game:GetService("TweenService")
 
+--// Modules
+local playerSettings = require(script.Parent.Settings) -- "settings" is each burst's options below
+
 --// Configs
 local SHEEP_TAG = "Sheep"
 local PARK_CFRAME = CFrame.new(0, 10000, 0) -- idle parts wait out of sight here instead of being reparented
@@ -340,8 +343,14 @@ function GroundBurst.play(position: Vector3, options: Options?)
 	local ground, material, color = findGround(position)
 	local center = ground or position
 
+	-- Low Graphics keeps the eruption's shape with fewer chunks, and drops the thrown rocks and dust.
+	if playerSettings.get("LowGraphics") then
+		settings.debrisCount = 0
+		settings.dustCount = 0
+	end
+
 	local rings = math.max(math.floor(settings.rings), 1)
-	local chunkCount = math.max(math.floor(settings.chunkCount), 0)
+	local chunkCount = playerSettings.effectCount(math.max(math.floor(settings.chunkCount), 0))
 	local outerRadius = math.max(settings.radius, settings.innerRadius)
 	local ringRadii: { number } = {}
 	local radiusSum = 0

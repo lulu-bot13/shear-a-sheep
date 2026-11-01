@@ -28,6 +28,8 @@ local OCCUPIED_ATTRIBUTE = "Occupied" -- set on the prompt by SheepCarryHandler
 local CARRY_ATTRIBUTE = "CarryingSheep" -- "Pen" or "Podium" while a sheep is carried, set by SheepCarryHandler
 local DONE_KEY = "CrookTutorialDone" -- mirrored from the save by PlayerDataHandler, 1 once shown
 local MAIN_DONE_ATTRIBUTE = "MainTutorialDone" -- set on the Tutorial gui by TutorialClient once it's finished with it
+local ACTIVE_ATTRIBUTE = "CrookTutorialActive" -- on the Tutorial gui while this runs, so DailyRewardClient doesn't open over it
+local SHEAR_ACTIVE_ATTRIBUTE = "ShearTutorialActive" -- set on the Tutorial gui by ShearTutorialClient while it runs
 local TICK_SECONDS = 0.1
 local DISPLAY_ORDER = 90 -- matches TutorialClient
 local PLACE_GRACE_SECONDS = 0.5 -- after a carry ends, how long to wait for the podium's Occupied to arrive before calling it a release
@@ -195,13 +197,15 @@ end
 while not tutorialGui:GetAttribute(MAIN_DONE_ATTRIBUTE) do
 	tutorialGui:GetAttributeChangedSignal(MAIN_DONE_ATTRIBUTE):Wait()
 end
-while not isHoldingCrook() do
+while not isHoldingCrook() or tutorialGui:GetAttribute(SHEAR_ACTIVE_ATTRIBUTE) == true do
 	task.wait(TICK_SECONDS)
 end
 
 tutorialGui.DisplayOrder = DISPLAY_ORDER
+tutorialGui:SetAttribute(ACTIVE_ATTRIBUTE, true)
 runPlacing()
 runExplain()
 setShown(false)
+tutorialGui:SetAttribute(ACTIVE_ATTRIBUTE, false)
 podiumHighlight:Destroy()
 network.fireServer(network.RemoteEvents.CrookTutorialDone)

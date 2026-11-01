@@ -14,6 +14,7 @@ local userInputService = game:GetService("UserInputService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local settings = require(script.Parent.Parent.Modules.Settings)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
@@ -295,7 +296,11 @@ local function useAbility()
 	end
 end
 
+-- Only visuals: the server shears the sheep either way, so skipping another player's effect changes nothing else.
 network.connectEvent(network.RemoteEvents.AbilityEffect, function(caster: Player, abilityId: string, ...: any)
+	if caster ~= player and not settings.get("OtherAbilityEffects") then
+		return
+	end
 	local abilityModule = type(abilityId) == "string" and getModule(abilityId)
 	if abilityModule and abilityModule.onEffect then
 		abilityModule.onEffect(caster, ...)

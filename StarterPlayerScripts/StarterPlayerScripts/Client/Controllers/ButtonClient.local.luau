@@ -12,6 +12,9 @@ local collectionService = game:GetService("CollectionService")
 local soundService = game:GetService("SoundService")
 local runService = game:GetService("RunService")
 
+--// Modules
+local settings = require(script.Parent.Parent.Modules.Settings)
+
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -115,6 +118,13 @@ local function buildTweens(button: GuiObject): { [string]: { Tween } }
 	}
 end
 
+-- PlayLocalSound's copy may not go through the UISounds group's volume, so the UI Sounds setting is checked here too.
+local function playUISound(sound: Sound)
+	if settings.get("UISounds") then
+		soundService:PlayLocalSound(sound)
+	end
+end
+
 local function play(button: GuiObject, name: string)
 	local buttonTweens = tweens[button]
 	if not buttonTweens then
@@ -153,7 +163,7 @@ local function setupButton(button: GuiObject)
 	button.MouseEnter:Connect(function()
 		hovered[button] = true
 		play(button, "hover")
-		soundService:PlayLocalSound(hoverSound)
+		playUISound(hoverSound)
 
 		-- Ends at the base angle + HOVER_ROTATION unless another script is also setting Rotation.
 		if DEBUG and isRotateButton(button) then
@@ -171,7 +181,7 @@ local function setupButton(button: GuiObject)
 
 	if button:IsA("GuiButton") then
 		button.Activated:Connect(function()
-			soundService:PlayLocalSound(clickSound)
+			playUISound(clickSound)
 		end)
 	end
 

@@ -266,6 +266,11 @@ function Analytics.gemsFound(player: Player, amount: number, source: string)
 	logEconomy(player, Enum.AnalyticsEconomyFlowType.Source, "Gems", amount, Enum.AnalyticsEconomyTransactionType.Gameplay, source)
 end
 
+function Analytics.dailyRewardClaimed(player: Player, day: number, currency: string, amount: number, streak: number)
+	logEconomy(player, Enum.AnalyticsEconomyFlowType.Source, currency, amount, Enum.AnalyticsEconomyTransactionType.TimedReward, `DailyReward_Day{day}`)
+	logCustom(player, "Claimed Daily Reward", day, fields(currency, streak))
+end
+
 function Analytics.podiumPlaced(player: Player, sheepType: any)
 	logCustom(player, "Placed Podium Sheep", 1, fields(sheepType))
 end
