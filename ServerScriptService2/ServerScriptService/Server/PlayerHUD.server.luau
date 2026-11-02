@@ -1,11 +1,10 @@
 --[[
-	Puts a copy of ReplicatedStorage.Assets.UI.PlayerHUD on each player's head: display name with VIP, verified and
+	Puts a copy of ReplicatedStorage.Assets.UI.PlayerHUD on each player's head: display name with verified and
 	Roblox Plus badges, their best find as its base odds ("Best Find: 1 in 9B") in its rarity's color, and their title.
 ]]--
 
 --// Services
 local players = game:GetService("Players")
-local marketplaceService = game:GetService("MarketplaceService")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local serverScriptService = game:GetService("ServerScriptService")
 
@@ -14,11 +13,9 @@ local SheepData = require(serverScriptService.Modules.Constants.SheepData)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 
 --// Configs
-local VIP_GAMEPASS_ID = 0 -- TODO: set to the VIP game pass id
 local HUD_NAME = "PlayerHUD"
 local VERIFIED_ICON = utf8.char(0xE000) -- Roblox's built-in verified badge glyph
 local PLUS_ICON = utf8.char(0xE003) -- Roblox's built-in Roblox Plus glyph
-local VIP_COLOR = "#FFD54A"
 local DEBUG = false
 
 local function debugLog(message: string)
@@ -35,23 +32,8 @@ if not hudTemplate:IsA("BillboardGui") then
 end
 debugLog(`found template ({hudTemplate.ClassName}), children: {#hudTemplate:GetChildren()}`)
 
---// State
-local isVip: { [Player]: boolean } = {}
-
-local function ownsVip(player: Player): boolean
-	if VIP_GAMEPASS_ID == 0 then
-		return false
-	end
-
-	local success, owns = pcall(marketplaceService.UserOwnsGamePassAsync, marketplaceService, player.UserId, VIP_GAMEPASS_ID)
-	return success and owns == true
-end
-
 local function getDisplayNameText(player: Player): string
 	local text = player.DisplayName
-	if isVip[player] then
-		text = `<font color="{VIP_COLOR}"><b>[VIP]</b></font> {text}`
-	end
 	if player.HasVerifiedBadge then
 		text ..= ` {VERIFIED_ICON}`
 	end
@@ -165,21 +147,10 @@ local function onPlayerAdded(player: Player)
 		refreshHud(player)
 	end)
 
-	isVip[player] = ownsVip(player)
 	refreshHud(player)
 end
 
-marketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, gamePassId, purchased)
-	if purchased and gamePassId == VIP_GAMEPASS_ID then
-		isVip[player] = true
-		refreshHud(player)
-	end
-end)
-
 players.PlayerAdded:Connect(onPlayerAdded)
-players.PlayerRemoving:Connect(function(player)
-	isVip[player] = nil
-end)
 
 -- Players who joined before this script connected.
 for _, player in players:GetPlayers() do

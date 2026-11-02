@@ -17,11 +17,13 @@
 
 local StrictEnum = require("../Utility/StrictEnum")
 
-export type EnumType = "RemoteFunctionName" | "AnotherRemoteFunctionName"
+export type EnumType = "RemoteFunctionName" | "AnotherRemoteFunctionName" | "RequestGift" | "GetGiftLocks"
 
 local RemoteFunctionName: StrictEnum.FromEnum<EnumType> = {
 	RemoteFunctionName = "RemoteFunctionName",
 	AnotherRemoteFunctionName = "AnotherRemoteFunctionName",
+	RequestGift = "RequestGift",
+	GetGiftLocks = "GetGiftLocks",
 }
 
 return RemoteFunctionName

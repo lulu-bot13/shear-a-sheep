@@ -32,7 +32,8 @@ local INVENTORY_NAME = "Inventory"
 local INVENTORY_KEYS = { Wool = true, Luck = true } -- the rest of the numbers become player attributes
 local RENAMED_KEYS = { WoolGainLevel = "MoreWoolLevel" } -- old save key -> current key
 local REMOVED_KEYS = { LuckLevel = true } -- dropped from older saves
-local KEPT_ON_RESET = { Settings = true } -- preferences, not progress
+-- Preferences and anything bought with Robux, not progress.
+local KEPT_ON_RESET = { Settings = true, GiftedPasses = true, Boosts = true, FreeRebirths = true, PendingGifts = true, GiftOutbox = true }
 
 export type Data = {
 	Wool: number,
@@ -60,6 +61,11 @@ export type Data = {
 	DailyStreak: number, -- daily rewards claimed in the current streak (kept through rebirths and Prestiges)
 	DailyLastClaim: number, -- os.time() of the last daily reward claim; 0 = never
 	DailyCycles: number, -- full 7-day daily reward loops completed
+	GiftedPasses: { [string]: boolean }, -- MonetizationData game pass key -> true once another player gifted it
+	Boosts: { [string]: number }, -- MonetizationData boost key -> seconds left (only counts down in game)
+	FreeRebirths: number, -- Skip Rebirths bought while at max rebirths, used once a rebirth is possible again
+	PendingGifts: { [string]: { userId: number, name: string } }, -- item key -> the player picked in the gift window, until its receipt arrives
+	GiftOutbox: { [string]: { item: string, userId: number, name: string } }, -- PurchaseId -> paid gift not yet delivered
 }
 
 local DataTemplate = {
@@ -107,6 +113,13 @@ local DataTemplate = {
 	DailyStreak = 0,
 	DailyLastClaim = 0,
 	DailyCycles = 0,
+
+	-- Robux shop
+	GiftedPasses = {},
+	Boosts = {},
+	FreeRebirths = 0,
+	PendingGifts = {},
+	GiftOutbox = {},
 }
 
 -- Creating a profile store (Studio saves go to a separate test store)
@@ -345,6 +358,19 @@ function PlayerDataHandler.spend(player: Player, key: string, amount: number): b
 
 	PlayerDataHandler.set(player, key, current - amount)
 	return true
+end
+
+-- For the monetization kit's ProfileServiceStore (MonetizationWiring): the loaded profile, the ProfileStore and a player's profile key.
+function PlayerDataHandler.getProfile(player: Player): any
+	return profiles[player]
+end
+
+function PlayerDataHandler.getProfileStore(): any
+	return profileStore
+end
+
+function PlayerDataHandler.getProfileKey(userId: number): string
+	return KEY_PREFIX .. userId
 end
 
 --// Lifecycle -----------------------------------------------------------------------

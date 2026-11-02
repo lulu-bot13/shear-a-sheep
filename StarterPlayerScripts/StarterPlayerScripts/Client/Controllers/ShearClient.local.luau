@@ -1,6 +1,6 @@
 --[[
 	Client side of hitbox shearing: draws the held shear's range ring, outlines the sheep a swing would reach, swings on click / tap and plays the hit effects.
-	Auto Shear (Q, gamepad Y or its on-screen button) swings by itself while one of your sheep is in range; ShearHandler decides the hits.
+	Auto Shear (Q, gamepad Y or its on-screen button; needs the Auto Shears pass) swings by itself while one of your sheep is in range; ShearHandler decides the hits.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.ShearClient
 ]]--
 
@@ -8,6 +8,7 @@
 local collectionService = game:GetService("CollectionService")
 local contextActionService = game:GetService("ContextActionService")
 local debris = game:GetService("Debris")
+local marketplaceService = game:GetService("MarketplaceService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
@@ -17,6 +18,8 @@ local userInputService = game:GetService("UserInputService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local MonetizationData = require(replicatedStorage.Shared.Constants.MonetizationData)
+local purchaseEffect = require(script.Parent.Parent.Modules.PurchaseEffect)
 local settings = require(script.Parent.Parent.Modules.Settings)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
@@ -99,6 +102,9 @@ local AUTO_BUTTON_SIZE = UDim2.fromOffset(170, 40)
 local AUTO_BUTTON_POSITION = UDim2.new(0.5, 0, 1, -84) -- bottom centre, just above the hotbar
 local AUTO_ON_COLOR = Color3.fromRGB(80, 190, 100)
 local AUTO_OFF_COLOR = Color3.fromRGB(60, 60, 70)
+local AUTO_LOCKED_COLOR = Color3.fromRGB(200, 140, 40)
+local AUTO_PASS_ATTRIBUTE = "AutoShearPass" -- set by MonetizationHandler for owners of the Auto Shears pass
+local AUTO_PASS_ID = MonetizationData.Items.AutoShears.id
 
 --// State
 local heldTool: Tool? = nil
@@ -109,6 +115,7 @@ local nextRangeCheck = 0
 local rangeHighlights: { [Model]: Highlight } = {}
 local idleRangeHighlights: { Highlight } = {}
 local autoShear = false -- kept for the session, across respawns
+local autoPassPrompted = false -- the toggle prompted the pass, so buying it turns Auto Shear on
 local autoGui = Instance.new("ScreenGui") -- TutorialClient disables it, which also pauses auto shear
 
 -- Created by this client, so it only exists locally; idle effects wait here instead of being destroyed.
@@ -424,14 +431,32 @@ local function getKeyHint(): string
 	return if string.find(lastInput.Name, "Gamepad", 1, true) then " [Y]" else ` [{AUTO_KEY.Name}]`
 end
 
+local function ownsAutoPass(): boolean
+	return player:GetAttribute(AUTO_PASS_ATTRIBUTE) == true
+end
+
 local function updateAutoButton()
-	autoButton.Text = `Auto Shear: {if autoShear then "ON" else "OFF"}{getKeyHint()}`
-	autoButton.BackgroundColor3 = if autoShear then AUTO_ON_COLOR else AUTO_OFF_COLOR
+	if ownsAutoPass() then
+		autoButton.Text = `Auto Shear: {if autoShear then "ON" else "OFF"}{getKeyHint()}`
+		autoButton.BackgroundColor3 = if autoShear then AUTO_ON_COLOR else AUTO_OFF_COLOR
+	else
+		autoButton.Text = `🔒 Auto Shear{getKeyHint()}`
+		autoButton.BackgroundColor3 = AUTO_LOCKED_COLOR
+	end
 	autoButton.Visible = heldTool ~= nil and not windowsManager.anyOpen()
 end
 
+-- Without the pass the toggle offers it instead.
 local function toggleAutoShear()
 	if not autoGui.Enabled then
+		return
+	end
+	if not ownsAutoPass() then
+		if AUTO_PASS_ID ~= 0 then
+			autoPassPrompted = true
+			purchaseEffect.play()
+			marketplaceService:PromptGamePassPurchase(player, AUTO_PASS_ID)
+		end
 		return
 	end
 	autoShear = not autoShear
@@ -441,6 +466,12 @@ end
 autoButton.Activated:Connect(toggleAutoShear)
 windowsManager.openChanged:Connect(updateAutoButton)
 userInputService.LastInputTypeChanged:Connect(updateAutoButton)
+player:GetAttributeChangedSignal(AUTO_PASS_ATTRIBUTE):Connect(function()
+	if ownsAutoPass() and autoPassPrompted then
+		autoShear = true
+	end
+	updateAutoButton()
+end)
 
 contextActionService:BindAction(AUTO_ACTION, function(_, inputState: Enum.UserInputState)
 	if inputState ~= Enum.UserInputState.Begin then

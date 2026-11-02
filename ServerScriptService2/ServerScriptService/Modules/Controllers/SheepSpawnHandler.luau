@@ -14,6 +14,7 @@ local players = game:GetService("Players")
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
 local WeatherData = require(script.Parent.Parent.Constants.WeatherData)
+local MonetizationHandler = require(script.Parent.MonetizationHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local PlotHandler = require(script.Parent.PlotHandler)
 local PodiumBonusHandler = require(script.Parent.PodiumBonusHandler)
@@ -95,7 +96,7 @@ local function spawnSheep(player: Player, forced: SheepHandler.ForcedSpawn?): Mo
 		getNumber(player, "Luck"),
 		getNumber(player, "Rebirths"),
 		getNumber(player, "Prestiges"),
-		WeatherHandler.getLuckMultiplier() * PodiumBonusHandler.getLuckMultiplier(player),
+		WeatherHandler.getLuckMultiplier() * PodiumBonusHandler.getLuckMultiplier(player) * MonetizationHandler.getLuckMultiplier(player),
 		WeatherHandler.isHalloween(),
 		forced
 	)

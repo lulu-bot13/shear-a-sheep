@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Server-wide announcements: tells every client about a rare best find, a rebirth, a Prestige or a gift.
+	Server-wide announcements: tells every client about a rare best find, a rebirth, a Prestige, a gift or Server Luck.
 	Only names and numbers are sent; AnnouncementClient builds the chat lines and the best-find panel.
 
 	Location: ServerScriptService.Modules.Controllers.AnnouncementHandler
@@ -35,6 +35,11 @@ export type Announcement = {
 	itemName: string,
 	robuxCost: number,
 	recipientName: string,
+} | {
+	kind: "ServerLuck",
+	userName: string,
+	multiplier: number,
+	minutes: number,
 } | {
 	kind: "ReaperRaid",
 }
@@ -81,15 +86,20 @@ function AnnouncementHandler.reaperRaid()
 	announce({ kind = "ReaperRaid" })
 end
 
--- Not wired up yet: call from a future MarketplaceService.ProcessReceipt once a gift purchase is granted.
-function AnnouncementHandler.gift(gifter: Player, itemName: string, robuxCost: number, recipient: Player)
+-- Called by GiftService once a gift purchase is granted; the recipient may have left by then, so it can be just their name.
+function AnnouncementHandler.gift(gifter: Player, itemName: string, robuxCost: number, recipient: Player | string)
 	announce({
 		kind = "Gift",
 		userName = gifter.Name,
 		itemName = itemName,
 		robuxCost = math.max(math.floor(robuxCost), 0),
-		recipientName = recipient.Name,
+		recipientName = if typeof(recipient) == "Instance" then recipient.Name else recipient,
 	})
+end
+
+-- Someone bought Server Luck: everyone here gets the boost.
+function AnnouncementHandler.serverLuck(player: Player, multiplier: number, minutes: number)
+	announce({ kind = "ServerLuck", userName = player.Name, multiplier = multiplier, minutes = minutes })
 end
 
 return AnnouncementHandler

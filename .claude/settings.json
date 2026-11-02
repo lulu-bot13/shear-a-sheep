@@ -7,7 +7,12 @@
       "Bash(cd \"D:/Vscode/shear-a-sheep/ServerScriptService2/ServerScriptService/Modules/Controllers\" && sed -n 745,758p SheepHandler.luau && sed -n 1,30p SheepSpawnHandler.luau && grep -n \"spawnSheep\\(\" -r .. | grep -v \"^../Controllers/SheepHandler.luau:759\")",
       "Read(//d/Vscode/**)",
       "Bash(cd \"C:/Users/lulun/.claude/skills/synced/ce301641-bd07-476f-8534-6a6c2c9cc57b_75d43dab-9136-4b32-b2df-b29cd4a89123/shear-a-sheep-setup\" && ls -R && grep -n -i \"motor6d\\\\|weld\" scripts/setup_sheep.luau | head -60)",
-      "Read(//c/Users/lulun/.claude/skills/synced/ce301641-bd07-476f-8534-6a6c2c9cc57b_75d43dab-9136-4b32-b2df-b29cd4a89123/shear-a-sheep-setup/**)"
+      "Read(//c/Users/lulun/.claude/skills/synced/ce301641-bd07-476f-8534-6a6c2c9cc57b_75d43dab-9136-4b32-b2df-b29cd4a89123/shear-a-sheep-setup/**)",
+      "Bash(grep -v -E '\\\\.\\(rbxm|png|jpg\\)$')",
+      "Read(//c/Users/lulun/.claude/projects/d--Vscode-shear-a-sheep/memory/**)",
+      "WebFetch(domain:create.roblox.com)",
+      "Edit(~/.claude/skills/roblox-monetization/**)",
+      "Read(//c/Users/lulun/.claude/skills/roblox-monetization/**)"
     ]
   }
 }

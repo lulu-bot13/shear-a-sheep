@@ -37,7 +37,6 @@ end
 --// Settings
 local settingsIcon = icon.new()
 	:setName("Settings")
-	:setCaption("Settings")
 	:align("Right")
 	:oneClick()
 setIconImage(settingsIcon, SETTINGS_ICON, "Settings")
@@ -52,8 +51,7 @@ end)
 --// Daily Rewards
 local dailyRewardsIcon = icon.new()
 	:setName("DailyRewards")
-	:setLabel("Daily Rewards")
-	:align("Left")
+	:align("Right")
 	:oneClick()
 setIconImage(dailyRewardsIcon, DAILY_REWARDS_ICON, "Daily Rewards")
 
@@ -68,7 +66,7 @@ end)
 local inviteIcon = icon.new()
 	:setName("InviteFriends")
 	:setCaption("Invite Friends")
-	:align("Left")
+	:align("Right")
 	:oneClick()
 setIconImage(inviteIcon, FRIENDS_ICON, "Invite")
 
@@ -82,7 +80,7 @@ inviteIcon.selected:Connect(function()
 
 	local success, canInvite = pcall(socialService.CanSendGameInviteAsync, socialService, player)
 	if success and canInvite then
-		pcall(socialService.PromptGameInviteAsync, socialService, player)
+		pcall(socialService.PromptGameInvite, socialService, player)
 	end
 	prompting = false
 end)

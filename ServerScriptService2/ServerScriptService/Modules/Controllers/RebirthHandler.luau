@@ -115,19 +115,21 @@ end
 	Tries to rebirth the player `amount` times at once (clamped to the rebirths left). Returns true and the
 	number done on success, or false plus a reason the client can show ("Busy", "MaxRebirths" or "NotReady").
 	A fixed amount is all or nothing. Everything is checked here, on the server.
+	`free` (the Skip Rebirth product) does exactly one rebirth without the wool cost.
 ]]
-function RebirthHandler.rebirth(player: Player, amount: Amount?): (boolean, string?, number?)
+function RebirthHandler.rebirth(player: Player, amount: Amount?, free: boolean?): (boolean, string?, number?)
 	if rebirthing[player] or not PlayerDataHandler.getData(player) then
 		return false, "Busy", nil
 	end
 
-	local state = RebirthHandler.getState(player, amount)
+	local state = RebirthHandler.getState(player, if free then 1 else amount)
 	if state.maxed then
 		return false, "MaxRebirths", nil
 	end
-	if not state.amountCanRebirth then
+	if not free and not state.amountCanRebirth then
 		return false, "NotReady", nil
 	end
+	local cost = if free then 0 else state.amountCost
 
 	rebirthing[player] = true
 
@@ -135,7 +137,9 @@ function RebirthHandler.rebirth(player: Player, amount: Amount?): (boolean, stri
 	PlayerDataHandler.set(player, "Rebirths", state.rebirths + state.amountCount)
 
 	local success, err = pcall(function()
-		PlayerDataHandler.set(player, "Wool", getNumber(player, "Wool") - state.amountCost)
+		if cost > 0 then
+			PlayerDataHandler.set(player, "Wool", getNumber(player, "Wool") - cost)
+		end
 	end)
 	if not success then
 		warn(`RebirthHandler: taking {player.Name}'s rebirth cost failed: {err}`)
@@ -143,7 +147,7 @@ function RebirthHandler.rebirth(player: Player, amount: Amount?): (boolean, stri
 
 	rebirthing[player] = nil
 	AnnouncementHandler.rebirth(player, state.rebirths, state.rebirths + state.amountCount)
-	Analytics.rebirthed(player, state.rebirths + state.amountCount, state.amountCount, state.amountCost)
+	Analytics.rebirthed(player, state.rebirths + state.amountCount, state.amountCount, cost)
 	return true, nil, state.amountCount
 end
 

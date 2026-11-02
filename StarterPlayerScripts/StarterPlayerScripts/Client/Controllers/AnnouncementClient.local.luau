@@ -1,5 +1,5 @@
 --[[
-	Server-wide announcements from AnnouncementHandler: a coloured chat line for rare best finds, rebirths, Prestiges, gifts and Reaper raids.
+	Server-wide announcements from AnnouncementHandler: a coloured chat line for rare best finds, rebirths, Prestiges, gifts, Server Luck and Reaper raids.
 	Rare best finds also pop up a metal plaque at the top of the screen, one at a time.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AnnouncementClient
@@ -36,6 +36,7 @@ local GIFT_NAME_COLOR = "#FF8AD8"
 local GIFT_ITEM_COLOR = "#7CF0FF"
 local ROBUX_COLOR = "#3DDC84"
 local REAPER_COLOR = "#C084FC"
+local SERVER_LUCK_COLOR = "#3DDC84"
 local ROBUX_GLYPH = "\u{E002}"
 local ARROW = "-&gt;" -- escaped, since it sits inside rich text
 
@@ -76,6 +77,11 @@ type Announcement = {
 	itemName: string,
 	robuxCost: number,
 	recipientName: string,
+} | {
+	kind: "ServerLuck",
+	userName: string,
+	multiplier: number,
+	minutes: number,
 } | {
 	kind: "ReaperRaid",
 }
@@ -147,6 +153,10 @@ local function getChatLine(announcement: Announcement): string
 		return `{paint(userName, NAME_COLOR, true)} {paint("has rebirthed", SOFT_WHITE)} `
 			.. `{paint(`[{formatWithCommas(announcement.previous)}]`, REBIRTH_FROM_COLOR, true)} {paint(ARROW, SOFT_WHITE)} `
 			.. paint(`[{formatWithCommas(announcement.new)}]`, REBIRTH_TO_COLOR, true)
+	elseif announcement.kind == "ServerLuck" then
+		return `{paint(userName, NAME_COLOR, true)} {paint("activated", SOFT_WHITE)} `
+			.. `{paint(`{announcement.multiplier}x SERVER LUCK`, SERVER_LUCK_COLOR, true)} `
+			.. paint(`for everyone for {announcement.minutes} minutes!`, SOFT_WHITE)
 	elseif announcement.kind == "Prestige" then
 		return `{paint(userName, PRESTIGE_NAME_COLOR, true)} {paint("has prestiged", PRESTIGE_NAME_COLOR)} `
 			.. `{paint(`[{formatWithCommas(announcement.previous)}]`, PRESTIGE_NUMBER_COLOR, true)} {paint(ARROW, PRESTIGE_NAME_COLOR)} `
@@ -319,9 +329,9 @@ end
 
 --// Setup -------------------------------------------------------------------------------
 
--- The ones the Server Announcements setting can't turn off: the Reaper raid, and anything about this player.
+-- The ones the Server Announcements setting can't turn off: the Reaper raid, Server Luck, and anything about this player.
 local function isForMe(announcement: Announcement): boolean
-	if announcement.kind == "ReaperRaid" then
+	if announcement.kind == "ReaperRaid" or announcement.kind == "ServerLuck" then
 		return true
 	elseif announcement.kind == "Gift" and announcement.recipientName == player.Name then
 		return true
