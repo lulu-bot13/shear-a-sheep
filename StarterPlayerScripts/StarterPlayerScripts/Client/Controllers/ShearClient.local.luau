@@ -1,6 +1,6 @@
 --[[
 	Client side of hitbox shearing: draws the held shear's range ring, outlines the sheep a swing would reach, swings on click / tap and plays the hit effects.
-	Auto Shear (Q, gamepad Y or its on-screen button; needs the Auto Shears pass) swings by itself while one of your sheep is in range; ShearHandler decides the hits.
+	Auto Shear (Q, gamepad Y or Main.AutoShear; needs the Auto Shears pass) swings by itself while one of your sheep is in range; ShearHandler decides the hits.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.ShearClient
 ]]--
 
@@ -98,11 +98,8 @@ local MAX_RANGE_HIGHLIGHTS = 20 -- Roblox only draws ~31 highlights at once; the
 local AUTO_ACTION = "ToggleAutoShear"
 local AUTO_KEY = Enum.KeyCode.Q
 local AUTO_GAMEPAD_KEY = Enum.KeyCode.ButtonY
-local AUTO_BUTTON_SIZE = UDim2.fromOffset(170, 40)
-local AUTO_BUTTON_POSITION = UDim2.new(0.5, 0, 1, -84) -- bottom centre, just above the hotbar
-local AUTO_ON_COLOR = Color3.fromRGB(80, 190, 100)
-local AUTO_OFF_COLOR = Color3.fromRGB(60, 60, 70)
-local AUTO_LOCKED_COLOR = Color3.fromRGB(200, 140, 40)
+local AUTO_BUTTON_NAME = "AutoShear" -- the toggle in StarterGui.Main
+local AUTO_ON_COLOR = Color3.fromRGB(80, 210, 100) -- the button's tint while Auto Shear is on
 local AUTO_PASS_ATTRIBUTE = "AutoShearPass" -- set by MonetizationHandler for owners of the Auto Shears pass
 local AUTO_PASS_ID = MonetizationData.Items.AutoShears.id
 
@@ -116,7 +113,10 @@ local rangeHighlights: { [Model]: Highlight } = {}
 local idleRangeHighlights: { Highlight } = {}
 local autoShear = false -- kept for the session, across respawns
 local autoPassPrompted = false -- the toggle prompted the pass, so buying it turns Auto Shear on
-local autoGui = Instance.new("ScreenGui") -- TutorialClient disables it, which also pauses auto shear
+local hudGui: ScreenGui? = nil -- Main, rebuilt on respawn; TutorialClient disables it, which also pauses auto shear
+local autoButton: GuiButton? = nil
+local autoLabel: (TextLabel | TextButton)? = nil
+local autoOffColor = Color3.new(1, 1, 1) -- the button's own colour from Studio, restored when Auto Shear is off
 
 -- Created by this client, so it only exists locally; idle effects wait here instead of being destroyed.
 local poolFolder = Instance.new("Folder")
@@ -338,6 +338,10 @@ local function getGroundY(character: Model, root: BasePart): number
 	return feetY
 end
 
+local function isHudEnabled(): boolean
+	return hudGui ~= nil and hudGui.Parent ~= nil and hudGui.Enabled
+end
+
 -- True while an outlined sheep still exists; one sheared bare is gone before the next range check.
 local function hasSheepInRange(): boolean
 	for sheep in rangeHighlights do
@@ -371,7 +375,7 @@ local function updateRing()
 		updateRangeHighlights(root.Position)
 	end
 
-	if autoShear and autoGui.Enabled and now >= nextSwingAt and hasSheepInRange() and not windowsManager.anyOpen() then
+	if autoShear and isHudEnabled() and now >= nextSwingAt and hasSheepInRange() and not windowsManager.anyOpen() then
 		swing()
 	end
 end
@@ -400,28 +404,6 @@ end
 
 --// Auto shear ---------------------------------------------------------------------
 
--- Its own gui so a respawn or a rebuilt Main gui never takes it away; the tutorial still hides it like any other gui.
-autoGui.Name = "AutoShear"
-autoGui.ResetOnSpawn = false
-autoGui.Parent = playerGui
-
-local autoButton = Instance.new("TextButton")
-autoButton.Name = "Toggle"
-autoButton.AnchorPoint = Vector2.new(0.5, 1)
-autoButton.Position = AUTO_BUTTON_POSITION
-autoButton.Size = AUTO_BUTTON_SIZE
-autoButton.Font = Enum.Font.GothamBlack
-autoButton.TextSize = 18
-autoButton.TextColor3 = Color3.new(1, 1, 1)
-autoButton.AutoButtonColor = true
-autoButton.Visible = false
-autoButton.Parent = autoGui
-Instance.new("UICorner").Parent = autoButton
-local autoStroke = Instance.new("UIStroke")
-autoStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-autoStroke.Thickness = 2
-autoStroke.Parent = autoButton
-
 -- The key to press for the input the player is using; none on touch.
 local function getKeyHint(): string
 	local lastInput = userInputService:GetLastInputType()
@@ -435,20 +417,32 @@ local function ownsAutoPass(): boolean
 	return player:GetAttribute(AUTO_PASS_ATTRIBUTE) == true
 end
 
+-- An image button is tinted through its image, anything else through its background.
+local function tintsImage(button: GuiButton): boolean
+	return button:IsA("ImageButton") and button.Image ~= ""
+end
+
 local function updateAutoButton()
-	if ownsAutoPass() then
-		autoButton.Text = `Auto Shear: {if autoShear then "ON" else "OFF"}{getKeyHint()}`
-		autoButton.BackgroundColor3 = if autoShear then AUTO_ON_COLOR else AUTO_OFF_COLOR
+	if not autoButton then
+		return
+	end
+	local color = if autoShear and ownsAutoPass() then AUTO_ON_COLOR else autoOffColor
+	if tintsImage(autoButton) then
+		(autoButton :: ImageButton).ImageColor3 = color
 	else
-		autoButton.Text = `🔒 Auto Shear{getKeyHint()}`
-		autoButton.BackgroundColor3 = AUTO_LOCKED_COLOR
+		autoButton.BackgroundColor3 = color
+	end
+	if autoLabel then
+		autoLabel.Text = if ownsAutoPass()
+			then `Auto Shear: {if autoShear then "ON" else "OFF"}{getKeyHint()}`
+			else `🔒 Auto Shear{getKeyHint()}`
 	end
 	autoButton.Visible = heldTool ~= nil and not windowsManager.anyOpen()
 end
 
 -- Without the pass the toggle offers it instead.
 local function toggleAutoShear()
-	if not autoGui.Enabled then
+	if not isHudEnabled() then
 		return
 	end
 	if not ownsAutoPass() then
@@ -463,7 +457,29 @@ local function toggleAutoShear()
 	updateAutoButton()
 end
 
-autoButton.Activated:Connect(toggleAutoShear)
+-- Main.AutoShear is bound again whenever Main is recreated on respawn; its text goes on a TextLabel inside it if it has one.
+local function bindAutoButton(hud: Instance)
+	if hud.Name ~= "Main" or not hud:IsA("ScreenGui") then
+		return
+	end
+	local button = hud:WaitForChild(AUTO_BUTTON_NAME, 10)
+	if not button or not button:IsA("GuiButton") then
+		warn(`[ShearClient] no Main.{AUTO_BUTTON_NAME} button to toggle Auto Shear`)
+		return
+	end
+	if button == autoButton then
+		return
+	end
+	hudGui = hud
+	autoButton = button
+	autoOffColor = if tintsImage(button) then (button :: ImageButton).ImageColor3 else button.BackgroundColor3
+	autoLabel = button:FindFirstChildWhichIsA("TextLabel", true) or (if button:IsA("TextButton") then button else nil)
+	button.Activated:Connect(toggleAutoShear)
+	updateAutoButton()
+end
+
+playerGui.ChildAdded:Connect(bindAutoButton)
+task.spawn(bindAutoButton, playerGui:WaitForChild("Main"))
 windowsManager.openChanged:Connect(updateAutoButton)
 userInputService.LastInputTypeChanged:Connect(updateAutoButton)
 player:GetAttributeChangedSignal(AUTO_PASS_ATTRIBUTE):Connect(function()

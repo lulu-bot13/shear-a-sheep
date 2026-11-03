@@ -11,14 +11,32 @@ local players = game:GetService("Players")
 local runService = game:GetService("RunService")
 local textChatService = game:GetService("TextChatService")
 
+--// Configs
+local GROUP_ID = 1106600128
+local OWNER_USER_IDS = { -- the game is group-owned, so CreatorId can't identify its owner
+	[392302380] = true,
+}
+local ADMIN_ROLES = { -- group role names allowed to use admin commands
+	Testers = true,
+}
+
 local AdminCommands = {}
 
--- Only the game's owner, or anyone in Studio.
-function AdminCommands.isAdmin(player: Player): boolean
-	if runService:IsStudio() then
+-- Anyone in OWNER_USER_IDS, the creator of a user-owned place, or anyone in Studio.
+function AdminCommands.isOwner(player: Player): boolean
+	if runService:IsStudio() or OWNER_USER_IDS[player.UserId] then
 		return true
 	end
 	return game.CreatorType == Enum.CreatorType.User and player.UserId == game.CreatorId
+end
+
+-- The game's owner, group members with a role in ADMIN_ROLES, or anyone in Studio.
+function AdminCommands.isAdmin(player: Player): boolean
+	if AdminCommands.isOwner(player) then
+		return true
+	end
+	local success, role = pcall(player.GetRoleInGroupAsync, player, GROUP_ID)
+	return success and ADMIN_ROLES[role] == true
 end
 
 -- Matches "me", then an exact username/display name, then a username/display name prefix (case-insensitive).

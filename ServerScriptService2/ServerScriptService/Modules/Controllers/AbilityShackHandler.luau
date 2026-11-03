@@ -15,6 +15,7 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 local AbilityData = require(script.Parent.Parent.Constants.AbilityData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local Analytics = require(script.Parent.Analytics)
+local AnnouncementHandler = require(script.Parent.AnnouncementHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local WeatherHandler = require(script.Parent.WeatherHandler)
 
@@ -29,6 +30,7 @@ local ROLL_COOLDOWN = 0.4
 local EQUIP_COOLDOWN = 0.25
 local STATE_REQUEST_COOLDOWN = 0.5
 local ACTIVE_ATTRIBUTE = "ActiveAbility" -- set by AbilityHandler while an ability runs
+local ANNOUNCE_DELAY = 4.5 -- seconds, so the roller's carousel lands before the chat line gives it away
 
 export type AbilityEntry = {
 	id: string,
@@ -308,6 +310,9 @@ function AbilityShackHandler.Start()
 				{ player },
 				{ success = true, results = { best }, roller = player } :: RollResult
 			)
+		end
+		if result.success and best then
+			task.delay(ANNOUNCE_DELAY, AnnouncementHandler.abilityRoll, player, best.id)
 		end
 	end, { network.Middleware.RateLimit(ROLL_COOLDOWN) })
 

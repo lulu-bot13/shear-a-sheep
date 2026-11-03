@@ -8,7 +8,6 @@
 ]]--
 
 --// Services
-local dataStoreService = game:GetService("DataStoreService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
@@ -24,10 +23,6 @@ local ShearData = require(script.Parent.Parent.Constants.ShearData)
 local PROFILE_STORE_NAME = "PlayerData1"
 local STUDIO_PROFILE_STORE_NAME = "PlayerDataTest1"
 local KEY_PREFIX = "Player_"
-local LEGACY_DATASTORE_NAME = "PlayerData_Temp_v2" -- the old plain DataStore, copied into a player's profile once
-local LEGACY_MIGRATED_TAG = "LegacyMigrated"
-local LEGACY_LOAD_ATTEMPTS = 3
-local RETRY_SECONDS = 1
 local INVENTORY_NAME = "Inventory"
 local INVENTORY_KEYS = { Wool = true, Luck = true } -- the rest of the numbers become player attributes
 local RENAMED_KEYS = { WoolGainLevel = "MoreWoolLevel" } -- old save key -> current key
@@ -183,31 +178,6 @@ end
 
 --// Loading ---------------------------------------------------------------------------
 
--- Copies the old plain DataStore save into a fresh profile once; false if it couldn't be read (so nothing is lost by playing on).
-local function migrateLegacyData(player: Player, profile: any): boolean
-	if profile:GetMetaTag(LEGACY_MIGRATED_TAG) then
-		return true
-	end
-
-	for attempt = 1, LEGACY_LOAD_ATTEMPTS do
-		local success, result = pcall(function()
-			return dataStoreService:GetDataStore(LEGACY_DATASTORE_NAME):GetAsync(KEY_PREFIX .. player.UserId)
-		end)
-		if success then
-			if type(result) == "table" then
-				for key, value in result do
-					profile.Data[key] = value
-				end
-			end
-			profile:SetMetaTag(LEGACY_MIGRATED_TAG, true)
-			return true
-		end
-		warn(`PlayerDataHandler: reading {player.Name}'s old save failed (attempt {attempt}): {result}`)
-		task.wait(RETRY_SECONDS)
-	end
-	return false
-end
-
 -- Renames/removes old keys, fills in any field the save is missing and drops values of the wrong type.
 local function reconcile(profile: any)
 	local data = profile.Data
@@ -262,13 +232,6 @@ local function onPlayerAdded(player: Player)
 	end
 
 	profile:AddUserId(player.UserId)
-
-	if not migrateLegacyData(player, profile) then
-		profile:Release()
-		player:Kick("Your data couldn't be loaded, please rejoin.")
-		return
-	end
-
 	reconcile(profile)
 
 	profile:ListenToRelease(function()

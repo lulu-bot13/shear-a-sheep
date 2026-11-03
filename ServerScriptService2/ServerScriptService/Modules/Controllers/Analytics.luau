@@ -19,7 +19,7 @@ local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 
 --// Configs
-local ENABLED = false -- off: nothing is sent to Roblox Analytics
+local ENABLED = true -- false: nothing is sent to Roblox Analytics
 local FLUSH_SECONDS = 60 -- wool, Luck and sheep shorn are summed and sent this often, so busy shearing stays under the event limits
 local CLIENT_EVENT_BUDGET = 10 -- tutorial steps and window opens a client may report per window
 local CLIENT_EVENT_WINDOW = 10
@@ -236,8 +236,7 @@ function Analytics.prestiged(player: Player, newPrestiges: number)
 	logCustom(player, "Prestiged", newPrestiges)
 end
 
-function Analytics.shearBought(player: Player, shearId: string, price: number)
-	logEconomy(player, Enum.AnalyticsEconomyFlowType.Sink, "Wool", price, Enum.AnalyticsEconomyTransactionType.Shop, `Shear_{shearId}`)
+function Analytics.shearBought(player: Player, shearId: string)
 	logCustom(player, "Bought Shears", 1, fields(shearId))
 	logWindowFunnel(player, "ShearShop", 2)
 end

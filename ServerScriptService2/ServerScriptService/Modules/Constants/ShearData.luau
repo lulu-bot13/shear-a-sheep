@@ -1,16 +1,15 @@
 --!strict
 
 --[[
-	Every shear's wool price, sheep-sheared unlock, damage per swing and hitbox range, plus the swing and shop settings.
-	The client's display copy lives in ShearShopUIData - keep the prices and stats in sync.
+	Every shear's sheep-sheared cost, damage per swing and hitbox range, plus the swing and shop settings.
+	The client's display copy lives in ShearShopUIData - keep the costs and stats in sync.
 
 	Location: ServerScriptService.Modules.Constants.ShearData
 ]]--
 
 export type ShearInfo = {
 	id: string, -- matches the Tool's name in ReplicatedStorage.Assets.Shears
-	price: number, -- wool
-	sheepRequired: number, -- lifetime sheep sheared before it can be bought
+	sheepRequired: number, -- lifetime sheep sheared to unlock it (the count is not spent)
 	damage: number, -- wool taken off every sheep in range per swing
 	range: number, -- hitbox radius in studs, measured flat from the character
 }
@@ -27,11 +26,11 @@ shearData.DefaultShearId = "DefaultShear"
 	Steel ~2 / 4    Large ~6 / 11    Electric ~22 / 35 (before the first Prestige)    Master ~60 / 70
 ]]
 shearData.Shears = {
-	{ id = "DefaultShear",   price = 0,     sheepRequired = 0,    damage = 20, range = 6 },
-	{ id = "SteelShears",    price = 300,   sheepRequired = 50,   damage = 26, range = 7.5 },
-	{ id = "LargeShears",    price = 1200,  sheepRequired = 300,  damage = 34, range = 9 },
-	{ id = "ElectricShears", price = 4000,  sheepRequired = 1500, damage = 45, range = 11 },
-	{ id = "MasterShears",   price = 12000, sheepRequired = 4500, damage = 60, range = 13 },
+	{ id = "DefaultShear",   sheepRequired = 0,    damage = 20, range = 6 },
+	{ id = "SteelShears",    sheepRequired = 50,   damage = 26, range = 7.5 },
+	{ id = "LargeShears",    sheepRequired = 300,  damage = 34, range = 9 },
+	{ id = "ElectricShears", sheepRequired = 1500, damage = 45, range = 11 },
+	{ id = "MasterShears",   sheepRequired = 4500, damage = 60, range = 13 },
 } :: { ShearInfo }
 
 --// Swinging ------------------------------------------------------------------------------

@@ -36,21 +36,10 @@ local PODIUM_NAME = "Podium"
 local ACTIVE_ATTRIBUTE = "ActiveAbility" -- set by AbilityHandler while an ability runs
 local AMOUNT_ATTRIBUTE = "Amount" -- on the RollAmount buttons
 local WINDOW_NAME = "AbilityShack"
-local FONT = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold)
-local FONT_HEAVY = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.ExtraBold)
 local ROLL_TIMEOUT = 5 -- seconds without a reply before rolling unlocks again
-local RESULT_SECONDS = 7
-local RESULT_BASE_HEIGHT = 124
-local RESULT_ROW_HEIGHT = 28
-local RESULT_MAX_ROWS = 5
 local AMOUNT_SELECTED_COLOR = Color3.fromRGB(49, 190, 61)
 local AMOUNT_UNSELECTED_COLOR = Color3.fromRGB(255, 255, 150)
-local WHITE = Color3.fromRGB(255, 255, 255)
 local BLACK = Color3.fromRGB(0, 0, 0)
-local PANEL_COLOR = Color3.fromRGB(30, 32, 44)
-local EQUIP_COLOR = Color3.fromRGB(64, 190, 90)
-local ROLL_COLOR = Color3.fromRGB(235, 160, 40)
-local OPEN_COLOR = Color3.fromRGB(70, 120, 220)
 local HALLOWEEN_ONLY_TEXT = "Halloween only" -- a Halloween ability's chance outside Halloween
 local UNAVAILABLE_DARKEN = 0.5 -- how much darker a roll chance card is while it can't be rolled
 
@@ -85,12 +74,6 @@ type State = {
 	pityLabel: string,
 }
 
-type ResultRow = {
-	frame: Frame,
-	name: TextLabel,
-	detail: TextLabel,
-}
-
 --// State
 local state: State? = nil
 local queuedState: State? = nil -- held back while a roll plays so the board and window don't spoil the result
@@ -98,11 +81,8 @@ local rolling = false
 local revealing = false
 local rollToken = 0
 local selectedAmount = 1
-local lastAmount = 1
 local pendingEquip: string? = nil
 local podiumConnections: { RBXScriptConnection } = {}
-local resultToken = 0
-local resultId: string? = nil
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -145,66 +125,6 @@ local function getRollablePool(): { Entry }
 		end
 	end
 	return pool
-end
-
-local function create(className: string, properties: { [string]: any }, parent: Instance?): any
-	local instance = Instance.new(className)
-	for key, value in properties do
-		(instance :: any)[key] = value
-	end
-	instance.Parent = parent
-	return instance
-end
-
-local function addCorner(parent: Instance, radius: UDim?)
-	create("UICorner", { CornerRadius = radius or UDim.new(0, 10) }, parent)
-end
-
-local function addStroke(parent: Instance, thickness: number?)
-	create("UIStroke", {
-		Color = BLACK,
-		Thickness = thickness or 3,
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-	}, parent)
-end
-
-local function makeText(parent: Instance, properties: { [string]: any }): TextLabel
-	local label = create("TextLabel", {
-		BackgroundTransparency = 1,
-		FontFace = FONT,
-		TextColor3 = WHITE,
-		TextXAlignment = Enum.TextXAlignment.Left,
-	}, nil)
-	for key, value in properties do
-		(label :: any)[key] = value
-	end
-	create("UIStroke", { Color = BLACK, Thickness = 1.5, ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual }, label)
-	label.Parent = parent
-	return label
-end
-
-local function makeButton(parent: Instance, text: string, color: Color3, properties: { [string]: any }): TextButton
-	local button = create("TextButton", {
-		BackgroundColor3 = color,
-		FontFace = FONT_HEAVY,
-		Text = text,
-		TextColor3 = WHITE,
-		TextScaled = true,
-	}, nil)
-	for key, value in properties do
-		(button :: any)[key] = value
-	end
-	addCorner(button)
-	addStroke(button)
-	create("UIStroke", { Color = BLACK, Thickness = 1.5, ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual }, button)
-	create("UIPadding", {
-		PaddingTop = UDim.new(0, 8),
-		PaddingBottom = UDim.new(0, 8),
-		PaddingLeft = UDim.new(0, 6),
-		PaddingRight = UDim.new(0, 6),
-	}, button)
-	button.Parent = parent
-	return button
 end
 
 -- Like WaitForChild, without the infinite-yield warning (AbilityShackHandler warns once on the server).
@@ -372,116 +292,6 @@ local function refreshWindow()
 	refreshPrice()
 end
 
---// Roll result popup ------------------------------------------------------------
-
-local resultGui = create("ScreenGui", {
-	Name = "AbilityShackResult",
-	ResetOnSpawn = false,
-	Enabled = false,
-	DisplayOrder = 4,
-}, playerGui)
-local resultFrame = create("Frame", {
-	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.fromScale(0.5, 0.6),
-	Size = UDim2.new(0.92, 0, 0, RESULT_BASE_HEIGHT),
-	BackgroundColor3 = PANEL_COLOR,
-}, resultGui)
-create("UISizeConstraint", { MaxSize = Vector2.new(440, 1000) }, resultFrame)
-addCorner(resultFrame, UDim.new(0, 14))
-local resultStroke = create("UIStroke", { Thickness = 3, Color = BLACK }, resultFrame)
-local resultScale = create("UIScale", {}, resultFrame)
-local resultHeader = makeText(resultFrame, {
-	FontFace = FONT_HEAVY,
-	Position = UDim2.fromOffset(12, 8),
-	Size = UDim2.new(1, -24, 0, 26),
-	TextScaled = true,
-	TextXAlignment = Enum.TextXAlignment.Center,
-})
-local resultRowsHolder = create("Frame", {
-	BackgroundTransparency = 1,
-	Position = UDim2.fromOffset(12, 40),
-	Size = UDim2.new(1, -24, 1, -104),
-}, resultFrame)
-create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4) }, resultRowsHolder)
-local resultRows: { ResultRow } = {}
-for index = 1, RESULT_MAX_ROWS do
-	local rowFrame = create("Frame", {
-		LayoutOrder = index,
-		Size = UDim2.new(1, 0, 0, RESULT_ROW_HEIGHT - 4),
-		Visible = false,
-	}, resultRowsHolder)
-	addCorner(rowFrame, UDim.new(0, 8))
-	addStroke(rowFrame, 2)
-	local nameLabel = makeText(rowFrame, {
-		Position = UDim2.fromOffset(8, 0),
-		Size = UDim2.fromScale(0.6, 1),
-		TextScaled = true,
-	})
-	local detailLabel = makeText(rowFrame, {
-		AnchorPoint = Vector2.new(1, 0),
-		Position = UDim2.new(1, -8, 0, 0),
-		Size = UDim2.new(0.4, -12, 1, 0),
-		TextScaled = true,
-		TextXAlignment = Enum.TextXAlignment.Right,
-	})
-	resultRows[index] = { frame = rowFrame, name = nameLabel, detail = detailLabel }
-end
-local resultButtons = create("Frame", {
-	BackgroundTransparency = 1,
-	Position = UDim2.new(0, 10, 1, -58),
-	Size = UDim2.new(1, -20, 0, 50),
-}, resultFrame)
-create("UIListLayout", {
-	FillDirection = Enum.FillDirection.Horizontal,
-	HorizontalAlignment = Enum.HorizontalAlignment.Center,
-	SortOrder = Enum.SortOrder.LayoutOrder,
-	Padding = UDim.new(0.02, 0),
-}, resultButtons)
-local resultEquip = makeButton(resultButtons, "EQUIP", EQUIP_COLOR, { LayoutOrder = 1, Size = UDim2.fromScale(0.31, 1) })
-local resultRoll = makeButton(resultButtons, "ROLL AGAIN", ROLL_COLOR, { LayoutOrder = 2, Size = UDim2.fromScale(0.31, 1) })
-local resultOpen = makeButton(resultButtons, "ABILITIES", OPEN_COLOR, { LayoutOrder = 3, Size = UDim2.fromScale(0.31, 1) })
-
-local function hideResult()
-	resultToken += 1
-	resultGui.Enabled = false
-end
-
-local function showResults(results: { any }, best: Entry)
-	resultToken += 1
-	local token = resultToken
-	resultId = best.id
-
-	local count = math.min(#results, RESULT_MAX_ROWS)
-	resultHeader.Text = if count > 1 then `{count}X ROLL!` else (if results[1].isNew then "NEW ABILITY!" else "DUPLICATE")
-	resultStroke.Color = best.color
-	resultFrame.Size = UDim2.new(0.92, 0, 0, RESULT_BASE_HEIGHT + count * RESULT_ROW_HEIGHT)
-
-	for index, row in resultRows do
-		local result = results[index]
-		local entry = if index <= count then getEntry(result.id) else nil
-		row.frame.Visible = entry ~= nil
-		if entry then
-			row.frame.BackgroundColor3 = entry.color
-			row.name.Text = `{entry.name} ({entry.rarity})`
-			if result.isNew then
-				row.detail.Text = if result.guaranteed then "NEW! (pity)" else "NEW!"
-			else
-				row.detail.Text = if (result.refund or 0) > 0 then `+{formatWithCommas(result.refund)} Gems` else "Owned"
-			end
-		end
-	end
-	resultEquip.Visible = state == nil or state.equipped ~= best.id
-
-	resultScale.Scale = 0.6
-	resultGui.Enabled = true
-	tweenService:Create(resultScale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-	task.delay(RESULT_SECONDS, function()
-		if token == resultToken then
-			resultGui.Enabled = false
-		end
-	end)
-end
-
 --// Rolling ------------------------------------------------------------------------
 
 local function applyState(newState: State)
@@ -490,9 +300,6 @@ local function applyState(newState: State)
 		local entry = getEntry(pendingEquip)
 		alerts.show(`Equipped {if entry then entry.name else pendingEquip}`, "success")
 		pendingEquip = nil
-	end
-	if resultGui.Enabled then
-		resultEquip.Visible = resultId ~= newState.equipped
 	end
 	refreshWindow()
 end
@@ -518,9 +325,7 @@ local function requestRoll(amount: number)
 		return
 	end
 
-	hideResult()
 	rolling = true
-	lastAmount = amount
 	rollToken += 1
 	local token = rollToken
 	network.fireServer(network.RemoteEvents.RollAbility, amount)
@@ -536,18 +341,13 @@ local function playRoll(result: any)
 	rolling = true
 	revealing = true
 	rollToken += 1
-	hideResult()
 	window.close()
 
 	local items = {}
-	local best: Entry? = nil
 	for _, rolled in result.results do
 		local entry = getEntry(rolled.id)
 		if entry then
 			table.insert(items, { entry = entry, isNew = rolled.isNew == true, refund = rolled.refund or 0 })
-			if not best or entry.chance < best.chance then
-				best = entry
-			end
 		end
 	end
 
@@ -559,9 +359,6 @@ local function playRoll(result: any)
 	end
 
 	finishRoll()
-	if best then
-		showResults(result.results, best)
-	end
 end
 
 local function onRollResult(result: any)
@@ -603,19 +400,6 @@ local function onState(newState: any, reason: any)
 		applyState(newState)
 	end
 end
-
-resultEquip.Activated:Connect(function()
-	if resultId then
-		onEquipClicked(resultId, resultEquip)
-	end
-end)
-resultRoll.Activated:Connect(function()
-	requestRoll(lastAmount)
-end)
-resultOpen.Activated:Connect(function()
-	hideResult()
-	window.open()
-end)
 
 rollButton.Activated:Connect(function()
 	requestRoll(selectedAmount)

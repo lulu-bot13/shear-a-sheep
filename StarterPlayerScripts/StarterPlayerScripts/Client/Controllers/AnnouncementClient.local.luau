@@ -1,5 +1,5 @@
 --[[
-	Server-wide announcements from AnnouncementHandler: a coloured chat line for rare best finds, rebirths, Prestiges, gifts, Server Luck and Reaper raids.
+	Server-wide announcements from AnnouncementHandler: a coloured chat line for rare best finds, Legendary+ ability rolls, rebirths, Prestiges, gifts, Server Luck and Reaper raids.
 	Rare best finds also pop up a metal plaque at the top of the screen, one at a time.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AnnouncementClient
@@ -66,6 +66,12 @@ type Announcement = {
 	sheepName: string,
 	sheepColor: Color3,
 	oddsText: string,
+} | {
+	kind: "AbilityRoll",
+	userName: string,
+	abilityName: string,
+	rarity: string,
+	rarityColor: Color3,
 } | {
 	kind: "Rebirth" | "Prestige",
 	userName: string,
@@ -149,6 +155,10 @@ local function getChatLine(announcement: Announcement): string
 		local sheepColor = `#{announcement.sheepColor:ToHex()}`
 		return `{paint(userName, NAME_COLOR, true)} {paint("discovered their new best find:", SOFT_WHITE)} `
 			.. `{paint(escape(announcement.sheepName), sheepColor, true)} {paint(`({escape(announcement.oddsText)})`, sheepColor)}`
+	elseif announcement.kind == "AbilityRoll" then
+		local rarityColor = `#{announcement.rarityColor:ToHex()}`
+		return `{paint(userName, NAME_COLOR, true)} {paint(`rolled a {announcement.rarity} ability:`, SOFT_WHITE)} `
+			.. paint(`{escape(announcement.abilityName)}!`, rarityColor, true)
 	elseif announcement.kind == "Rebirth" then
 		return `{paint(userName, NAME_COLOR, true)} {paint("has rebirthed", SOFT_WHITE)} `
 			.. `{paint(`[{formatWithCommas(announcement.previous)}]`, REBIRTH_FROM_COLOR, true)} {paint(ARROW, SOFT_WHITE)} `

@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Server-wide announcements: tells every client about a rare best find, a rebirth, a Prestige, a gift or Server Luck.
+	Server-wide announcements: tells every client about a rare best find, a Legendary+ ability roll, a rebirth, a Prestige, a gift or Server Luck.
 	Only names and numbers are sent; AnnouncementClient builds the chat lines and the best-find panel.
 
 	Location: ServerScriptService.Modules.Controllers.AnnouncementHandler
@@ -13,10 +13,12 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
+local AbilityData = require(script.Parent.Parent.Constants.AbilityData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 
 --// Configs
 local MIN_BEST_FIND_ODDS = 1000 -- only best finds at base odds of 1 in this or rarer are announced (Legendary and up)
+local ANNOUNCED_ABILITY_RARITIES = { Legendary = true, Mythic = true }
 
 export type Announcement = {
 	kind: "BestFind",
@@ -24,6 +26,12 @@ export type Announcement = {
 	sheepName: string,
 	sheepColor: Color3,
 	oddsText: string, -- e.g. "1 in 2.1k"
+} | {
+	kind: "AbilityRoll",
+	userName: string,
+	abilityName: string,
+	rarity: string,
+	rarityColor: Color3,
 } | {
 	kind: "Rebirth" | "Prestige",
 	userName: string,
@@ -66,6 +74,22 @@ function AnnouncementHandler.bestFind(player: Player, sheepType: string)
 		sheepName = info.name,
 		sheepColor = info.color,
 		oddsText = `1 in {numberFormatter:Format(odds, 1) or odds}`,
+	})
+end
+
+-- Announces an Ability Shack roll, but only a Legendary or Mythic one.
+function AnnouncementHandler.abilityRoll(player: Player, abilityId: string)
+	local ability = AbilityData.get(abilityId)
+	if not ability or not ANNOUNCED_ABILITY_RARITIES[ability.rarity] then
+		return
+	end
+
+	announce({
+		kind = "AbilityRoll",
+		userName = player.Name,
+		abilityName = ability.name,
+		rarity = ability.rarity,
+		rarityColor = SheepData.RarityColors[ability.rarity] or SheepData.RarityColors.Common,
 	})
 end
 

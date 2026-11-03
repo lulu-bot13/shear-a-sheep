@@ -1,5 +1,5 @@
 --[[
-	Server side of the shear shop: buying shears with wool once enough sheep are sheared, switching between owned ones and keeping the
+	Server side of the shear shop: unlocking shears once enough sheep are sheared, switching between owned ones and keeping the
 	equipped shear's Tool in the player's Backpack. Owned and equipped shears are saved through PlayerDataHandler.
 
 	Location: ServerScriptService.Modules.Controllers.ShearShopHandler
@@ -187,15 +187,10 @@ local function onPurchaseShear(player: Player, id: any)
 		return
 	end
 
-	if not PlayerDataHandler.spend(player, "Wool", info.price) then
-		reply(player, info.id, false, "NoWool")
-		return
-	end
-
 	addOwned(player, info.id)
 	setShear(player, info.id)
 	reply(player, info.id, true, nil)
-	Analytics.shearBought(player, info.id, info.price)
+	Analytics.shearBought(player, info.id)
 end
 
 -- Switches to a shear the player already owns.

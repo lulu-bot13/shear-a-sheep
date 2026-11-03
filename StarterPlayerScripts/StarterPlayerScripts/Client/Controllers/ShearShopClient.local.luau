@@ -3,8 +3,8 @@
 
 	Touching the ShearShopHitbox in the CenterPlaza opens the shop; walking away closes it. Each shear in
 	ShearShopUIData gets a card cloned from the Template: name, speed / damage, a spinning
-	3D preview and a purchase button. Buying is validated by the server (ShearShopHandler);
-	the cards update from the player's "ShearId" / "OwnedShears" attributes and wool. A shear that is
+	3D preview and a purchase button whose price is the sheep-sheared count needed. Buying is validated by the server
+	(ShearShopHandler); the cards update from the player's "ShearId" / "OwnedShears" / "SheepShearedCount" attributes. A shear that is
 	owned shows EQUIP (EquipShear); the equipped one shows UNEQUIP, which switches back to the default shear.
 
 	Performance: the previews are built once (on first open), and ONE render connection
@@ -36,7 +36,6 @@ local shopGui = playerGui:WaitForChild("Shop") :: ScreenGui
 local mainFrame = shopGui:WaitForChild("Main") :: Frame
 local scrollFrame = mainFrame:WaitForChild("ScrollingFrame") :: ScrollingFrame
 local cardTemplate = scrollFrame:WaitForChild("Template") :: Frame
-local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
 local shopHitbox = workspace:WaitForChild("Base"):WaitForChild("CenterPlaza"):WaitForChild("ShearShop")
 	:WaitForChild("Shack"):WaitForChild("ShearShopHitbox") :: BasePart
 
@@ -53,7 +52,6 @@ local UNLOCKED_ATTRIBUTE = "UnlockedShear" -- on the Shop gui: the highest shear
 local HUD_KEEP = { CurrencyFrame = true, WoolAmount = true, SheepCount = true, Ability = true }
 
 local REASON_TEXT = {
-	NoWool = "Not enough wool",
 	TooFar = "Too far away",
 	Owned = "Already owned",
 	NotOwned = "Buy it first",
@@ -121,19 +119,15 @@ local function getState(card: Card): string
 		return "owned"
 	elseif getSheepSheared() < card.info.sheepRequired then
 		return "locked"
-	elseif wool.Value >= card.info.price then
-		return "ready"
 	end
-	return "poor"
+	return "ready"
 end
 
 local function refreshCard(card: Card)
 	local state = getState(card)
 	local colors = UIData.ButtonColors
 
-	card.priceLabel.Text = if state == "locked"
-		then UIData.formatSheep(card.info.sheepRequired)
-		else UIData.formatWool(card.info.price)
+	card.priceLabel.Text = UIData.formatSheep(card.info.sheepRequired)
 
 	if state == "equipped" then
 		card.purchase.BackgroundColor3 = colors.Equipped
@@ -145,7 +139,7 @@ local function refreshCard(card: Card)
 		card.purchase.BackgroundColor3 = colors.Locked
 		card.purchaseLabel.Text = "UNLOCK"
 	else
-		card.purchase.BackgroundColor3 = if state == "ready" then colors.Ready else colors.Poor
+		card.purchase.BackgroundColor3 = colors.Ready
 		card.purchaseLabel.Text = "UNLOCK"
 	end
 
@@ -280,8 +274,6 @@ local function createCards()
 				network.fireServer(network.RemoteEvents.EquipShear, info.id)
 			elseif state == "equipped" and info.id ~= DEFAULT_SHEAR_ID then
 				network.fireServer(network.RemoteEvents.EquipShear, DEFAULT_SHEAR_ID)
-			elseif state == "poor" then
-				flashMessage(card, REASON_TEXT.NoWool)
 			elseif state == "locked" then
 				flashMessage(card, REASON_TEXT.Locked)
 			else
@@ -463,12 +455,6 @@ end
 --// Setup ---------------------------------------------------------------------------
 
 createCards()
-
-wool.Changed:Connect(function()
-	if window.isOpen() then
-		refreshAll()
-	end
-end)
 
 for _, attribute in { "ShearId", "OwnedShears", "SheepShearedCount" } do
 	player:GetAttributeChangedSignal(attribute):Connect(function()

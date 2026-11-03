@@ -24,6 +24,7 @@ local mainFrame = rebirthGui:WaitForChild("Main") :: Frame
 local rebirthButton = mainFrame:WaitForChild("Rebirth") :: GuiButton
 local rebirthButtonLabel = rebirthButton:FindFirstChildWhichIsA("TextLabel", true) :: TextLabel -- the button's own Text stays ""
 local rebirthButtonGradient = rebirthButton:FindFirstChildOfClass("UIGradient")
+local skipRebirthButton = mainFrame:WaitForChild("SkipRebirth") :: GuiButton
 local amountButton = mainFrame:WaitForChild("Amount") :: GuiButton -- the 1X / MAX switch
 local amountKnob = amountButton:WaitForChild("Knob") :: GuiObject
 local amountLabel = amountButton:FindFirstChildWhichIsA("TextLabel", true) :: TextLabel? -- the button's own Text stays ""
@@ -43,6 +44,7 @@ local alerts = require(script.Parent.Parent.Modules.Alerts)
 local alertPulse = require(script.Parent.Parent.Modules.AlertPulse)
 local announcements = require(script.Parent.Parent.Modules.Announcements)
 local luckRain = require(script.Parent.Parent.Modules.LuckRain)
+local purchaseEffect = require(script.Parent.Parent.Modules.PurchaseEffect)
 local rebirthVFX = require(script.Parent.Parent.Modules.RebirthVFX)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
@@ -102,7 +104,11 @@ local nextStateRequest = 0
 local stateRequestQueued = false
 local tipTexts: { [TextLabel]: string } = {} -- each RequirementTip label's own text, restored while the player can't Prestige
 local knobOnePosition = amountKnob.Position -- the 1X side, as built in Studio
-local restRotations = { [rebirthButton] = rebirthButton.Rotation, [openButton] = openButton.Rotation }
+local restRotations = {
+	[rebirthButton] = rebirthButton.Rotation,
+	[skipRebirthButton] = skipRebirthButton.Rotation,
+	[openButton] = openButton.Rotation,
+}
 
 --// Helpers -------------------------------------------------------------------------
 
@@ -283,6 +289,17 @@ rebirthButton.MouseButton1Click:Connect(function()
 		alerts.show(if state.maxed then REASON_TEXT.MaxRebirths else REASON_TEXT.NotReady, "error")
 		shake(rebirthButton, CLICK_SHAKE_ANGLES)
 	end
+end)
+
+-- The server prompts the Skip Rebirth product, so it can refuse at max rebirths.
+skipRebirthButton.MouseButton1Click:Connect(function()
+	if state and state.maxed then
+		alerts.show(REASON_TEXT.MaxRebirths, "error")
+		shake(skipRebirthButton, CLICK_SHAKE_ANGLES)
+		return
+	end
+	purchaseEffect.play()
+	network.fireServer(network.RemoteEvents.RequestProductPrompt, "SkipRebirth")
 end)
 
 debugLog("button clicks connected, waiting for the network")
