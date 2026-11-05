@@ -10,6 +10,7 @@ local analyticsService = game:GetService("AnalyticsService")
 local httpService = game:GetService("HttpService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
+local runService = game:GetService("RunService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
@@ -19,7 +20,7 @@ local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 
 --// Configs
-local ENABLED = true -- false: nothing is sent to Roblox Analytics
+local ENABLED = not runService:IsStudio() -- false: nothing is sent to Roblox Analytics (always off in Studio)
 local FLUSH_SECONDS = 60 -- wool, Luck and sheep shorn are summed and sent this often, so busy shearing stays under the event limits
 local CLIENT_EVENT_BUDGET = 10 -- tutorial steps and window opens a client may report per window
 local CLIENT_EVENT_WINDOW = 10

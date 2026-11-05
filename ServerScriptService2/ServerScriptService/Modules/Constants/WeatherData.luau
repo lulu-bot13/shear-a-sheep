@@ -21,8 +21,8 @@ weatherData.Halloween = "Night" -- Halloween mode runs while this weather is up 
 
 --// Cycle ---------------------------------------------------------------------------------
 
-weatherData.MinClearSeconds = 240 -- Clear spell between two events
-weatherData.MaxClearSeconds = 480
+weatherData.MinClearSeconds = 120 -- Clear spell between two events
+weatherData.MaxClearSeconds = 120
 
 --// Charged sheep -------------------------------------------------------------------------
 

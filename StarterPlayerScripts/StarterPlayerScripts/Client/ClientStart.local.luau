@@ -29,7 +29,7 @@ local mainGui = playerGui:WaitForChild("Main")
 local currencyFrame = mainGui:WaitForChild("CurrencyFrame")
 local woolAmountLabel = currencyFrame:WaitForChild("WoolAmount") :: TextLabel
 local luckAmountLabel = currencyFrame:WaitForChild("LuckAmount") :: TextLabel
-local gemAmountLabel = currencyFrame:WaitForChild("GemAmount") :: TextLabel
+local gemAmountLabel = currencyFrame:WaitForChild("GemsAmount") :: TextLabel
 local sheepCountLabel = mainGui:WaitForChild("SheepCount"):WaitForChild("Count") :: TextLabel
 local sheepPenCount = mainGui:WaitForChild("SheepPenCount")
 local sheepPenCountLabel = (if sheepPenCount:IsA("TextLabel") then sheepPenCount else sheepPenCount:FindFirstChildWhichIsA("TextLabel", true)) :: TextLabel
@@ -51,20 +51,52 @@ type Counter = {
 	color: Color3,
 	tweens: { Tween },
 	lastShown: number?,
+	shadowScale: UIScale?, -- the drop-shadow label's scale, so it pops along with the label
 }
 
-local function newCounter(label: TextLabel): Counter
+local function getScale(label: TextLabel): UIScale
 	local scale = label:FindFirstChildOfClass("UIScale")
 	if not scale then
 		scale = Instance.new("UIScale")
 		scale.Parent = label
 	end
-	return { label = label, scale = scale :: UIScale, color = label.TextColor3, tweens = {}, lastShown = nil }
+	return scale :: UIScale
+end
+
+local function newCounter(label: TextLabel): Counter
+	return { label = label, scale = getScale(label), color = label.TextColor3, tweens = {}, lastShown = nil, shadowScale = nil }
 end
 
 local woolCounter = newCounter(woolAmountLabel)
 local luckCounter = newCounter(luckAmountLabel)
 local gemCounter = newCounter(gemAmountLabel)
+
+-- The drop-shadow copy behind each amount label always shows the label's text and is only visible while the label is.
+-- Visible is re-synced when the shadow alone is changed too (ShearShopClient's hideHud keeps WoolAmount but hides ShadowWool).
+local function linkShadow(counter: Counter, shadowName: string)
+	task.spawn(function()
+		local label = counter.label
+		local shadow = currencyFrame:WaitForChild(shadowName) :: TextLabel
+
+		local function syncText()
+			shadow.Text = label.Text
+		end
+		local function syncVisible()
+			shadow.Visible = label.Visible
+		end
+
+		label:GetPropertyChangedSignal("Text"):Connect(syncText)
+		label:GetPropertyChangedSignal("Visible"):Connect(syncVisible)
+		shadow:GetPropertyChangedSignal("Visible"):Connect(syncVisible)
+		syncText()
+		syncVisible()
+		counter.shadowScale = getScale(shadow)
+	end)
+end
+
+linkShadow(woolCounter, "ShadowWool")
+linkShadow(luckCounter, "ShadowLuck")
+linkShadow(gemCounter, "ShadowGems")
 
 -- Pops the counter up with a light green tint and straight back down; a new increase restarts it from wherever it is.
 local function pulseCounter(counter: Counter)
@@ -80,14 +112,28 @@ local function pulseCounter(counter: Counter)
 	local fade = tweenService:Create(counter.label, settleInfo, { TextColor3 = counter.color })
 	counter.tweens = { grow, flash, shrink, fade }
 
+	local shadowGrow: Tween?, shadowShrink: Tween? = nil, nil
+	if counter.shadowScale then
+		shadowGrow = tweenService:Create(counter.shadowScale, growInfo, { Scale = PULSE_SCALE })
+		shadowShrink = tweenService:Create(counter.shadowScale, settleInfo, { Scale = 1 })
+		table.insert(counter.tweens, shadowGrow)
+		table.insert(counter.tweens, shadowShrink)
+	end
+
 	grow.Completed:Connect(function(state: Enum.PlaybackState)
 		if state == Enum.PlaybackState.Completed then
 			shrink:Play()
 			fade:Play()
+			if shadowShrink then
+				shadowShrink:Play()
+			end
 		end
 	end)
 	grow:Play()
 	flash:Play()
+	if shadowGrow then
+		shadowGrow:Play()
+	end
 end
 
 -- WoolCollectClient holds back the wool and Luck still flying to the counters, so the numbers climb as they land.

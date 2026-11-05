@@ -51,7 +51,7 @@ local OWNER_ATTRIBUTE = "OwnerId"
 local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- only shear Tools have it
 local NEAR_DISTANCE = 8 -- studs (flat) from a sheep that count as "at" it
 local LEAVE_DISTANCE = 12 -- studs (flat) the first sheep is walked away from before the beam leads back to a sheep
-local ALWAYS_IN_STUDIO = false -- runs the tutorial in Studio even on a save that has rebirthed
+local ALWAYS_IN_STUDIO = true -- runs the tutorial in Studio even on a save that has rebirthed
 local TICK_SECONDS = 0.1
 local DISPLAY_ORDER = 90 -- the text and spotlight draw over every window (Alerts are 100)
 local STATE_REQUEST_SECONDS = 2 -- re-asks the server for upgrade / rebirth state until it arrives
@@ -87,7 +87,10 @@ local TUTORIAL_SHEEP_ATTRIBUTE = "TutorialSheep" -- set by TutorialHandler on th
 
 --// Rebirth progress bar, under the instruction box while the player shears for the rebirth
 local BAR_HEIGHT = 26
-local BAR_GAP = 56 -- pixels between the bottom of the instruction text and the bar
+local BAR_GAP = 72 -- pixels between the bottom of the instruction box / drawn text and the bar's outline
+local BAR_MIN_GAP = 8 -- the overlap check pushes the bar down until at least this much space shows above it
+local BAR_SCREEN_MARGIN = 4 -- pixels the bar's outline keeps from the bottom of the screen
+local BAR_STROKE_THICKNESS = 2
 local BAR_WIDTH_SCALE = 0.85 -- of the instruction box's width
 local BAR_TWEEN = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local BAR_BACK_COLOR = Color3.fromRGB(40, 35, 30)
@@ -135,7 +138,11 @@ local RIPPLE_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirec
 local HINT_RIPPLE_SIZE = 90
 local CLICK_RIPPLE_SIZE = 120
 local RIPPLE_COLOR = Color3.fromRGB(255, 255, 255)
-local CHEER_RISE = 60
+local CHEER_SIZE = Vector2.new(320, 44)
+local CHEER_MIN_HEIGHT = 16 -- below this, there's no room for a cheer above the rebirth bar and it's skipped
+local CHEER_DRIFT = 60 -- pixels it drifts down as it fades
+local CHEER_STROKE_THICKNESS = 3
+local CHEER_POP_OVERSHOOT = 1.12 -- the Back-eased pop in grows it to about 1.1x for a moment
 local CHEER_TWEEN = TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local CHEER_COLOR = Color3.fromRGB(120, 255, 120)
 
@@ -162,6 +169,12 @@ local hintTarget: GuiObject? = nil -- what the tapping hand points at
 local hintRipplePoint = Vector2.zero -- where the hand's taps ripple (the target's centre), in tutorialGui pixels
 local lastClickAt = 0
 local barMilestone = 0 -- BAR_MILESTONES already cheered this Rebirth stage
+local barPush = 0 -- pixels the overlap check moved the bar down past where it was laid out
+local barNoRoomWarned = false
+local barFloor = 0 -- the highest pixel the bar's outline may sit at while a cheer above it is showing
+local barFloorUntil = 0
+local barLayoutConnections: { RBXScriptConnection } = {}
+local viewportConnection: RBXScriptConnection? = nil
 local indexHasUnclaimed: boolean? = nil -- from IndexState; nil until it arrives
 
 -- One beam cloned once and reused. Its ends stay in Terrain and are moved each frame,
@@ -265,31 +278,29 @@ local sideClickScale = Instance.new("UIScale")
 sideClickScale.Parent = sideClick
 tweenService:Create(sideClickScale, SIDE_CLICK_PULSE, { Scale = 1.12 }):Play()
 
---// Rebirth progress bar: a back, a fill that grows to the wool owned, and "120 / 200 Wool" over both.
+--// Rebirth progress bar: a square-cornered back with an outline, a fill that grows to the wool owned, and "120 / 200 Wool" over both.
 local progressBar = Instance.new("Frame")
 progressBar.Name = "TutorialRebirthBar"
 progressBar.AnchorPoint = Vector2.new(0.5, 0)
 progressBar.BackgroundColor3 = BAR_BACK_COLOR
+progressBar.BorderSizePixel = 0
 progressBar.ZIndex = HINT_Z_INDEX
 progressBar.Visible = false
 progressBar.Parent = tutorialGui
 
-local progressCorner = Instance.new("UICorner")
-progressCorner.CornerRadius = UDim.new(0.5, 0)
-progressCorner.Parent = progressBar
-
 local progressStroke = Instance.new("UIStroke")
+progressStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 progressStroke.Color = Color3.fromRGB(20, 15, 10)
-progressStroke.Thickness = 2
+progressStroke.Thickness = BAR_STROKE_THICKNESS
 progressStroke.Parent = progressBar
 
 local progressFill = Instance.new("Frame")
 progressFill.Name = "Fill"
 progressFill.BackgroundColor3 = BAR_FILL_COLOR
+progressFill.BorderSizePixel = 0
 progressFill.Size = UDim2.fromScale(0, 1)
 progressFill.ZIndex = HINT_Z_INDEX + 1
 progressFill.Parent = progressBar
-progressCorner:Clone().Parent = progressFill
 
 local progressText = Instance.new("TextLabel")
 progressText.Name = "Amount"
@@ -300,7 +311,10 @@ progressText.TextScaled = true
 progressText.TextColor3 = Color3.fromRGB(255, 255, 255)
 progressText.ZIndex = HINT_Z_INDEX + 2
 progressText.Parent = progressBar
-progressStroke:Clone().Parent = progressText
+
+local progressTextStroke = progressStroke:Clone()
+progressTextStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual -- outlines the letters, not the label's box
+progressTextStroke.Parent = progressText
 
 --// Helpers -------------------------------------------------------------------------
 
@@ -589,21 +603,97 @@ local function onInputBegan(input: InputObject, gameProcessed: boolean)
 	end
 end
 
--- A green "Shears ready!" that floats up from under the instruction box and fades.
+--// Layout rects ------------------------------------------------------------------------
+
+-- True when two rects (top-left corner and size, in pixels) are closer than `gap` on both axes; exactly `gap` apart doesn't count.
+local function rectsIntersect(aPosition: Vector2, aSize: Vector2, bPosition: Vector2, bSize: Vector2, gap: number): boolean
+	return aPosition.X < bPosition.X + bSize.X + gap and bPosition.X < aPosition.X + aSize.X + gap
+		and aPosition.Y < bPosition.Y + bSize.Y + gap and bPosition.Y < aPosition.Y + aSize.Y + gap
+end
+
+local function unionRects(aPosition: Vector2, aSize: Vector2, bPosition: Vector2, bSize: Vector2): (Vector2, Vector2)
+	local topLeft = aPosition:Min(bPosition)
+	return topLeft, (aPosition + aSize):Max(bPosition + bSize) - topLeft
+end
+
+-- The pixels a label covers: its box grown to the drawn text (TextBounds can spill past a wrapped label) and the text's outline.
+local function getLabelRect(label: TextLabel): (Vector2, Vector2)
+	local position, size, bounds = label.AbsolutePosition, label.AbsoluteSize, label.TextBounds
+	local textX = if label.TextXAlignment == Enum.TextXAlignment.Left then position.X
+		elseif label.TextXAlignment == Enum.TextXAlignment.Right then position.X + size.X - bounds.X
+		else position.X + (size.X - bounds.X) / 2
+	local textY = if label.TextYAlignment == Enum.TextYAlignment.Top then position.Y
+		elseif label.TextYAlignment == Enum.TextYAlignment.Bottom then position.Y + size.Y - bounds.Y
+		else position.Y + (size.Y - bounds.Y) / 2
+	local rectPosition, rectSize = unionRects(position, size, Vector2.new(textX, textY), bounds)
+
+	local stroke = label:FindFirstChildOfClass("UIStroke")
+	local outline = if stroke and stroke.Enabled then stroke.Thickness else 0
+	return rectPosition - Vector2.new(outline, outline), rectSize + Vector2.new(outline, outline) * 2
+end
+
+-- What the bar and cheers must stay clear of: the instruction box, its text and its "3/8" counter.
+local function getBlockedRect(): (Vector2, Vector2)
+	local position, size = unionRects(tutorialFrame.AbsolutePosition, tutorialFrame.AbsoluteSize, getLabelRect(tutorialText))
+	if isShown(tutorialProgression) then
+		position, size = unionRects(position, size, getLabelRect(tutorialProgression))
+	end
+	return position, size
+end
+
+-- A UIScale on the tutorial gui multiplies every offset, so pixel distances are divided by it before they become offsets.
+local function getGuiScale(): number
+	local uiScale = tutorialGui:FindFirstChildOfClass("UIScale")
+	return if uiScale and uiScale.Scale > 0 then uiScale.Scale else 1
+end
+
+-- How far an outline can reach past its object: whether or not the UIScale scales strokes, no further than this.
+local function getOutline(thickness: number, scale: number): number
+	return thickness * math.max(scale, 1)
+end
+
+local function getBarOutline(scale: number): number
+	return getOutline(BAR_STROKE_THICKNESS, scale)
+end
+
+--[[
+	A green "Wool collected!" that pops in under the instruction text, drifts down and fades.
+	While the rebirth bar shows it only gets the room above the bar (shorter and drifting less if it must), and barFloor holds the bar
+	below everything it can reach until it's gone, so the two never come within BAR_MIN_GAP. With too little room it's skipped.
+]]
 local function cheer(text: string)
 	if stepSound then
 		stepSound:Play()
+	end
+
+	local scale = getGuiScale()
+	local guiPosition = tutorialGui.AbsolutePosition
+	local framePosition, frameSize = tutorialFrame.AbsolutePosition, tutorialFrame.AbsoluteSize
+	local blockedPosition, blockedSize = getBlockedRect()
+	local outline = getOutline(CHEER_STROKE_THICKNESS, scale)
+	local top = blockedPosition.Y + blockedSize.Y + BAR_MIN_GAP + outline -- the label's top edge; its outline stays BAR_MIN_GAP below the text
+	local height = CHEER_SIZE.Y * scale
+	local drift = CHEER_DRIFT * scale
+	if progressBar.Visible and progressBar.Parent then
+		-- The bar's top as layoutRebirthBar set it (AbsolutePosition can lag a frame); both are placed the same way, so they compare exactly.
+		local barTop = guiPosition.Y + progressBar.Position.Y.Offset * scale - getBarOutline(scale)
+		local room = barTop - BAR_MIN_GAP - top -- for the popped label, its lower outline and the drift
+		height = math.min(height, room / CHEER_POP_OVERSHOOT - outline)
+		if height < CHEER_MIN_HEIGHT * scale then
+			return
+		end
+		local reach = (height + outline) * CHEER_POP_OVERSHOOT
+		drift = math.clamp(room - reach, 0, drift)
+		barFloor = top + reach + drift + BAR_MIN_GAP
+		barFloorUntil = os.clock() + CHEER_TWEEN.Time + 0.1
 	end
 
 	local label = Instance.new("TextLabel")
 	label.Name = "TutorialCheer"
 	label.BackgroundTransparency = 1
 	label.AnchorPoint = Vector2.new(0.5, 0)
-	label.Size = UDim2.fromOffset(320, 44)
-	label.Position = UDim2.fromOffset(
-		tutorialFrame.AbsolutePosition.X + tutorialFrame.AbsoluteSize.X / 2,
-		tutorialFrame.AbsolutePosition.Y + tutorialFrame.AbsoluteSize.Y + 8
-	)
+	label.Size = UDim2.fromOffset(CHEER_SIZE.X, height / scale)
+	label.Position = UDim2.fromOffset((framePosition.X + frameSize.X / 2 - guiPosition.X) / scale, (top - guiPosition.Y) / scale)
 	label.Font = Enum.Font.FredokaOne
 	label.TextScaled = true
 	label.Text = `✔ {text}`
@@ -612,12 +702,12 @@ local function cheer(text: string)
 
 	local stroke = Instance.new("UIStroke")
 	stroke.Color = Color3.fromRGB(20, 60, 20)
-	stroke.Thickness = 3
+	stroke.Thickness = CHEER_STROKE_THICKNESS
 	stroke.Parent = label
 
 	label.Parent = tutorialGui
 	popIn(label)
-	tweenService:Create(label, CHEER_TWEEN, { Position = label.Position + UDim2.fromOffset(0, CHEER_RISE), TextTransparency = 1 }):Play()
+	tweenService:Create(label, CHEER_TWEEN, { Position = label.Position + UDim2.fromOffset(0, drift / scale), TextTransparency = 1 }):Play()
 	tweenService:Create(stroke, CHEER_TWEEN, { Transparency = 1 }):Play()
 	debris:AddItem(label, CHEER_TWEEN.Time + 0.1)
 end
@@ -929,20 +1019,87 @@ local function updateCloseUpgrades()
 	setHint(upgradeShopExit)
 end
 
+--// Rebirth bar layout ------------------------------------------------------------------
+
+--[[
+	Centres the bar under the instruction box, BAR_GAP below everything getBlockedRect covers (and below a showing cheer's barFloor).
+	Once it has landed (its Position is unchanged since the last call, so AbsolutePosition is current) the drawn bar, outline included,
+	is checked against that rect: if it comes within BAR_MIN_GAP, barPush moves it down by the shortfall. It never goes past the bottom of the screen.
+]]
+local function layoutRebirthBar()
+	if not progressBar.Visible or not progressBar.Parent then
+		return
+	end
+
+	local scale = getGuiScale()
+	local outline = getBarOutline(scale)
+	local guiPosition, guiSize = tutorialGui.AbsolutePosition, tutorialGui.AbsoluteSize
+	local framePosition, frameSize = tutorialFrame.AbsolutePosition, tutorialFrame.AbsoluteSize
+	local blockedPosition, blockedSize = getBlockedRect()
+	local blockedBottom = blockedPosition.Y + blockedSize.Y
+
+	local lowestTop = guiPosition.Y + guiSize.Y - BAR_SCREEN_MARGIN - outline - BAR_HEIGHT * scale
+	local cheerFloor = if os.clock() < barFloorUntil then barFloor + outline else -math.huge
+	local top = math.min(math.max(blockedBottom + BAR_GAP + outline + barPush, cheerFloor), lowestTop)
+	local position = UDim2.fromOffset((framePosition.X + frameSize.X / 2 - guiPosition.X) / scale, (top - guiPosition.Y) / scale)
+	local size = UDim2.fromOffset(frameSize.X * BAR_WIDTH_SCALE / scale, BAR_HEIGHT)
+	if progressBar.Position ~= position or progressBar.Size ~= size then
+		progressBar.Position = position
+		progressBar.Size = size
+		return -- checked when its AbsolutePosition / AbsoluteSize changes, or on the next tick
+	end
+	if math.abs(progressBar.AbsolutePosition.Y - top) > 1 then
+		return -- layout hasn't caught up yet, so a check now could push the bar down for nothing
+	end
+
+	local barPosition = progressBar.AbsolutePosition - Vector2.new(outline, outline)
+	local barSize = progressBar.AbsoluteSize + Vector2.new(outline, outline) * 2
+	if not rectsIntersect(barPosition, barSize, blockedPosition, blockedSize, BAR_MIN_GAP) then
+		return
+	end
+	if top < lowestTop then
+		barPush += math.max(blockedBottom + BAR_MIN_GAP - barPosition.Y, 1)
+		layoutRebirthBar()
+	elseif not barNoRoomWarned then
+		barNoRoomWarned = true
+		warn(`[TutorialClient] no room for the rebirth bar below the tutorial text (screen {guiSize.X}x{guiSize.Y})`)
+	end
+end
+
+-- A new screen size starts the overlap check over.
+local function onScreenResized()
+	barPush = 0
+	layoutRebirthBar()
+end
+
+local function watchCamera()
+	if viewportConnection then
+		viewportConnection:Disconnect()
+		viewportConnection = nil
+	end
+	local camera = workspace.CurrentCamera
+	if camera then
+		viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(onScreenResized)
+	end
+end
+
+for _, guiObject in { tutorialFrame, tutorialText, tutorialProgression, progressBar } :: { GuiObject } do
+	table.insert(barLayoutConnections, guiObject:GetPropertyChangedSignal("AbsolutePosition"):Connect(layoutRebirthBar))
+	table.insert(barLayoutConnections, guiObject:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutRebirthBar))
+end
+table.insert(barLayoutConnections, tutorialText:GetPropertyChangedSignal("TextBounds"):Connect(layoutRebirthBar))
+table.insert(barLayoutConnections, tutorialText:GetPropertyChangedSignal("Text"):Connect(layoutRebirthBar))
+table.insert(barLayoutConnections, tutorialGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(onScreenResized))
+table.insert(barLayoutConnections, workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(watchCamera))
+watchCamera()
+
 -- Fills the bar under the instruction box with wool / cost, and cheers as it passes each BAR_MILESTONES ratio.
 local function showRebirthProgress(cost: number)
-	local frameSize = tutorialFrame.AbsoluteSize
-	local framePosition = tutorialFrame.AbsolutePosition
-	-- Below whichever ends lower: the box, the text label, or the drawn text (TextBounds, which can spill past the label).
-	local textTop, textHeight = tutorialText.AbsolutePosition.Y, tutorialText.AbsoluteSize.Y
-	local spill = math.max(tutorialText.TextBounds.Y - textHeight, 0)
-	local textBottom = textTop + textHeight + if tutorialText.TextYAlignment == Enum.TextYAlignment.Top then spill
-		elseif tutorialText.TextYAlignment == Enum.TextYAlignment.Center then spill / 2
-		else 0
-	local bottom = math.max(framePosition.Y + frameSize.Y, textBottom)
-	progressBar.Size = UDim2.fromOffset(frameSize.X * BAR_WIDTH_SCALE, BAR_HEIGHT)
-	progressBar.Position = UDim2.fromOffset(framePosition.X + frameSize.X / 2, bottom + BAR_GAP)
-	progressBar.Visible = true
+	if not progressBar.Visible then
+		barPush = 0
+		progressBar.Visible = true
+	end
+	layoutRebirthBar()
 
 	local ratio = math.clamp(wool.Value / cost, 0, 1)
 	if progressFill.Size.X.Scale ~= ratio then
@@ -1082,6 +1239,14 @@ local function stop()
 	if inputConnection then
 		inputConnection:Disconnect()
 		inputConnection = nil
+	end
+	for _, connection in barLayoutConnections do
+		connection:Disconnect()
+	end
+	table.clear(barLayoutConnections)
+	if viewportConnection then
+		viewportConnection:Disconnect()
+		viewportConnection = nil
 	end
 	beam:Destroy()
 	beamStart:Destroy()

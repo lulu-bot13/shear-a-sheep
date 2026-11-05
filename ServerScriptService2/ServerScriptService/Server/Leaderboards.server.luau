@@ -172,8 +172,15 @@ local function setupBoard(config: Board): BoardState?
 			amountHeading.Text = "Amount"
 		end
 	end
+	-- LeaderboardClient sizes the rows and canvas in pixels: AutomaticCanvasSize can't fit rows whose Scale height is measured against the canvas itself.
 	if container:IsA("ScrollingFrame") then
-		container.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		container.AutomaticCanvasSize = Enum.AutomaticSize.None
+		container.ScrollingEnabled = true
+		container.ScrollingDirection = Enum.ScrollingDirection.Y
+	end
+	local surfaceGui = container:FindFirstAncestorWhichIsA("SurfaceGui")
+	if surfaceGui then
+		surfaceGui.Active = true -- a SurfaceGui in Workspace only takes scroll input while Active
 	end
 
 	local success, store = pcall(function()
