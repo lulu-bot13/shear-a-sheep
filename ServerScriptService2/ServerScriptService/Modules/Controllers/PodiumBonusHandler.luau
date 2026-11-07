@@ -8,8 +8,10 @@
 
 --// Services
 local players = game:GetService("Players")
+local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
+local IconUtil = require(replicatedStorage.Shared.Utils.IconUtil)
 local PodiumData = require(script.Parent.Parent.Constants.PodiumData)
 local ObjectPool = require(script.Parent.Parent.Utils.ObjectPool)
 local Analytics = require(script.Parent.Analytics)
@@ -78,7 +80,7 @@ local function createStatsBillboard(): BillboardGui
 		icon.Size = UDim2.fromScale(1, 1)
 		icon.SizeConstraint = Enum.SizeConstraint.RelativeYY
 		icon.BackgroundTransparency = 1
-		icon.Image = PodiumData.StatIcons[stat]
+		IconUtil.setImage(icon, PodiumData.StatIcons[stat])
 		icon.Parent = row
 
 		local amount = Instance.new("TextLabel")

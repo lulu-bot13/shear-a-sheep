@@ -32,14 +32,14 @@ local darkOverlay = tutorialGui:WaitForChild("DarkOverlay") :: GuiObject
 local completedLabel = tutorialGui:WaitForChild("TutorialCompletedLabel") :: GuiObject
 local tip = tutorialGui:WaitForChild("Tip") :: GuiObject
 playerGui:WaitForChild("Main"):WaitForChild("Buttons"):WaitForChild("Index") -- the HUD buttons are looked up each time (Main is rebuilt on respawn)
-local indexMain = playerGui:WaitForChild("Index"):WaitForChild("Main")
-local indexClaimButton = indexMain:FindFirstChild("RewardsFrame", true):WaitForChild("Claim") :: GuiButton
-local indexClaimAllButton = indexMain:WaitForChild("ClaimAllFrame"):WaitForChild("Claim") :: GuiButton
-local indexExit = indexMain:FindFirstChild("Exit", true) :: GuiObject?
+local indexFrame = playerGui:WaitForChild("Index"):WaitForChild("IndexFrame")
+local indexMain = indexFrame:WaitForChild("Main")
+local indexClaimButton = indexMain:WaitForChild("RewardFrame"):WaitForChild("BuyButton") :: GuiButton
+local indexExit = indexFrame:WaitForChild("ExitButton") :: GuiObject
 local upgradeShopMain = playerGui:WaitForChild("UpgradeShop"):WaitForChild("Main")
 local upgradeCards = upgradeShopMain:WaitForChild("ScrollingFrame")
 local upgradeShopExit = upgradeShopMain:FindFirstChild("Exit", true) :: GuiObject? -- found the same way WindowsManager wires it
-local rebirthButton = playerGui:WaitForChild("RebirthScreen"):WaitForChild("Main"):WaitForChild("Rebirth") :: GuiButton
+local rebirthButton = playerGui:WaitForChild("RebirthScreen"):WaitForChild("Main"):WaitForChild("RebirthButton") :: GuiButton
 local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
 local beamTemplate = replicatedStorage:WaitForChild("Assets"):WaitForChild("VFX"):WaitForChild("TutorialBeam") :: Beam
 local uiSounds = soundService:FindFirstChild("UISounds")
@@ -98,7 +98,8 @@ local BAR_FILL_COLOR = Color3.fromRGB(255, 215, 80)
 local BAR_MILESTONES = { { ratio = 0.5, text = "Halfway there!" }, { ratio = 0.8, text = "Almost there!" } }
 
 local HIGHLIGHT_COLOR = Color3.fromRGB(255, 230, 90)
-local BEAM_ATTACHMENT_ROTATION = Vector3.new(0, 0, 90) -- degrees, applied to both beam ends
+-- Both beam ends face along the beam's flat heading, then get this extra roll so the ribbon lies face-up.
+local BEAM_ATTACHMENT_ROTATION = CFrame.fromOrientation(0, 0, math.rad(90))
 
 --// Click hint: a hand that taps the target button, a ripple on each tap and a pulsing CLICK / TAP word
 local HINT_Z_INDEX = 50
@@ -181,12 +182,11 @@ local indexHasUnclaimed: boolean? = nil -- from IndexState; nil until it arrives
 -- so a respawned character or a replaced sheep can't destroy them.
 local beamStart = Instance.new("Attachment")
 beamStart.Name = "TutorialBeamStart"
-beamStart.Orientation = BEAM_ATTACHMENT_ROTATION
 beamStart.Parent = workspace.Terrain
 local beamEnd = Instance.new("Attachment")
 beamEnd.Name = "TutorialBeamEnd"
-beamEnd.Orientation = BEAM_ATTACHMENT_ROTATION
 beamEnd.Parent = workspace.Terrain
+local beamHeading = Vector3.zAxis -- last flat direction from player to sheep, kept when they're directly above each other
 
 local beam = beamTemplate:Clone()
 beam.Attachment0 = beamStart
@@ -751,8 +751,14 @@ local function updateBeam()
 		return
 	end
 
-	beamStart.WorldPosition = playerRoot.Position
-	beamEnd.WorldPosition = sheepRoot.Position
+	-- The ends turn with the beam's heading, so it looks the same from every side instead of twisting.
+	local startPosition, endPosition = playerRoot.Position, sheepRoot.Position
+	local flat = Vector3.new(endPosition.X - startPosition.X, 0, endPosition.Z - startPosition.Z)
+	if flat.Magnitude > 1e-3 then
+		beamHeading = flat.Unit
+	end
+	beamStart.WorldCFrame = CFrame.lookAt(startPosition, startPosition - beamHeading) * BEAM_ATTACHMENT_ROTATION
+	beamEnd.WorldCFrame = CFrame.lookAt(endPosition, endPosition - beamHeading) * BEAM_ATTACHMENT_ROTATION
 	beam.Enabled = true
 end
 
@@ -1176,10 +1182,9 @@ local function updateIndex()
 	elseif indexHasUnclaimed == false then
 		setStage("CloseIndex")
 	else
-		local target = if isShown(indexClaimAllButton) then indexClaimAllButton else indexClaimButton
 		setText("Press Claim! Every new Sheep you find gives you Luck")
-		point(target)
-		setHint(target)
+		point(indexClaimButton)
+		setHint(indexClaimButton)
 	end
 end
 

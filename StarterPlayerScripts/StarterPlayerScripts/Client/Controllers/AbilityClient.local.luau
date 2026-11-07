@@ -1,6 +1,6 @@
 --[[
 	Uses the player's ability (aimed at the mouse, or straight ahead on touch) on E, the Ability ui or the touch button by the jump button, and plays its animation and Modules.Abilities effect.
-	Shows the cooldown on Main.Ability and routes AbilityEffect broadcasts to each ability's module so everyone sees the VFX.
+	Shows the cooldown on Main.AbilityButton and routes AbilityEffect broadcasts to each ability's module so everyone sees the VFX.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AbilityClient
 ]]--
 
@@ -27,6 +27,7 @@ local abilityModules = script.Parent.Parent.Modules.Abilities
 local abilityStartSound = soundService:WaitForChild("UISounds"):FindFirstChild("ShearAbilityStart")
 
 --// Configs
+local ABILITY_UI_NAME = "AbilityButton" -- under the Main gui, with the Cooldown and AbilityName labels inside
 local ABILITY_KEY = Enum.KeyCode.E
 local ABILITY_ACTION = "UseAbility"
 local ACTIVE_ATTRIBUTE = "ActiveAbility" -- set by AbilityHandler while an ability runs
@@ -69,7 +70,7 @@ local usingTouch = userInputService.TouchEnabled
 -- Looked up each time: the Main gui may be rebuilt on respawn.
 local function getAbilityUi(): GuiObject?
 	local main = playerGui:FindFirstChild("Main")
-	local ability = main and main:FindFirstChild("Ability")
+	local ability = main and main:FindFirstChild(ABILITY_UI_NAME)
 	return if ability and ability:IsA("GuiObject") then ability else nil
 end
 
@@ -311,7 +312,7 @@ end)
 local boundAbilityUi: GuiObject? = nil
 
 local function bindAbilityUi(main: Instance)
-	local ability = main:WaitForChild("Ability", 10)
+	local ability = main:WaitForChild(ABILITY_UI_NAME, 10)
 	if not ability or ability == boundAbilityUi then
 		return
 	end
@@ -516,7 +517,7 @@ local function onMobileReadyAtChanged()
 	end
 end
 
--- Shown to touch players holding a shear while no window is open, like Main.Ability.
+-- Shown to touch players holding a shear while no window is open, like Main.AbilityButton.
 local function updateMobileButton()
 	local button = getMobileButton()
 	if not button then

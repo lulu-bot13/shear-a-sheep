@@ -5,14 +5,16 @@
 
 --// Services
 local players = game:GetService("Players")
+local replicatedStorage = game:GetService("ReplicatedStorage")
 local tweenService = game:GetService("TweenService")
 
 --// Modules
 local settings = require(script.Parent.Settings)
+local iconIds = require(replicatedStorage.Shared.Constants.IconIds)
 
 --// Configs
 -- Spawning + the slowest fall add up to EFFECT_SECONDS.
-local LUCK_ICON_IMAGE = "rbxassetid://86611651520562" -- empty falls back to a 🍀 emoji
+local LUCK_ICON_IMAGE = iconIds.Luck -- empty falls back to a 🍀 emoji
 local EFFECT_SECONDS = 3.5
 local FALL_ICON_COUNT = 40
 local FALL_SPAWN_SECONDS = 1.5

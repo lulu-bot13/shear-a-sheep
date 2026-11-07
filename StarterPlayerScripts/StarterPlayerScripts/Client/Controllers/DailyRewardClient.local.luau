@@ -14,6 +14,8 @@ local tweenService = game:GetService("TweenService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
+local iconIds = require(replicatedStorage.Shared.Constants.IconIds)
+local iconUtil = require(replicatedStorage.Shared.Utils.IconUtil)
 local alerts = require(script.Parent.Parent.Modules.Alerts)
 local alertPulse = require(script.Parent.Parent.Modules.AlertPulse)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
@@ -41,13 +43,13 @@ local uiSounds = soundService:WaitForChild("UISounds")
 local CLONED_DAYS = 6 -- days 1 to 6 are cloned from the template; day 7 is the big pre-built card
 -- All the wool icon for now; each day can be swapped for its own image.
 local DAY_ICONS = {
-	[1] = "rbxassetid://112199646421676",
-	[2] = "rbxassetid://112199646421676",
-	[3] = "rbxassetid://112199646421676",
-	[4] = "rbxassetid://112199646421676",
-	[5] = "rbxassetid://112199646421676",
-	[6] = "rbxassetid://112199646421676",
-	[7] = "rbxassetid://112199646421676",
+	[1] = iconIds.Wool,
+	[2] = iconIds.Wool,
+	[3] = iconIds.Wool,
+	[4] = iconIds.Wool,
+	[5] = iconIds.Wool,
+	[6] = iconIds.Wool,
+	[7] = iconIds.Wool,
 }
 local CLAIM_SOUND = "Cash" -- in SoundService.UISounds
 local TODAY_OUTLINE_COLOR = Color3.new(1, 1, 1)
@@ -173,7 +175,7 @@ local function renderCards()
 		local reward = state.rewards[day]
 		if reward then
 			if card.icon then
-				card.icon.Image = DAY_ICONS[day] or card.icon.Image
+				iconUtil.setImage(card.icon, DAY_ICONS[day] or card.icon.Image)
 			end
 			if card.multiplier then
 				card.multiplier.Text = `+ x{string.format("%g", reward.multiplier)} more`

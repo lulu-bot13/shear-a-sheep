@@ -6,10 +6,12 @@
 	Location: ReplicatedStorage.Shared.Constants.WoolData
 ]]--
 
+local IconIds = require(script.Parent.IconIds)
+
 local woolData = {}
 
 -- Image of one wool puff (an "rbxassetid://..." id) for the wool that flies to the wool counter. Empty = a plain white puff.
-woolData.WoolIconImage = "rbxassetid://112199646421676"
+woolData.WoolIconImage = IconIds.Wool
 
 --// Wool look on the sheep (server; a "Wool" part if the sheep has one, else its Torso mesh) -----
 

@@ -1,5 +1,5 @@
 --[[
-	The rebirth screen (StarterGui.RebirthScreen): uses the UI as built in Studio and fills in the cost and the before -> after luck multiplier.
+	The rebirth screen (StarterGui.RebirthScreen): fills in the wool cost, the before -> after luck multiplier and the rebirth / Prestige counts.
 	Only displays what the server sends; RebirthHandler decides everything.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.RebirthClient
@@ -10,6 +10,7 @@ local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local tweenService = game:GetService("TweenService")
 local soundService = game:GetService("SoundService")
+local collectionService = game:GetService("CollectionService")
 
 --// Instances
 local player = players.LocalPlayer
@@ -20,14 +21,14 @@ local alertBadge = openButton:FindFirstChild("Alert", true) :: GuiObject? -- opt
 local hudProgress = openButton:WaitForChild("Progress") :: TextLabel
 
 local rebirthGui = playerGui:WaitForChild("RebirthScreen") :: ScreenGui
-local mainFrame = rebirthGui:WaitForChild("Main") :: Frame
-local rebirthButton = mainFrame:WaitForChild("Rebirth") :: GuiButton
-local rebirthButtonLabel = rebirthButton:FindFirstChildWhichIsA("TextLabel", true) :: TextLabel -- the button's own Text stays ""
-local rebirthButtonGradient = rebirthButton:FindFirstChildOfClass("UIGradient")
+local mainFrame = rebirthGui:WaitForChild("Main") :: Frame -- not the "Main" ImageLabel (panel art) inside it
+local exitButton = mainFrame:WaitForChild("ExitButton") :: GuiButton
+local rebirthButton = mainFrame:WaitForChild("RebirthButton") :: ImageButton -- image only; tinted grey while unaffordable
 local skipRebirthButton = mainFrame:WaitForChild("SkipRebirth") :: GuiButton
-local amountButton = mainFrame:WaitForChild("Amount") :: GuiButton -- the 1X / MAX switch
-local amountKnob = amountButton:WaitForChild("Knob") :: GuiObject
-local amountLabel = amountButton:FindFirstChildWhichIsA("TextLabel", true) :: TextLabel? -- the button's own Text stays ""
+-- The 1X / MAX switch sits beside Main, directly under the ScreenGui; its ToggleButton slides along the track.
+local amountSwitch = rebirthGui:WaitForChild("Switch") :: GuiObject
+local amountKnob = amountSwitch:WaitForChild("ToggleButton") :: GuiButton
+local amountLabel = amountKnob:WaitForChild("Multiplier") :: TextLabel
 local rebirthCount = mainFrame:WaitForChild("RebirthCount") :: TextLabel
 local prestigeCount = mainFrame:WaitForChild("Prestiges") :: TextLabel
 
@@ -59,9 +60,8 @@ end
 debugLog("script started")
 
 -- The before -> after labels built in Studio.
-local rewardsFrame = mainFrame:WaitForChild("RewardsFrame") :: Frame
-local rewardBefore = rewardsFrame:WaitForChild("BeforeAmount") :: TextLabel
-local rewardAfter = rewardsFrame:WaitForChild("AfterAmount") :: TextLabel
+local rewardBefore = mainFrame:WaitForChild("BeforeFrame"):WaitForChild("PreviousAmount") :: TextLabel
+local rewardAfter = mainFrame:WaitForChild("AfterFrame"):WaitForChild("AfterAmount") :: TextLabel
 
 --// Sounds
 local rebirthedSound = soundService:WaitForChild("UISounds"):FindFirstChild("Rebirthed") :: Sound?
@@ -77,9 +77,9 @@ local PRESTIGE_TIP_TEXT = {
 	RequirementText = "REBIRTHS MAXED, PRESTIGE TO GO FURTHER!",
 	KeepNote = `<font color="#FF5A5A">RESETS ALL STATS (index and shear count stays the same)</font>`,
 }
-local GREY_GRADIENT = ColorSequence.new(Color3.fromRGB(175, 175, 175), Color3.fromRGB(115, 115, 115))
-local AMOUNTS = { 1, "max" } -- what the Amount switch flips between; "max" is as many as the player can afford
-local KNOB_MAX_POSITION = UDim2.fromScale(0.492, 0.5)
+local GREY_TINT = Color3.fromRGB(140, 140, 140) -- the Rebirth button's ImageColor3 while unaffordable
+local SHINE_TAG = "ShineButton"
+local AMOUNTS = { 1, "max" } -- what the Switch flips between; "max" is as many as the player can afford
 local KNOB_TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local STATE_REQUEST_SECONDS = 0.55 -- just over RebirthServer's cooldown, which drops state requests sent sooner
 
@@ -98,12 +98,20 @@ local REASON_TEXT = {
 local state: any = nil -- the last RebirthState from the server
 local prestigeState: any = nil -- the last PrestigeState; once it can Prestige, the Rebirth button prestiges instead
 local wasReady = false -- so the "Rebirth Available" alert shows once each time the bar reaches 100%
-local normalGradient = if rebirthButtonGradient then rebirthButtonGradient.Color else nil -- the purple, restored once affordable
+local normalTint = rebirthButton.ImageColor3 -- as built in Studio, restored once affordable
 local amountIndex = 1 -- into AMOUNTS; back to 1X every time the screen opens
 local nextStateRequest = 0
 local stateRequestQueued = false
 local tipTexts: { [TextLabel]: string } = {} -- each RequirementTip label's own text, restored while the player can't Prestige
 local knobOnePosition = amountKnob.Position -- the 1X side, as built in Studio
+-- The MAX side mirrors the 1X side across the track.
+local knobMirror = 2 * amountKnob.AnchorPoint.X - 1
+local knobMaxPosition = UDim2.new(
+	1 - knobOnePosition.X.Scale + knobMirror * amountKnob.Size.X.Scale,
+	-knobOnePosition.X.Offset + knobMirror * amountKnob.Size.X.Offset,
+	knobOnePosition.Y.Scale,
+	knobOnePosition.Y.Offset
+)
 local restRotations = {
 	[rebirthButton] = rebirthButton.Rotation,
 	[skipRebirthButton] = skipRebirthButton.Rotation,
@@ -150,11 +158,8 @@ end
 local function setAmountIndex(index: number)
 	amountIndex = index
 	local amount = getSelectedAmount()
-	if amountLabel then
-		amountLabel.Text = if amount == "max" then "MAX" else `{amount}X`
-	end
-	amountButton:SetAttribute("Amount", amount)
-	local knobPosition = if amount == "max" then KNOB_MAX_POSITION else knobOnePosition
+	amountLabel.Text = if amount == "max" then "MAX" else `{amount}X`
+	local knobPosition = if amount == "max" then knobMaxPosition else knobOnePosition
 	tweenService:Create(amountKnob, KNOB_TWEEN, { Position = knobPosition }):Play()
 end
 
@@ -205,13 +210,7 @@ local function render()
 	renderRequirementTip(prestigeReady)
 
 	local affordable = state.amountCanRebirth and not state.maxed
-	rebirthButtonLabel.Text = if prestigeReady then "PRESTIGE"
-		elseif state.maxed then "MAX"
-		elseif affordable then "CONFIRM"
-		else "Not Enough"
-	if rebirthButtonGradient and normalGradient then
-		rebirthButtonGradient.Color = if affordable or prestigeReady then normalGradient else GREY_GRADIENT
-	end
+	rebirthButton.ImageColor3 = if affordable or prestigeReady then normalTint else GREY_TINT
 end
 
 -- The HUD button's "Alert" badge shows while a rebirth is ready, and Progress shows the wool percentage.
@@ -231,12 +230,19 @@ local window = windowsManager.register("Rebirth", {
 	gui = rebirthGui,
 	frame = mainFrame,
 	openButton = openButton,
+	closeButton = exitButton,
 	onOpen = function()
+		amountSwitch.Visible = true
 		setAmountIndex(1)
 		render()
 		requestState()
 	end,
+	-- WindowsManager only pops Main in and out, so the Switch beside it is hidden as soon as the window closes.
+	onClose = function()
+		amountSwitch.Visible = false
+	end,
 })
+amountSwitch.Visible = false
 
 setAmountIndex(1)
 
@@ -253,6 +259,7 @@ for _, label in { requirementText, keepNote } do
 	tipTexts[label] = label.Text
 end
 keepNote.RichText = true -- its Prestige text is coloured with a font tag
+collectionService:AddTag(rebirthButton, SHINE_TAG)
 hudProgress.Text = "0%"
 updateHud()
 if alertBadge then
@@ -268,11 +275,7 @@ task.spawn(function()
 	end
 end)
 
-amountButton.MouseButton1Click:Connect(toggleAmount)
--- The Knob sits on top of the switch, so it would swallow clicks if it's a button too.
-if amountKnob:IsA("GuiButton") then
-	amountKnob.MouseButton1Click:Connect(toggleAmount)
-end
+amountKnob.MouseButton1Click:Connect(toggleAmount)
 
 rebirthButton.MouseButton1Click:Connect(function()
 	if canPrestige() then

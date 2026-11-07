@@ -5,6 +5,7 @@
 	Location: ServerScriptService.Modules.Constants.PodiumData
 ]]--
 
+local IconIds = require(game:GetService("ReplicatedStorage").Shared.Constants.IconIds)
 local MutationData = require(script.Parent.MutationData)
 local SheepData = require(script.Parent.SheepData)
 local SheepSizeData = require(script.Parent.SheepSizeData)
@@ -48,8 +49,8 @@ local statColors: { [Stat]: Color3 } = {
 	Respawn = Color3.fromRGB(125, 211, 252),
 }
 local statIcons: { [Stat]: string } = {
-	Wool = "rbxassetid://112199646421676", -- same as WoolData.WoolIconImage
-	Luck = "rbxassetid://86611651520562",
+	Wool = IconIds.Wool,
+	Luck = IconIds.Luck,
 	Respawn = "rbxassetid://75508274630013", -- the Faster Respawn upgrade's icon
 }
 podiumData.StatOrder = statOrder

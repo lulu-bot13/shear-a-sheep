@@ -16,6 +16,8 @@ local soundService = game:GetService("SoundService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
+local iconIds = require(replicatedStorage.Shared.Constants.IconIds)
+local iconUtil = require(replicatedStorage.Shared.Utils.IconUtil)
 
 --// Instances
 local player = players.LocalPlayer
@@ -53,8 +55,8 @@ local HOLD_TIMEOUT_SECONDS = 5 -- the counters are never held back longer than t
 type Kind = "Wool" | "Luck"
 
 local ICONS: { [Kind]: string } = {
-	Wool = "rbxassetid://112199646421676",
-	Luck = "rbxassetid://86611651520562",
+	Wool = iconIds.Wool,
+	Luck = iconIds.Luck,
 }
 local HOLD_ATTRIBUTES: { [Kind]: string } = { Wool = "WoolLabelHold", Luck = "LuckLabelHold" }
 
@@ -238,7 +240,7 @@ local function getTotal(kind: Kind, root: BasePart): Total
 	disableClipping(gui)
 	gui.Adornee = root
 	gui.Parent = root
-	;(gui:FindFirstChild("Icon") :: ImageLabel).Image = ICONS[kind]
+	iconUtil.setImage(gui:FindFirstChild("Icon") :: ImageLabel, ICONS[kind])
 
 	local newTotal = { gui = gui, label = gui:FindFirstChild("TextLabel") :: TextLabel, amount = 0, token = 0 }
 	totals[kind] = newTotal
@@ -398,7 +400,7 @@ local function spawnDrops(kind: Kind, origin: Vector3, amount: number, count: nu
 	local now = os.clock()
 	for index, share in splitShares(amount, count) do
 		local object = table.remove(idleDrops) or createDropObject()
-		object.icon.Image = ICONS[kind]
+		iconUtil.setImage(object.icon, ICONS[kind]) -- pooled drops switch between wool and Luck
 		object.label.Text = formatAmount(share)
 		object.part.CFrame = CFrame.new(origin)
 

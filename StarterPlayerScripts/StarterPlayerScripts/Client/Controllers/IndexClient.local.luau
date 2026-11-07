@@ -1,6 +1,6 @@
 --[[
-	The sheep Index (StarterGui.Index): the HUD's Index button opens it and every sheep type gets a card cloned from the Template.
-	Selecting a card spins its sheep and fills the InfoFrame and RewardsFrame; found sheep are claimed there; IndexHandler decides everything.
+	The sheep Index (StarterGui.Index.IndexFrame): the HUD's Index button opens it and every sheep type gets a card cloned from SheepTemplate.
+	Selecting a card spins its sheep and fills SheepInfo and RewardFrame; found sheep are claimed there; IndexHandler decides everything.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.IndexClient
 ]]--
@@ -27,37 +27,35 @@ local hudButtons = playerGui:WaitForChild("Main"):WaitForChild("Buttons")
 local openButton = hudButtons:WaitForChild("Index") :: GuiButton
 
 local indexGui = playerGui:WaitForChild("Index") :: ScreenGui
-local mainFrame = indexGui:WaitForChild("Main") :: GuiObject
-local cardTemplate = mainFrame:FindFirstChild("Template", true) :: GuiObject
-local cardContainer = cardTemplate.Parent :: GuiObject
+local indexFrame = indexGui:WaitForChild("IndexFrame") :: GuiObject -- the whole window, opened and closed by WindowsManager
+local exitButton = indexFrame:WaitForChild("ExitButton") :: GuiButton
+local mainFrame = indexFrame:WaitForChild("Main") :: GuiObject -- the window body holding everything below
+local cardContainer = mainFrame:WaitForChild("ScrollingFrame") :: GuiObject
+local cardTemplate = cardContainer:WaitForChild("SheepTemplate") :: GuiObject
 
 -- The selected sheep's details.
-local infoFrame = mainFrame:WaitForChild("InfoFrame")
+local infoFrame = mainFrame:WaitForChild("SheepInfo")
 local infoName = infoFrame:WaitForChild("SheepName") :: TextLabel
 local infoRarity = infoFrame:WaitForChild("Rarity") :: TextLabel
-local infoChances = infoFrame:WaitForChild("Chances") :: TextLabel
+local infoChances = infoFrame:WaitForChild("Chance") :: TextLabel
 local infoViewport = infoFrame:WaitForChild("ViewportFrame") :: ViewportFrame
 
-local rewardsFrame = mainFrame:FindFirstChild("RewardsFrame", true) :: GuiObject
-local rewardAmount = rewardsFrame:WaitForChild("RewardAmount") :: TextLabel
-local claimButton = rewardsFrame:WaitForChild("Claim") :: TextButton
-
-local claimAllFrame = mainFrame:WaitForChild("ClaimAllFrame") :: GuiObject
-local claimAllButton = claimAllFrame:WaitForChild("Claim") :: TextButton
-local claimAllAmount = claimAllFrame:WaitForChild("RewardAmount") :: TextLabel
-local claimAllMultiplier = claimAllFrame:WaitForChild("Multiplier") :: TextLabel
+local rewardsFrame = mainFrame:WaitForChild("RewardFrame") :: GuiObject
+local rewardAmount = rewardsFrame:WaitForChild("ClaimAmount") :: TextLabel
+local claimButton = rewardsFrame:WaitForChild("BuyButton") :: ImageButton
 
 -- How many sheep types have been unlocked out of all of them.
-local unlockBar = mainFrame:FindFirstChild("UnlockBar", true) :: GuiObject
-local unlockProgress = unlockBar:WaitForChild("Progress") :: GuiObject
-local unlockText = unlockBar:WaitForChild("ProgressText") :: TextLabel
+local unlockBar = mainFrame:WaitForChild("ProgressFrame") :: GuiObject
+local unlockTrack = unlockBar:WaitForChild("Background") :: GuiObject
+local unlockProgress = unlockBar:WaitForChild("ProgressBar") :: GuiObject
+local unlockText = unlockBar:WaitForChild("IndexAmount") :: TextLabel
 
 --// Sounds
 local luckClaimedSound = soundService:WaitForChild("UISounds"):FindFirstChild("LuckClaimed")
 
 --// Configs
 local CLAIM_COLOR = Color3.fromRGB(255, 200, 40)
-local CLAIMED_COLOR = Color3.fromRGB(90, 90, 90) -- "Claimed" text and the unusable Claim button
+local CLAIMED_COLOR = Color3.fromRGB(90, 90, 90) -- "Claimed" text and the tint on the unusable BuyButton
 local LOCKED_TINT = Color3.new(0, 0, 0) -- undiscovered sheep show as a silhouette
 local LOCKED_TEXT = "???"
 local ALERT_COLOR = Color3.fromRGB(235, 50, 50)
@@ -69,7 +67,7 @@ local ADULT_PREVIEW_FILL = 0.75
 local SPIN_SPEED = math.rad(60) -- per second, for the selected sheep
 local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so card sizes aren't measured
 local CELLS_PER_ROW: number? = 3 -- a sheep's Baby, adult and Giant side by side; nil = however many fit the Studio CellSize/CellPadding X scale
-local CELL_ASPECT_RATIO = 1.25 -- grid cell height / width
+local CELL_ASPECT_RATIO = 1.25 -- grid cell height / width; rows past the window make the canvas taller so it scrolls
 local UNLOCK_BAR_TWEEN = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 type Card = {
@@ -95,8 +93,7 @@ local spinConnection: RBXScriptConnection? = nil
 local spinAngle = 0
 
 local rewardAmountColor = rewardAmount.TextColor3
-local claimButtonText = claimButton.Text
-local claimButtonColor = claimButton.BackgroundColor3
+local claimButtonImageColor = claimButton.ImageColor3
 
 -- Scale on Y inside a ScrollingFrame is relative to the canvas, so these are turned into pixels of the visible window.
 local layout = cardContainer:FindFirstChildWhichIsA("UIGridStyleLayout")
@@ -306,6 +303,11 @@ local function buildPreview(viewport: ViewportFrame, entry: any)
 	camera.CFrame = CFrame.lookAt(center - direction * distance, center)
 
 	previews[viewport] = { model = model, center = center }
+
+	-- SheepInfo's Studio background is only a placeholder until a sheep is in it.
+	if viewport == infoViewport then
+		viewport.BackgroundTransparency = 1
+	end
 end
 
 --// Spinning the selected sheep -------------------------------------------------------
@@ -347,7 +349,7 @@ local function setInfoVisible(visible: boolean)
 	rewardsFrame.Visible = visible
 end
 
--- Fills the InfoFrame and RewardsFrame for the selected sheep (hidden while nothing is selected).
+-- Fills SheepInfo and RewardFrame for the selected sheep (hidden while nothing is selected).
 local function renderInfo()
 	local card = if selectedId then cards[selectedId] else nil
 	if not card then
@@ -368,8 +370,9 @@ local function renderInfo()
 		else `1 in {formatWithCommas(entry.odds)}`
 	infoViewport.ImageColor3 = if locked then LOCKED_TINT else Color3.new(1, 1, 1)
 
-	if status == "Claimed" then
-		rewardAmount.Text = "Claimed"
+	-- BuyButton's "CLAIM" is baked into its image, so ClaimAmount carries the state.
+	if status == "Claimed" or locked then
+		rewardAmount.Text = if locked then "Locked" else "Claimed"
 		rewardAmount.TextColor3 = CLAIMED_COLOR
 	else
 		rewardAmount.Text = `+{formatWithCommas(entry.indexLuck)}`
@@ -378,8 +381,8 @@ local function renderInfo()
 
 	local canClaim = status == "Found"
 	claimButton.AutoButtonColor = canClaim
-	claimButton.BackgroundColor3 = if canClaim then claimButtonColor else CLAIMED_COLOR
-	claimButton.Text = if status == "Claimed" then "Claimed" elseif status == "Locked" then "Locked" else claimButtonText
+	claimButton.Active = canClaim
+	claimButton.ImageColor3 = if canClaim then claimButtonImageColor else CLAIMED_COLOR
 end
 
 -- The newly selected sheep starts spinning from facing the camera; the one it replaces turns back to face it.
@@ -412,24 +415,12 @@ local function findUnclaimed(id: string?): Card?
 	return nil
 end
 
--- Shows ClaimAllFrame while more than one sheep is waiting to be claimed.
-local function renderClaimAll()
-	local count, luck = 0, 0
-	for _, entry in entries do
-		if entry.status == "Found" then
-			count += 1
-			luck += entry.indexLuck
-		end
-	end
-
-	claimAllFrame.Visible = count > 1
-	claimAllMultiplier.Text = `X{count}`
-	claimAllAmount.Text = `+{formatWithCommas(luck)}`
-
-	alertBadge.Visible = count > 0
+-- Shows the HUD button's Alert badge while any sheep is waiting to be claimed.
+local function renderAlertBadge()
+	alertBadge.Visible = findUnclaimed() ~= nil
 end
 
--- Opens a sheep waiting to be claimed in the InfoFrame; with none waiting the selection stays as it is.
+-- Opens a sheep waiting to be claimed in SheepInfo; with none waiting the selection stays as it is.
 local function focusUnclaimed(id: string?)
 	local card = findUnclaimed(id)
 	if card then
@@ -437,7 +428,7 @@ local function focusUnclaimed(id: string?)
 	end
 end
 
--- Fills the UnlockBar with the share of sheep types that aren't Locked any more.
+-- Fills ProgressFrame's ProgressBar with the share of sheep types that aren't Locked any more.
 local function renderUnlockBar()
 	local unlocked = 0
 	for _, entry in entries do
@@ -492,7 +483,7 @@ local function createCard(entry: any, order: number): Card
 	local card: Card = {
 		id = entry.id,
 		frame = frame,
-		nameLabel = frame:WaitForChild("ItemName") :: TextLabel,
+		nameLabel = frame:WaitForChild("SheepName") :: TextLabel,
 		rarityLabel = frame:WaitForChild("Rarity") :: TextLabel,
 		viewport = viewport,
 		entry = entry,
@@ -502,7 +493,7 @@ local function createCard(entry: any, order: number): Card
 		buildPreview(viewport, entry)
 	end
 
-	-- The Template isn't a button, so an invisible one covering the card takes the clicks.
+	-- SheepTemplate isn't a button, so an invisible one covering the card takes the clicks.
 	local button: GuiButton
 	if frame:IsA("GuiButton") then
 		button = frame
@@ -537,7 +528,7 @@ local function render()
 	end
 
 	renderInfo()
-	renderClaimAll()
+	renderAlertBadge()
 	renderUnlockBar()
 	task.defer(updateCanvasSize)
 end
@@ -546,8 +537,9 @@ end
 
 local indexWindow = windowsManager.register("Index", {
 	gui = indexGui,
-	frame = mainFrame,
+	frame = indexFrame,
 	openButton = openButton,
+	closeButton = exitButton, -- WindowsManager only finds a button named "Exit" on its own
 	onOpen = function()
 		network.fireServer(network.RemoteEvents.RequestIndexState)
 		focusUnclaimed(selectedId)
@@ -557,10 +549,22 @@ local indexWindow = windowsManager.register("Index", {
 })
 
 cardTemplate.Visible = false
-claimAllFrame.Visible = false
 alertBadge.Visible = false
 alertPulse.attach(alertBadge)
 setInfoVisible(false)
+
+-- ProgressBar draws over its Background and IndexAmount over both; only raised (with a warning) if the import layered them wrong.
+for _, pair in { { unlockTrack, unlockProgress }, { unlockProgress, unlockText } } do
+	local lower, upper = pair[1], pair[2]
+	if upper.ZIndex <= lower.ZIndex then
+		warn(`[IndexClient] {upper:GetFullName()} is not above {lower.Name} (ZIndex {upper.ZIndex} <= {lower.ZIndex}); raised it in code`)
+		upper.ZIndex = lower.ZIndex + 1
+	end
+end
+
+-- ProgressBar's Studio width is a placeholder, so it starts empty until the first IndexState.
+local progressSize = unlockProgress.Size
+unlockProgress.Size = UDim2.new(0, 0, progressSize.Y.Scale, progressSize.Y.Offset)
 
 if cardContainer:IsA("ScrollingFrame") then
 	cardContainer.AutomaticCanvasSize = Enum.AutomaticSize.None -- updateCanvasSize sizes it instead
@@ -583,10 +587,6 @@ claimButton.Activated:Connect(function()
 	end
 end)
 
-claimAllButton.Activated:Connect(function()
-	network.fireServer(network.RemoteEvents.ClaimAllIndexRewards)
-end)
-
 network.waitUntilReadyAsync()
 
 network.connectEvent(network.RemoteEvents.IndexState, function(newEntries: any)
@@ -594,20 +594,7 @@ network.connectEvent(network.RemoteEvents.IndexState, function(newEntries: any)
 	render()
 end)
 
-network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string, success: boolean, _reason: string?, count: number?)
-	if id == "All" then
-		if success then
-			local claimed = if type(count) == "number" then count else 1
-			pop(claimAllFrame)
-			playLuckClaimedSound()
-			luckRain.play(indexGui)
-			announcements.show("ClaimAlert", if claimed > 1 then `Claimed {claimed} sheeps` else "Claimed 1 sheep")
-		else
-			shake(claimAllButton)
-		end
-		return
-	end
-
+network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string, success: boolean)
 	local card = cards[id]
 	if not card then
 		return

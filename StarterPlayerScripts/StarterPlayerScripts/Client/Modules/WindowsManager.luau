@@ -28,6 +28,7 @@ export type WindowOptions = {
 	gui: ScreenGui,
 	frame: GuiObject,
 	openButton: GuiButton?, -- toggles the window
+	closeButton: GuiButton?, -- closes the window; defaults to the frame's "Exit" button
 	onOpen: (() -> ())?,
 	onClose: (() -> ())?,
 }
@@ -205,7 +206,7 @@ function WindowsManager.register(name: string, options: WindowOptions): Window
 	gui.Enabled = false
 	frame.Visible = false
 
-	local exitButton = frame:FindFirstChild(EXIT_BUTTON_NAME, true)
+	local exitButton = options.closeButton or frame:FindFirstChild(EXIT_BUTTON_NAME, true)
 	if exitButton and exitButton:IsA("GuiButton") then
 		exitButton.Activated:Connect(close)
 	else
