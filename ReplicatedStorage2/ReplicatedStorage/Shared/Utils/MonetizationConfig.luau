@@ -19,6 +19,7 @@ export type Item = {
 	giftable: boolean,
 	giftProductId: number, -- the developer product bought to gift this item; 0 = not set up yet
 	displayName: string,
+	rewardText: string?, -- what a game pass gives, shown on its shop card
 	[string]: any, -- free-form perk data (multiplier, durationMinutes, gems...)
 }
 

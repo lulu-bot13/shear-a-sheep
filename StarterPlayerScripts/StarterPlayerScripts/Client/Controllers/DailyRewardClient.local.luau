@@ -1,6 +1,6 @@
 --[[
-	The Daily Rewards window (StarterGui.DailyRewards): fills the day cards with the server's rewards, marks claimed and today's card,
-	ticks the timer and claims; it opens itself once on join when a reward is waiting. DailyRewardHandler decides everything.
+	The Daily Rewards window (StarterGui.DailyRewards): fills and shines the day cards, marks claimed and today's card, ticks the timer
+	and claims; it opens itself once on join when a reward is waiting. DailyRewardHandler decides everything.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.DailyRewardClient
 ]]--
@@ -8,6 +8,7 @@
 --// Services
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
+local runService = game:GetService("RunService")
 local soundService = game:GetService("SoundService")
 local tweenService = game:GetService("TweenService")
 
@@ -40,7 +41,7 @@ local alertBadge = hudButton and hudButton:FindFirstChild("Alert") :: GuiObject?
 local uiSounds = soundService:WaitForChild("UISounds")
 
 --// Configs
-local CLONED_DAYS = 6 -- days 1 to 6 are cloned from the template; day 7 is the big pre-built card
+local CLONED_DAYS = 6 -- days 1 to 6 are cloned from the template; day 7 is the big pre-built card (its GemIcon is set in Studio)
 -- All the wool icon for now; each day can be swapped for its own image.
 local DAY_ICONS = {
 	[1] = iconIds.Wool,
@@ -49,16 +50,37 @@ local DAY_ICONS = {
 	[4] = iconIds.Wool,
 	[5] = iconIds.Wool,
 	[6] = iconIds.Wool,
-	[7] = iconIds.Wool,
 }
 local CLAIM_SOUND = "Cash" -- in SoundService.UISounds
-local TODAY_OUTLINE_COLOR = Color3.new(1, 1, 1)
-local TODAY_OUTLINE_THICKNESS = 4
 local TODAY_PULSE = TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
-local TODAY_PULSE_TRANSPARENCY = 0.5
+local TODAY_PULSE_SCALE = 1.08 -- of the TodayBadge's resting UIScale
+local CARD_SHINE_INTERVAL = 4 -- seconds between one card's shines; each unclaimed card keeps its own timer
+local SHINE_JITTER = 0.4 -- each wait is the interval +/- up to this fraction of it, so cards drift apart
+local CLAIM_SHINE_INTERVAL = 2.5 -- seconds between Claim button shines, only while a reward is ready
+local SHINE_FIRST_DELAY = 0.3 -- after the window opens; each card's first shine comes at a random point after this
+local ROTATING_SHINE_TAG = "RotatingShine" -- spun by ShineRotate
+local SHINE_SPEED_ATTRIBUTE = "ShineSpeed" -- read by ShineRotate
+local ROTATING_SHINE_SPEED = 30 -- degrees per second; mirrors ShineRotate's default, used when the Shine has no ShineSpeed of its own
+local SPIN_JITTER = 0.3 -- each card's spin speed is its base +/- up to this fraction
+local CARD_ART_NAME = "Background" -- a card's art image; the sweep crosses it, under the card's icons and text
+local SHINE_TWEEN = TweenInfo.new(0.7, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+local SHINE_START = Vector2.new(-1, 0)
+local SHINE_END = Vector2.new(1, 0)
+local SHINE_ROTATION = 25
+local SHINE_WIDTH = 0.14 -- fraction of the gradient the band covers
+local SHINE_TRANSPARENCY = 0.4 -- at the centre of the band
+local SHINE_SEQUENCE = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 1),
+	NumberSequenceKeypoint.new(0.5 - SHINE_WIDTH / 2, 1),
+	NumberSequenceKeypoint.new(0.5, SHINE_TRANSPARENCY),
+	NumberSequenceKeypoint.new(0.5 + SHINE_WIDTH / 2, 1),
+	NumberSequenceKeypoint.new(1, 1),
+})
+-- The art's rounded corners are baked in, so the shine is rounded to match unless the target has its own UICorner.
+local CARD_SHINE_CORNER = UDim.new(0.12, 0)
+local CLAIM_SHINE_CORNER = UDim.new(0.35, 0)
 local CLAIM_LATER_TEXT = "COME BACK LATER"
 local READY_TEXT = "YOUR REWARD IS READY!"
-local GREY_COLOR = Color3.fromRGB(150, 150, 150)
 local GREY_GRADIENT = ColorSequence.new(Color3.fromRGB(175, 175, 175), Color3.fromRGB(115, 115, 115)) -- matches RebirthClient
 local TICK_SECONDS = 0.25
 local REFRESH_RETRY_SECONDS = 2 -- asks again if the state asked for when the timer ran out hasn't come
@@ -75,17 +97,22 @@ local REASON_TEXT = {
 	NotLoaded = "Still loading, try again in a moment",
 }
 
+type Shine = {
+	frame: Frame,
+	gradient: UIGradient,
+	tween: Tween,
+}
+
 type Card = {
 	icon: ImageLabel?,
-	multiplier: TextLabel?,
 	amount: TextLabel?,
 	claimed: GuiObject?,
 	todayBadge: GuiObject?,
-	outline: UIStroke?,
-	outlineColor: Color3,
-	outlineThickness: number,
-	outlineTransparency: number,
+	todayScale: UIScale?,
+	todayBaseScale: number,
 	pulse: Tween?,
+	shine: Shine,
+	shineAt: number, -- os.clock() this card's next shine is due
 }
 
 --// State
@@ -95,72 +122,171 @@ local nextRefreshAt = 0
 local claiming = false
 local claimToken = 0
 local cards: { [number]: Card } = {}
+local shineLoop: RBXScriptConnection? = nil
+local nextClaimShineAt = 0
+local random = Random.new()
 
 local claimLabel: any = if claimButton:IsA("TextButton") and claimButton.Text ~= "" then claimButton
 	else claimButton:FindFirstChildWhichIsA("TextLabel", true) or claimButton
 local claimText = claimLabel.Text
 local claimGradient = claimButton:FindFirstChildOfClass("UIGradient")
 local claimGradientColor = if claimGradient then claimGradient.Color else nil
-local claimColor = claimButton.BackgroundColor3
 
---// Cards ---------------------------------------------------------------------------
+--// Helpers ---------------------------------------------------------------------------
 
 local function findChild(parent: Instance, name: string, className: string): any
 	local child = parent:FindFirstChild(name)
 	return if child and child:IsA(className) then child else nil
 end
 
-local function addCard(frame: Instance)
-	local day = frame:GetAttribute("Day")
-	if not frame:IsA("GuiObject") or type(day) ~= "number" then
+--// Shines ------------------------------------------------------------------------------
+
+-- Just under all of the target's own children (text, icons, overlays), unless the gui sorts ZIndex globally.
+local function getShineZIndex(target: GuiObject): number
+	local gui = target:FindFirstAncestorWhichIsA("LayerCollector")
+	if gui and gui.ZIndexBehavior == Enum.ZIndexBehavior.Global then
+		return target.ZIndex
+	end
+	local lowest: number? = nil
+	for _, child in target:GetChildren() do
+		if child:IsA("GuiObject") then
+			lowest = math.min(lowest or child.ZIndex, child.ZIndex)
+		end
+	end
+	return if lowest then lowest - 1 else 1
+end
+
+-- The first UICorner found on the given instances, in order, else the default.
+local function getCorner(default: UDim, ...: Instance): UDim
+	for _, instance in { ... } do
+		local corner = instance:FindFirstChildOfClass("UICorner")
+		if corner then
+			return corner.CornerRadius
+		end
+	end
+	return default
+end
+
+-- A white frame over the target, cut down to a diagonal band by its gradient; the band crosses it when played.
+local function addShine(target: GuiObject, cornerRadius: UDim): Shine
+	local frame = Instance.new("Frame")
+	frame.Name = "ShineSweep"
+	frame.Size = UDim2.fromScale(1, 1)
+	frame.BackgroundColor3 = Color3.new(1, 1, 1)
+	frame.BorderSizePixel = 0
+	frame.Interactable = false
+	frame.Visible = false
+	frame.ZIndex = getShineZIndex(target)
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = cornerRadius
+	corner.Parent = frame
+
+	local gradient = Instance.new("UIGradient")
+	gradient.Rotation = SHINE_ROTATION
+	gradient.Transparency = SHINE_SEQUENCE
+	gradient.Offset = SHINE_START
+	gradient.Parent = frame
+
+	local tween = tweenService:Create(gradient, SHINE_TWEEN, { Offset = SHINE_END })
+	tween.Completed:Connect(function(playbackState: Enum.PlaybackState)
+		if playbackState == Enum.PlaybackState.Completed then
+			frame.Visible = false
+		end
+	end)
+
+	frame.Parent = target
+	return { frame = frame, gradient = gradient, tween = tween }
+end
+
+local function playShine(shine: Shine)
+	shine.tween:Cancel()
+	shine.gradient.Offset = SHINE_START
+	shine.frame.Visible = true
+	shine.tween:Play()
+end
+
+local function stopShine(shine: Shine)
+	shine.tween:Cancel()
+	shine.frame.Visible = false
+end
+
+--// Cards ---------------------------------------------------------------------------
+
+--[[
+	A card's spinning "Shine" image is handed to ShineRotate with its own starting angle and speed. The day cards are all
+	cloned from DayTemplate in the same frame, so without this they would spin in perfect lockstep. Called before parenting,
+	since ShineRotate reads the starting angle when the tagged clone arrives.
+]]
+local function setUpRotatingShine(card: Instance)
+	local rotatingShine = findChild(card, "Shine", "ImageLabel") :: ImageLabel?
+	if not rotatingShine then
+		return
+	end
+	local studioSpeed = rotatingShine:GetAttribute(SHINE_SPEED_ATTRIBUTE)
+	local baseSpeed = if type(studioSpeed) == "number" then studioSpeed else ROTATING_SHINE_SPEED
+	rotatingShine.Rotation = random:NextNumber(0, 360)
+	rotatingShine:SetAttribute(SHINE_SPEED_ATTRIBUTE, baseSpeed * random:NextNumber(1 - SPIN_JITTER, 1 + SPIN_JITTER))
+	rotatingShine:AddTag(ROTATING_SHINE_TAG)
+end
+
+-- The wait until a card's next shine, a little different each time so the cards never fall into step.
+local function getCardShineWait(): number
+	return CARD_SHINE_INTERVAL * (1 + random:NextNumber(-SHINE_JITTER, SHINE_JITTER))
+end
+
+local function addCard(frame: Instance, day: number)
+	if not frame:IsA("GuiObject") then
 		return
 	end
 
-	local outline = findChild(frame, "Outline", "UIStroke") :: UIStroke?
-	local card: Card = {
+	local art = findChild(frame, CARD_ART_NAME, "GuiObject") :: GuiObject?
+	local shineTarget = art or frame
+	local shineCorner = getCorner(CARD_SHINE_CORNER, shineTarget, frame)
+
+	local todayBadge = findChild(frame, "TodayBadge", "GuiObject") :: GuiObject?
+	local todayScale: UIScale? = nil
+	if todayBadge then
+		todayScale = todayBadge:FindFirstChildOfClass("UIScale") or Instance.new("UIScale")
+		todayScale.Parent = todayBadge
+	end
+	cards[day] = {
 		icon = findChild(frame, "Icon", "ImageLabel"),
-		multiplier = findChild(frame, "Multiplier", "TextLabel"),
-		amount = findChild(frame, "Amount", "TextLabel"),
+		amount = findChild(frame, "Amount", "TextLabel") or findChild(frame, "AmountText", "TextLabel"),
 		claimed = findChild(frame, "Claimed", "GuiObject"),
-		todayBadge = findChild(frame, "TodayBadge", "GuiObject"),
-		outline = outline,
-		outlineColor = if outline then outline.Color else TODAY_OUTLINE_COLOR,
-		outlineThickness = if outline then outline.Thickness else 1,
-		outlineTransparency = if outline then outline.Transparency else 0,
+		todayBadge = todayBadge,
+		todayScale = todayScale,
+		todayBaseScale = if todayScale then todayScale.Scale else 1,
 		pulse = nil,
+		shine = addShine(shineTarget, shineCorner),
+		shineAt = 0,
 	}
-	cards[day] = card
 end
 
--- Today's card gets a white, thicker outline that gently fades in and out; the others keep their Studio outline.
+-- Today's card shows its TodayBadge, gently growing and shrinking; the card art keeps its own border.
 local function setToday(card: Card, isToday: boolean)
 	if card.todayBadge then
 		card.todayBadge.Visible = isToday
 	end
-	local outline = card.outline
-	if not outline then
+	local scale = card.todayScale
+	if not scale then
 		return
 	end
 
-	if isToday then
-		if card.pulse then
-			return
-		end
-		outline.Color = TODAY_OUTLINE_COLOR
-		outline.Thickness = TODAY_OUTLINE_THICKNESS
-		outline.Transparency = 0
-		local pulse = tweenService:Create(outline, TODAY_PULSE, { Transparency = TODAY_PULSE_TRANSPARENCY })
+	if isToday and not card.pulse then
+		local pulse = tweenService:Create(scale, TODAY_PULSE, { Scale = card.todayBaseScale * TODAY_PULSE_SCALE })
 		card.pulse = pulse
 		pulse:Play()
-	else
-		if card.pulse then
-			card.pulse:Cancel()
-			card.pulse = nil
-		end
-		outline.Color = card.outlineColor
-		outline.Thickness = card.outlineThickness
-		outline.Transparency = card.outlineTransparency
+	elseif not isToday and card.pulse then
+		card.pulse:Cancel()
+		card.pulse = nil
+		scale.Scale = card.todayBaseScale
 	end
+end
+
+-- "+N Wool" or "+N Gems", from the reward's kind.
+local function formatReward(reward: any): string
+	return `+{numberFormatter:Format(reward.amount, 1)} {reward.kind}`
 end
 
 local function renderCards()
@@ -177,11 +303,8 @@ local function renderCards()
 			if card.icon then
 				iconUtil.setImage(card.icon, DAY_ICONS[day] or card.icon.Image)
 			end
-			if card.multiplier then
-				card.multiplier.Text = `+ x{string.format("%g", reward.multiplier)} more`
-			end
 			if card.amount then
-				card.amount.Text = `+{numberFormatter:Format(reward.amount, 1)} Wool`
+				card.amount.Text = formatReward(reward)
 			end
 		end
 		if card.claimed then
@@ -205,14 +328,12 @@ local function renderTimer()
 	timerLabel.Text = if state.claimable then READY_TEXT else `NEXT REWARD IN {formatTime(deadline - os.clock())}`
 end
 
--- Greyed out with "COME BACK LATER" while nothing can be claimed; the text stays white either way.
+-- Greyed out through its UIGradient with "COME BACK LATER" while nothing can be claimed; the text stays white either way.
 local function renderClaimButton()
 	local ready = state ~= nil and state.claimable == true
 	claimLabel.Text = if ready then claimText else CLAIM_LATER_TEXT
 	if claimGradient and claimGradientColor then
 		claimGradient.Color = if ready then claimGradientColor else GREY_GRADIENT
-	else
-		claimButton.BackgroundColor3 = if ready then claimColor else GREY_COLOR
 	end
 	claimButton.AutoButtonColor = ready
 end
@@ -238,6 +359,53 @@ local function playClaimSound()
 	if sound and sound:IsA("Sound") then
 		sound:Play()
 	end
+end
+
+--// Shine loop --------------------------------------------------------------------------
+
+local claimShine = addShine(claimButton, getCorner(CLAIM_SHINE_CORNER, claimButton))
+
+-- Each unclaimed card shines on its own jittered timer, and Claim on its own while it's ready.
+local function stepShines()
+	local now = os.clock()
+	for _, card in cards do
+		if now >= card.shineAt then
+			card.shineAt = now + getCardShineWait()
+			if not (card.claimed and card.claimed.Visible) then
+				playShine(card.shine)
+			end
+		end
+	end
+
+	if now >= nextClaimShineAt then
+		nextClaimShineAt = now + CLAIM_SHINE_INTERVAL
+		if state and state.claimable then
+			playShine(claimShine)
+		end
+	end
+end
+
+local function startShines()
+	if shineLoop then
+		return
+	end
+	local firstAt = os.clock() + SHINE_FIRST_DELAY
+	for _, card in cards do
+		card.shineAt = firstAt + random:NextNumber(0, CARD_SHINE_INTERVAL)
+	end
+	nextClaimShineAt = firstAt
+	shineLoop = runService.Heartbeat:Connect(stepShines)
+end
+
+local function stopShines()
+	if shineLoop then
+		shineLoop:Disconnect()
+		shineLoop = nil
+	end
+	for _, card in cards do
+		stopShine(card.shine)
+	end
+	stopShine(claimShine)
 end
 
 --// Auto open ---------------------------------------------------------------------------
@@ -288,16 +456,17 @@ for day = 1, CLONED_DAYS do
 	local clone = dayTemplate:Clone()
 	clone.Name = `Day{day}`
 	clone.LayoutOrder = day
-	clone:SetAttribute("Day", day)
 	local dayLabel = findChild(clone, "DayLabel", "TextLabel") :: TextLabel?
 	if dayLabel then
 		dayLabel.Text = `DAY {day}`
 	end
 	clone.Visible = true
+	setUpRotatingShine(clone)
 	clone.Parent = daysFrame
-	addCard(clone)
+	addCard(clone, day)
 end
-addCard(day7Card)
+setUpRotatingShine(day7Card)
+addCard(day7Card, CLONED_DAYS + 1)
 for _, card in cards do
 	if card.claimed then
 		card.claimed.Visible = false
@@ -313,8 +482,10 @@ local window = windowsManager.register("DailyRewards", {
 	openButton = if hudButton and hudButton:IsA("GuiButton") then hudButton else nil,
 	onOpen = function()
 		render()
+		startShines()
 		network.fireServer(network.RemoteEvents.RequestDailyRewardState)
 	end,
+	onClose = stopShines,
 })
 
 updateHud()
@@ -362,7 +533,7 @@ network.connectEvent(network.RemoteEvents.DailyRewardResult, function(success: b
 	claimToken += 1
 	if success and type(reward) == "table" then
 		playClaimSound()
-		alerts.show(`+{numberFormatter:Format(reward.amount, 1)} Wool!`, "success")
+		alerts.show(`{formatReward(reward)}!`, "success")
 	else
 		alerts.show(REASON_TEXT[reason or ""] or "Couldn't claim the reward", "error")
 	end

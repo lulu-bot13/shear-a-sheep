@@ -1,15 +1,6 @@
 --[[
-	The shear shop UI (StarterGui.Shop).
-
-	Touching the ShearShopHitbox in the CenterPlaza opens the shop; walking away closes it. Each shear in
-	ShearShopUIData gets a card cloned from the Template: name, speed / damage, a spinning
-	3D preview and a purchase button whose price is the sheep-sheared count needed. Buying is validated by the server
-	(ShearShopHandler); the cards update from the player's "ShearId" / "OwnedShears" / "SheepShearedCount" attributes. A shear that is
-	owned shows EQUIP (EquipShear); the equipped one shows UNEQUIP, which switches back to the default shear.
-
-	Performance: the previews are built once (on first open), and ONE render connection
-	exists only while the shop is open. It turns each preview by moving its ViewportFrame
-	camera (no model is moved) and skips cards scrolled out of view.
+	The shear shop UI (StarterGui.Shop), opened by walking into the ShearShopHitbox: one card per shear in a sideways list,
+	with a spinning preview and a Purchase button that unlocks / equips / unequips (the server's ShearShopHandler decides).
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.ShearShopClient
 ]]--
@@ -36,6 +27,7 @@ local shopGui = playerGui:WaitForChild("Shop") :: ScreenGui
 local mainFrame = shopGui:WaitForChild("Main") :: Frame
 local scrollFrame = mainFrame:WaitForChild("ScrollingFrame") :: ScrollingFrame
 local cardTemplate = scrollFrame:WaitForChild("Template") :: Frame
+local layout = scrollFrame:WaitForChild("UIListLayout") :: UIListLayout
 local shopHitbox = workspace:WaitForChild("Base"):WaitForChild("CenterPlaza"):WaitForChild("ShearShop")
 	:WaitForChild("Shack"):WaitForChild("ShearShopHitbox") :: BasePart
 
@@ -47,6 +39,8 @@ local CLOSE_DISTANCE = 6 -- studs outside the hitbox before the shop closes itse
 local DEFAULT_SHEAR_ID = "DefaultShear"
 local DISTANCE_CHECK_SECONDS = 0.25
 local MESSAGE_SECONDS = 1.3
+local CARD_HEIGHT_OF_WINDOW = 1 -- card height as a fraction of the list's visible height; the width follows the Template's aspect
+local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so sizes aren't measured
 local UNLOCKED_ATTRIBUTE = "UnlockedShear" -- on the Shop gui: the highest shear just unlocked, for ShearTutorialClient
 -- Main HUD children (and CurrencyFrame children) left up while the shop is open; Ability is hidden by AbilityClient whenever any window is open.
 local HUD_KEEP = { CurrencyFrame = true, WoolAmount = true, SheepCount = true, Ability = true }
@@ -61,7 +55,7 @@ local REASON_TEXT = {
 type Card = {
 	info: any,
 	frame: Frame,
-	purchase: GuiButton,
+	purchase: ImageButton,
 	purchaseLabel: TextLabel,
 	priceLabel: TextLabel,
 	viewport: ViewportFrame?,
@@ -81,6 +75,15 @@ local spinAngle = 0
 local pendingPurchaseId: string? = nil -- equips reply on the same event, so only this id plays the purchase sound
 local lastSheepSheared: number? = nil -- nil until the saved count first arrives, so joining doesn't announce old unlocks
 local hiddenHud: { GuiObject } = {}
+
+--[[
+	The Template is a fixed-pixel card, so it's resized from the list's visible height to scale with the window.
+	The list's Padding is scale, which in a ScrollingFrame is relative to the canvas width, so it's turned into pixels
+	using the canvas width Studio laid it out on (taken before updateCanvasSize changes it).
+]]
+local designCanvasX = scrollFrame.CanvasSize.X
+local cardAspect = cardTemplate.Size.X.Offset / math.max(cardTemplate.Size.Y.Offset, 1)
+local listPadding = layout.Padding
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -125,23 +128,12 @@ end
 
 local function refreshCard(card: Card)
 	local state = getState(card)
-	local colors = UIData.ButtonColors
+	local styleKey = if state == "equipped" and card.info.id == DEFAULT_SHEAR_ID then "equippedDefault" else state
+	local style = UIData.ButtonStyles[styleKey]
 
 	card.priceLabel.Text = UIData.formatSheep(card.info.sheepRequired)
-
-	if state == "equipped" then
-		card.purchase.BackgroundColor3 = colors.Equipped
-		card.purchaseLabel.Text = if card.info.id == DEFAULT_SHEAR_ID then "EQUIPPED" else "UNEQUIP"
-	elseif state == "owned" then
-		card.purchase.BackgroundColor3 = colors.Owned
-		card.purchaseLabel.Text = "EQUIP"
-	elseif state == "locked" then
-		card.purchase.BackgroundColor3 = colors.Locked
-		card.purchaseLabel.Text = "UNLOCK"
-	else
-		card.purchase.BackgroundColor3 = colors.Ready
-		card.purchaseLabel.Text = "UNLOCK"
-	end
+	card.purchase.ImageColor3 = style.color
+	card.purchaseLabel.Text = style.text
 
 	card.purchase:SetAttribute("State", state)
 end
@@ -196,40 +188,61 @@ end
 
 --// Cards & previews ---------------------------------------------------------------
 
--- Sizes the scroll frame's canvas (Y) to fit every card plus the frame's own padding.
-local function updateCanvasSize()
-	local layout = scrollFrame:FindFirstChildOfClass("UIListLayout")
-	if not layout then
+-- Nil while the window is shrunk to (almost) nothing by its close tween.
+local function getScaleFactor(): number?
+	local factor = windowsManager.getScaleFactor(scrollFrame)
+	return if factor > MIN_SCALE_FACTOR then factor else nil
+end
+
+local function toCanvasPixels(size: UDim, windowWidth: number): UDim
+	local canvasWidth = math.max(windowWidth, designCanvasX.Offset + designCanvasX.Scale * windowWidth)
+	return UDim.new(0, math.floor(size.Offset + size.Scale * canvasWidth))
+end
+
+-- Sizes the cards (and the list's gaps) from the list's visible area, in the window's unscaled pixels.
+local function updateCardSizes()
+	local factor = getScaleFactor()
+	if not factor then
 		return
 	end
 
-	local padding = scrollFrame:FindFirstChildOfClass("UIPadding")
-	local paddingY = 0
-	if padding then
-		local frameHeight = scrollFrame.AbsoluteSize.Y
-		paddingY = padding.PaddingTop.Offset + padding.PaddingTop.Scale * frameHeight
-			+ padding.PaddingBottom.Offset + padding.PaddingBottom.Scale * frameHeight
+	local windowSize = scrollFrame.AbsoluteWindowSize / factor
+	local height = math.floor(windowSize.Y * CARD_HEIGHT_OF_WINDOW)
+	if height <= 0 then
+		return
 	end
 
-	scrollFrame.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + paddingY)
+	local size = UDim2.fromOffset(math.floor(height * cardAspect), height)
+	for _, card in cards do
+		card.frame.Size = size
+	end
+	layout.Padding = toCanvasPixels(listPadding, windowSize.X)
+end
+
+-- Sizes the canvas sideways to fit every card plus the frame's own left / right padding; the list doesn't scroll on Y.
+local function updateCanvasSize()
+	local factor = getScaleFactor()
+	if not factor then
+		return
+	end
+
+	local paddingX = 0
+	local padding = scrollFrame:FindFirstChildOfClass("UIPadding")
+	if padding then
+		local windowWidth = scrollFrame.AbsoluteWindowSize.X / factor
+		paddingX = padding.PaddingLeft.Offset + padding.PaddingLeft.Scale * windowWidth
+			+ padding.PaddingRight.Offset + padding.PaddingRight.Scale * windowWidth
+	end
+
+	local canvasSize = UDim2.fromOffset(math.ceil(layout.AbsoluteContentSize.X / factor + paddingX), 0)
+	if scrollFrame.CanvasSize ~= canvasSize then
+		scrollFrame.CanvasSize = canvasSize
+	end
 end
 
 local function createCards()
 	cardTemplate.Visible = false
-	scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.None
-
-	-- Every card added re-fits the canvas. The layout only measures its content after the child lands, so the
-	-- refresh is deferred; the size-changed hook keeps it right when the window is resized too.
-	scrollFrame.ChildAdded:Connect(function(child: Instance)
-		if child:IsA("GuiObject") then
-			task.defer(updateCanvasSize)
-		end
-	end)
-
-	local listLayout = scrollFrame:FindFirstChildOfClass("UIListLayout")
-	if listLayout then
-		listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvasSize)
-	end
+	scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.None -- updateCanvasSize sizes it instead
 
 	for index, info in UIData.Shears do
 		local frame = cardTemplate:Clone()
@@ -239,16 +252,13 @@ local function createCards()
 
 		local nameLabel = frame:WaitForChild("ShearName") :: TextLabel
 		local buffsLabel = frame:WaitForChild("Buffs") :: TextLabel
-		local purchase = frame:WaitForChild("Purchase") :: GuiButton
+		local purchase = frame:WaitForChild("Purchase") :: ImageButton
+		local purchaseLabel = purchase:WaitForChild("TextLabel") :: TextLabel
 		local priceLabel = frame:WaitForChild("Price") :: TextLabel
-		local purchaseLabel = purchase:WaitForChild("Label") :: TextLabel
 
 		nameLabel.Text = info.displayName
 		buffsLabel.Text = `Damage: {info.damage}\nRange: {info.range} studs`
 		purchase.AutoButtonColor = true
-		if purchase:IsA("TextButton") then
-			purchase.Text = ""
-		end
 
 		local card: Card = {
 			info = info,
@@ -284,10 +294,16 @@ local function createCards()
 		frame.Parent = scrollFrame
 	end
 
+	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvasSize)
+	scrollFrame:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(function()
+		updateCardSizes()
+		updateCanvasSize()
+	end)
+	updateCardSizes()
 	updateCanvasSize()
 end
 
--- Builds the ViewportFrame + model for one card. Only geometry is kept (no scripts, VFX or animation rigs).
+-- Fills the ShearImage's ViewportFrame with the model for one card. Only geometry is kept (no scripts, VFX or animation rigs).
 local function buildPreview(card: Card)
 	local template = shearTemplates:FindFirstChild(card.info.id)
 	local holder = card.frame:FindFirstChild("ShearImage")
@@ -315,10 +331,15 @@ local function buildPreview(card: Card)
 	model.PrimaryPart = model:FindFirstChild("Handle") :: BasePart?
 	model:PivotTo(CFrame.new())
 
-	local viewport = Instance.new("ViewportFrame")
-	viewport.Name = "Preview"
-	viewport.BackgroundTransparency = 1
-	viewport.Size = UDim2.fromScale(1, 1)
+	-- The Template's ShearImage holds an empty placeholder ViewportFrame; one is only made if it's missing.
+	local viewport = holder:FindFirstChildOfClass("ViewportFrame")
+	if not viewport then
+		viewport = Instance.new("ViewportFrame")
+		viewport.Name = "ViewportFrame"
+		viewport.BackgroundTransparency = 1
+		viewport.Size = UDim2.fromScale(1, 1)
+		viewport.Parent = holder
+	end
 	viewport.Ambient = Color3.fromRGB(190, 190, 190)
 	viewport.LightColor = Color3.new(1, 1, 1)
 	viewport.LightDirection = Vector3.new(-1, -1, -1)
@@ -329,7 +350,6 @@ local function buildPreview(card: Card)
 	viewport.CurrentCamera = camera
 
 	model.Parent = viewport
-	viewport.Parent = holder
 
 	local boxCFrame, boxSize = model:GetBoundingBox()
 	card.center = boxCFrame.Position
@@ -357,8 +377,8 @@ local function onRender(deltaTime: number)
 
 	local pitch = UIData.PreviewPitch
 	local flat = math.cos(pitch)
-	local viewTop = scrollFrame.AbsolutePosition.Y
-	local viewBottom = viewTop + scrollFrame.AbsoluteSize.Y
+	local viewStart = scrollFrame.AbsolutePosition
+	local viewEnd = viewStart + scrollFrame.AbsoluteWindowSize
 
 	for _, card in cards do
 		local viewport, camera = card.viewport, card.camera
@@ -366,9 +386,9 @@ local function onRender(deltaTime: number)
 			continue
 		end
 
-		-- Scrolled out of view: nothing to draw, so don't touch it.
-		local top = viewport.AbsolutePosition.Y
-		if top > viewBottom or top + viewport.AbsoluteSize.Y < viewTop then
+		-- Scrolled out of view (either axis): nothing to draw, so don't touch it.
+		local position, size = viewport.AbsolutePosition, viewport.AbsoluteSize
+		if position.X > viewEnd.X or position.X + size.X < viewStart.X or position.Y > viewEnd.Y or position.Y + size.Y < viewStart.Y then
 			continue
 		end
 

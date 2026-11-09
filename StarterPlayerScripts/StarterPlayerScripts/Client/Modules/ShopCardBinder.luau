@@ -10,9 +10,12 @@ local players = game:GetService("Players")
 --// Configs
 local ROBUX_GLYPH = "\u{E002}"
 local OWNED_TEXT = "OWNED"
+local LOADING_TEXT = "..." -- until the live price is known; the Studio text is only a placeholder
+local PRICE_LABEL_NAMES = { "Price", "Label" } -- the Buy button's price label, first match wins
 local PRICE_ATTEMPTS = 3
 local PRICE_RETRY_SECONDS = 2
 local GREY_COLOR = Color3.fromRGB(150, 150, 150)
+local GREY_IMAGE_COLOR = Color3.fromRGB(120, 120, 120) -- multiplies the button's image
 local GREY_GRADIENT = ColorSequence.new(Color3.fromRGB(175, 175, 175), Color3.fromRGB(115, 115, 115))
 
 export type Kind = "GamePass" | "DevProduct"
@@ -45,6 +48,7 @@ export type Card = {
 
 type ButtonLook = {
 	color: Color3,
+	imageColor: Color3?,
 	gradient: UIGradient?,
 	gradientColor: ColorSequence?,
 	autoButtonColor: boolean,
@@ -100,24 +104,31 @@ function ShopCardBinder.getPriceAsync(id: number, kind: Kind): number?
 	return price
 end
 
--- Greys a button out (its UIGradient if it has one, else its colour) or puts its Studio look back.
+-- Greys a button out (its UIGradient if it has one, else its colour; an ImageButton's image too) or puts its Studio look back.
 function ShopCardBinder.setButtonEnabled(button: GuiButton, enabled: boolean)
 	local look = buttonLooks[button]
 	if not look then
 		local gradient = button:FindFirstChildOfClass("UIGradient")
 		look = {
 			color = button.BackgroundColor3,
+			imageColor = if button:IsA("ImageButton") then button.ImageColor3 else nil,
 			gradient = gradient,
 			gradientColor = if gradient then gradient.Color else nil,
 			autoButtonColor = button.AutoButtonColor,
 		}
 		buttonLooks[button] = look
+		button.Destroying:Once(function()
+			buttonLooks[button] = nil
+		end)
 	end
 
 	if look.gradient and look.gradientColor then
 		look.gradient.Color = if enabled then look.gradientColor else GREY_GRADIENT
-	else
+	elseif not look.imageColor then
 		button.BackgroundColor3 = if enabled then look.color else GREY_COLOR
+	end
+	if look.imageColor and button:IsA("ImageButton") then
+		button.ImageColor3 = if enabled then look.imageColor else GREY_IMAGE_COLOR
 	end
 	button.AutoButtonColor = enabled and look.autoButtonColor
 end
@@ -127,27 +138,36 @@ local function findChild(parent: Instance, name: string, className: string): any
 	return if child and child:IsA(className) then child else nil
 end
 
+local function findPriceLabel(buyButton: GuiButton): TextLabel?
+	for _, name in PRICE_LABEL_NAMES do
+		local label = findChild(buyButton, name, "TextLabel")
+		if label then
+			return label
+		end
+	end
+	return nil
+end
+
 -- Binds a card frame to its config item.
 function ShopCardBinder.bind(frame: GuiObject, item: Item, options: Options?): Card
 	local opts: Options = options or {}
 	local formatPrice = opts.formatPrice or ShopCardBinder.formatPrice
 
 	local buyButton = findChild(frame, "Buy", "GuiButton") :: GuiButton?
-	local priceLabel = if buyButton then findChild(buyButton, "Label", "TextLabel") :: TextLabel? else nil
+	local priceLabel = if buyButton then findPriceLabel(buyButton) else nil
 	local giftButton = findChild(frame, "Gift", "GuiButton") :: GuiButton?
 
-	local studioText = if priceLabel then priceLabel.Text else ""
 	local giftZIndex = if giftButton then giftButton.ZIndex else 0
 	local price: number? = nil
 	local owned = false
 	local blocked = false
 	local fetching = false
 
-	-- OWNED beats the price; the Studio text stays until the price is known. An owned Buy stops taking clicks and
+	-- OWNED beats the price, which shows "..." until it's known. An owned Buy stops taking clicks and
 	-- Gift is drawn over it, so where the two overlap the click reaches Gift.
 	local function updateBuy()
 		if priceLabel then
-			priceLabel.Text = if owned then OWNED_TEXT elseif price then formatPrice(price) else studioText
+			priceLabel.Text = if owned then OWNED_TEXT elseif price then formatPrice(price) else LOADING_TEXT
 		end
 		if buyButton then
 			ShopCardBinder.setButtonEnabled(buyButton, not owned and not blocked)

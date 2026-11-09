@@ -49,7 +49,7 @@ export type Data = {
 	AbilityPity: number, -- Ability Shack rolls in a row without an AbilityData.PityRarities ability
 	SheepShearedCount: number, -- lifetime sheep shorn bare (kept through rebirths); unlocks shears
 	BestFind: string, -- SheepData type key of the rarest sheep ever shorn; "" = none yet
-	SheepIndex: { [string]: string }, -- sheep type -> "Found" | "Claimed" (kept through rebirths)
+	SheepIndex: { [string]: string }, -- Index key (sheep type, or "<mutation>:<type>", see SheepData.getIndexKey) -> "Found" | "Claimed" (kept through rebirths)
 	PodiumSheep: { [string]: any }, -- podium name -> SheepHandler.SavedSheep standing on it
 	CrookTutorialDone: number, -- 1 once the Shepherd's Crook tutorial has been shown (a number so it mirrors to an attribute)
 	Settings: { [string]: boolean }, -- SettingsData id -> value (kept through rebirths, Prestiges and /resetdata)

@@ -9,6 +9,7 @@ export type AbilityInfo = {
 	id: string, -- matches its module in Modules.Abilities, client Modules.Abilities and the Animation in Assets.Animations.Abilities
 	name: string,
 	description: string,
+	icon: string?, -- rbxassetid:// shown in the Abilities window; blank or nil hides it
 	rarity: string, -- SheepData.RarityColors key
 	chance: number, -- Ability Shack roll weight; 0 = can't be rolled
 	halloween: boolean?, -- only rollable during Halloween (owners keep and use it any time)
@@ -27,6 +28,7 @@ abilityData.Abilities = {
 		id = "Spin",
 		name = "Spin",
 		description = "Spin with a shear in each hand, shearing everything around you.",
+		icon = "",
 		rarity = "Common",
 		chance = 0,
 		duration = 3,
@@ -42,6 +44,7 @@ abilityData.Abilities = {
 		id = "Smash",
 		name = "Smash",
 		description = "Slam the ground, bursting it upward and shearing every sheep nearby.",
+		icon = "",
 		rarity = "Rare",
 		chance = 45,
 		duration = 1.2,
@@ -58,6 +61,7 @@ abilityData.Abilities = {
 		id = "Clone",
 		name = "Clone",
 		description = "Three clones of you run to the nearest sheep and shear them.",
+		icon = "",
 		rarity = "Epic",
 		chance = 30,
 		duration = 12,
@@ -74,6 +78,7 @@ abilityData.Abilities = {
 		id = "BatOverhaul",
 		name = "Bat Overhaul",
 		description = "A swarm of bats covers your plot while your shears fly at every sheep; when the bats leave, they're all bare.",
+		icon = "",
 		rarity = "Legendary",
 		chance = 18,
 		halloween = true,
@@ -91,6 +96,7 @@ abilityData.Abilities = {
 		id = "Gravity",
 		name = "Gravity",
 		description = "Lift every sheep on your plot into the sky and shake all of their wool out.",
+		icon = "",
 		rarity = "Mythic",
 		chance = 7,
 		duration = 3.6, -- covers the 0.2s start lead + rise + hang + fall

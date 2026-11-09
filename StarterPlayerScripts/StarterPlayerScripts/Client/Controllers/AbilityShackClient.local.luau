@@ -1,5 +1,5 @@
 --[[
-	The Ability Shack at workspace.Base.CenterPlaza.AbilityShack.Podium: the roll carousel (AbilityRollEffect) and the Studio-built Abilities window for rolling and equipping.
+	The Ability Shack at workspace.Base.CenterPlaza.AbilityShack.Podium: the Abilities window (inventory, roll chances, roll buttons) and the roll carousel.
 	Only requests and displays; AbilityShackHandler rolls, spends Gems and equips.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AbilityShackClient
 ]]--
@@ -10,38 +10,29 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local tweenService = game:GetService("TweenService")
 
 --// Modules
-local network = require(replicatedStorage.Shared.Utils.Network)
 local alerts = require(script.Parent.Parent.Modules.Alerts)
+local network = require(replicatedStorage.Shared.Utils.Network)
 local rollEffect = require(script.Parent.Parent.Modules.AbilityRollEffect)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
-
---// Instances
-local player = players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
-local abilitiesGui = playerGui:WaitForChild("Abilities") :: ScreenGui
-local main = abilitiesGui:WaitForChild("Main") :: Frame
-local inventoryList = main:WaitForChild("Inventory") :: ScrollingFrame
-local rollChances = main:WaitForChild("RollChances") :: Frame
-local pityLabel = main:WaitForChild("Pity") :: TextLabel
-local rollBar = main:WaitForChild("RollBar") :: Frame
-local rollButton = rollBar:WaitForChild("Roll") :: TextButton
-local priceLabel = rollBar:WaitForChild("Cost"):WaitForChild("Price") :: TextLabel
-local rollAmount = main:WaitForChild("RollAmount")
-local inventoryTemplate = inventoryList:WaitForChild("Template") :: ImageButton
-local chanceTemplate = rollChances:WaitForChild("Template") :: Frame
 
 --// Configs
 local SHACK_NAME = "AbilityShack"
 local PODIUM_NAME = "Podium"
 local ACTIVE_ATTRIBUTE = "ActiveAbility" -- set by AbilityHandler while an ability runs
-local AMOUNT_ATTRIBUTE = "Amount" -- on the RollAmount buttons
 local WINDOW_NAME = "AbilityShack"
 local ROLL_TIMEOUT = 5 -- seconds without a reply before rolling unlocks again
-local AMOUNT_SELECTED_COLOR = Color3.fromRGB(49, 190, 61)
-local AMOUNT_UNSELECTED_COLOR = Color3.fromRGB(255, 255, 150)
+local PIECE_TIMEOUT = 5 -- seconds to wait for a window piece before warning it's missing
 local BLACK = Color3.fromRGB(0, 0, 0)
 local HALLOWEEN_ONLY_TEXT = "Halloween only" -- a Halloween ability's chance outside Halloween
+local OWNED_TEXT = "OWNED" -- the roll chance card's Equipped badge, shown on abilities already owned
 local UNAVAILABLE_DARKEN = 0.5 -- how much darker a roll chance card is while it can't be rolled
+local UNAFFORDABLE_DARKEN = 0.45 -- how much darker a roll button is while the player can't pay for it
+
+-- Each roll button (art baked in) and how many rolls it buys; Price shows the cost of one roll.
+local ROLL_BUTTONS = {
+	{ buttonName = "RollButton1", amount = 1 },
+	{ buttonName = "RollButton", amount = 5 },
+}
 
 local REASON_TEXT = {
 	NoGems = "Not enough Gems",
@@ -56,6 +47,7 @@ type Entry = {
 	id: string,
 	name: string,
 	description: string,
+	icon: string,
 	rarity: string,
 	color: Color3,
 	cooldown: number,
@@ -69,18 +61,50 @@ type State = {
 	equipped: string,
 	abilities: { Entry },
 	cost: number,
-	pity: number,
-	pityRolls: number,
-	pityLabel: string,
 }
+
+--// Instances
+local player = players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local abilitiesGui = playerGui:WaitForChild("Abilities") :: ScreenGui
+local main = abilitiesGui:WaitForChild("Main") :: Frame
+local inventoryList = main:WaitForChild("Inventory") :: ScrollingFrame
+local inventoryTemplate = inventoryList:WaitForChild("Template") :: ImageButton
+local exitButton = main:WaitForChild("ExitButton") :: ImageButton
+
+-- A window piece that may sit inside Main or beside it in the ScreenGui; warns and returns nil if it never shows up.
+local function findWindowPiece(name: string, className: string): Instance?
+	local deadline = os.clock() + PIECE_TIMEOUT
+	repeat
+		local piece = main:FindFirstChild(name) or abilitiesGui:FindFirstChild(name)
+		if piece and piece:IsA(className) then
+			return piece
+		end
+		task.wait(0.1)
+	until os.clock() >= deadline
+	warn(`AbilityShackClient: {abilitiesGui:GetFullName()} has no {name} ({className}) in Main or the ScreenGui.`)
+	return nil
+end
+
+local rollChances = findWindowPiece("RollChances", "GuiObject") :: GuiObject?
+local rollChancesTemplate = if rollChances then rollChances:FindFirstChild("Template") :: GuiObject? else nil
+local priceLabel = findWindowPiece("Price", "TextLabel") :: TextLabel?
+
+-- Each roll button with its Studio ImageColor3 (before dimming) and the rolls it buys.
+local rollButtons: { { button: ImageButton, baseColor: Color3, amount: number } } = {}
+for _, config in ROLL_BUTTONS do
+	local button = findWindowPiece(config.buttonName, "ImageButton") :: ImageButton?
+	if button then
+		table.insert(rollButtons, { button = button, baseColor = button.ImageColor3, amount = config.amount })
+	end
+end
 
 --// State
 local state: State? = nil
-local queuedState: State? = nil -- held back while a roll plays so the board and window don't spoil the result
+local queuedState: State? = nil -- held back while a roll plays so the window doesn't spoil the result
 local rolling = false
 local revealing = false
 local rollToken = 0
-local selectedAmount = 1
 local pendingEquip: string? = nil
 local podiumConnections: { RBXScriptConnection } = {}
 
@@ -97,11 +121,17 @@ end
 
 local function shake(button: GuiObject)
 	task.spawn(function()
+		local rest = button.Rotation
 		for _, angle in { -3, 3, -2, 2, 0 } do
-			tweenService:Create(button, TweenInfo.new(0.04), { Rotation = angle }):Play()
+			tweenService:Create(button, TweenInfo.new(0.04), { Rotation = rest + angle }):Play()
 			task.wait(0.04)
 		end
 	end)
+end
+
+local function getGems(): number
+	local gems = player:GetAttribute("Gems")
+	return if type(gems) == "number" then gems else 0
 end
 
 local function getEntry(id: any): Entry?
@@ -117,11 +147,18 @@ local function getEntry(id: any): Entry?
 	return nil
 end
 
-local function getRollablePool(): { Entry }
-	local pool = {}
+local function getRollablePool(): { rollEffect.Entry }
+	local pool: { rollEffect.Entry } = {}
 	for _, entry in (if state then state.abilities else {}) :: { Entry } do
 		if entry.chance > 0 then
-			table.insert(pool, entry)
+			table.insert(pool, {
+				id = entry.id,
+				name = entry.name,
+				rarity = entry.rarity,
+				color = entry.color,
+				chance = entry.chance,
+				icon = entry.icon,
+			})
 		end
 	end
 	return pool
@@ -161,7 +198,29 @@ local function setText(parent: Instance, name: string, text: string)
 	end
 end
 
---// Podium ----------------------------------------------------------------------
+-- Fills a card cloned from either Template: name, rarity text, icon and background colour.
+local function fillCard(card: GuiObject, entry: Entry, rarityText: string, color: Color3)
+	card.Name = entry.id
+	card.BackgroundColor3 = color
+	card.Visible = true
+	setText(card, "AbilityName", entry.name)
+	setText(card, "Rarity", rarityText)
+	local icon = card:FindFirstChild("Icon")
+	if icon and icon:IsA("ImageLabel") then
+		icon.Image = entry.icon
+		icon.Visible = entry.icon ~= ""
+	end
+end
+
+local function setBadge(card: GuiObject, visible: boolean, text: string?)
+	local badge = card:FindFirstChild("Equipped")
+	if badge and badge:IsA("TextLabel") then
+		badge.Visible = visible
+		if text then
+			badge.Text = text
+		end
+	end
+end
 
 local function getPodiumPart(podium: Instance): BasePart?
 	if podium:IsA("BasePart") then
@@ -174,27 +233,43 @@ end
 
 --// Abilities window --------------------------------------------------------------
 
+local refreshWindow: () -> ()
+
+-- Pieces beside Main (not inside it) pop in and out with it.
+local extraFrames: { GuiObject } = {}
+for _, piece in { rollChances, priceLabel } :: { GuiObject? } do
+	if piece and not piece:IsDescendantOf(main) then
+		table.insert(extraFrames, piece)
+	end
+end
+for _, roll in rollButtons do
+	if not roll.button:IsDescendantOf(main) then
+		table.insert(extraFrames, roll.button)
+	end
+end
+
 local window = windowsManager.register(WINDOW_NAME, {
 	gui = abilitiesGui,
 	frame = main,
+	extraFrames = extraFrames,
+	closeButton = exitButton,
 	onOpen = function()
+		refreshWindow()
 		network.fireServer(network.RemoteEvents.RequestAbilityState)
 	end,
 })
 
-local function onEquipClicked(id: string, button: GuiObject)
+local function onCardClicked(id: string, card: GuiObject)
 	local current = state
 	local entry = getEntry(id)
-	if not current or not entry then
+	if not current or not entry or id == current.equipped then
 		return
 	elseif not entry.owned then
-		shake(button)
+		shake(card)
 		alerts.show(REASON_TEXT.NotOwned, "error")
 		return
-	elseif id == current.equipped then
-		return
 	elseif player:GetAttribute(ACTIVE_ATTRIBUTE) ~= nil then
-		shake(button)
+		shake(card)
 		alerts.show(REASON_TEXT.Active, "error")
 		return
 	end
@@ -203,6 +278,7 @@ local function onEquipClicked(id: string, button: GuiObject)
 	network.fireServer(network.RemoteEvents.EquipAbility, id)
 end
 
+-- Every owned ability; clicking one equips it.
 local function refreshInventory(current: State)
 	clearClones(inventoryList)
 	for index, entry in current.abilities do
@@ -211,85 +287,69 @@ local function refreshInventory(current: State)
 		end
 
 		local card = inventoryTemplate:Clone()
-		card.Name = entry.id
 		card.LayoutOrder = index
-		card.BackgroundColor3 = entry.color
-		card.Visible = true
-		setText(card, "AbilityName", entry.name)
-		setText(card, "Rarity", entry.rarity)
-		local badge = card:FindFirstChild("Equipped")
-		if badge and badge:IsA("GuiObject") then
-			badge.Visible = entry.id == current.equipped
-		end
+		fillCard(card, entry, entry.rarity, entry.color)
+		setBadge(card, entry.id == current.equipped)
 		card.Activated:Connect(function()
-			onEquipClicked(entry.id, card)
+			onCardClicked(entry.id, card)
 		end)
 		card.Parent = inventoryList
 	end
 end
 
+-- Every ability a roll can land on, with its chance; Halloween abilities stay listed (dimmed) outside Halloween.
 local function refreshRollChances(current: State)
-	clearClones(rollChances)
+	local list, template = rollChances, rollChancesTemplate
+	if not list or not template then
+		return
+	end
+
+	clearClones(list)
 	for index, entry in current.abilities do
-		-- Halloween abilities stay listed (dimmed) outside Halloween; anything else that can't roll is hidden.
 		local halloweenOnly = entry.halloween and entry.chance <= 0
 		if entry.chance <= 0 and not halloweenOnly then
 			continue
 		end
 
-		local card = chanceTemplate:Clone()
-		card.Name = entry.id
+		local card = template:Clone()
 		card.LayoutOrder = index
-		card.BackgroundColor3 = if halloweenOnly then entry.color:Lerp(BLACK, UNAVAILABLE_DARKEN) else entry.color
-		card.Visible = true
-		setText(card, "AbilityName", entry.name)
-		setText(card, "Rarity", entry.rarity)
-		local chance = card:FindFirstChild("Chance")
-		if chance and chance:IsA("TextLabel") then
-			chance.Text = if halloweenOnly then HALLOWEEN_ONLY_TEXT else formatPercent(entry.chance)
-			chance.Visible = true
-		end
-		local badge = card:FindFirstChild("Owned")
-		if badge and badge:IsA("GuiObject") then
-			badge.Visible = entry.owned
-		end
-		card.Parent = rollChances
+		fillCard(
+			card,
+			entry,
+			if halloweenOnly then HALLOWEEN_ONLY_TEXT else `{entry.rarity} - {formatPercent(entry.chance)}`,
+			if halloweenOnly then entry.color:Lerp(BLACK, UNAVAILABLE_DARKEN) else entry.color
+		)
+		setBadge(card, entry.owned, OWNED_TEXT)
+		card.Parent = list
 	end
 end
 
-local function refreshPity(current: State)
-	local rollsLeft = math.max(current.pityRolls - current.pity, 1)
-	pityLabel.Text = if rollsLeft <= 1
-		then `Next roll: guaranteed {current.pityLabel}!`
-		else `Guaranteed {current.pityLabel} in {rollsLeft} rolls`
-end
-
-local function refreshPrice()
+-- The price of one roll, with each roll button dimmed while the player's Gems can't cover it.
+local function refreshPrices()
 	local current = state
-	if current then
-		priceLabel.Text = formatWithCommas(current.cost * selectedAmount)
+	if not current then
+		return
+	end
+	if priceLabel then
+		priceLabel.Text = formatWithCommas(current.cost)
+	end
+	local gems = getGems()
+	for _, roll in rollButtons do
+		local cost = current.cost * roll.amount
+		roll.button.ImageColor3 = if gems < cost
+			then roll.baseColor:Lerp(BLACK, UNAFFORDABLE_DARKEN)
+			else roll.baseColor
 	end
 end
 
-local function refreshAmountButtons()
-	for _, button in rollAmount:GetChildren() do
-		local amount = button:GetAttribute(AMOUNT_ATTRIBUTE)
-		if button:IsA("GuiButton") and type(amount) == "number" then
-			button.BackgroundColor3 = if amount == selectedAmount then AMOUNT_SELECTED_COLOR else AMOUNT_UNSELECTED_COLOR
-		end
-	end
-	refreshPrice()
-end
-
-local function refreshWindow()
+function refreshWindow()
 	local current = state
 	if not current then
 		return
 	end
 	refreshInventory(current)
 	refreshRollChances(current)
-	refreshPity(current)
-	refreshPrice()
+	refreshPrices()
 end
 
 --// Rolling ------------------------------------------------------------------------
@@ -314,13 +374,13 @@ local function finishRoll()
 	end
 end
 
-local function requestRoll(amount: number)
+local function requestRoll(amount: number, button: GuiObject)
 	if rolling then
 		return
 	end
 	local current = state
-	local gems = player:GetAttribute("Gems")
-	if current and (if type(gems) == "number" then gems else 0) < current.cost * amount then
+	if current and getGems() < current.cost * amount then
+		shake(button)
 		alerts.show(REASON_TEXT.NoGems, "error")
 		return
 	end
@@ -371,7 +431,13 @@ local function onRollResult(result: any)
 		local first = if type(result.results) == "table" then result.results[1] else nil
 		local entry = if first then getEntry(first.id) else nil
 		local roller = result.roller
-		if roller ~= player and typeof(roller) == "Instance" and roller:IsA("Player") and roller.Character and entry then
+		if
+			roller ~= player
+			and typeof(roller) == "Instance"
+			and roller:IsA("Player")
+			and roller.Character
+			and entry
+		then
 			rollEffect.playSpectator(roller.Character, getRollablePool(), entry)
 		end
 		return
@@ -390,7 +456,7 @@ local function onState(newState: any, reason: any)
 		alerts.show(REASON_TEXT[reason] or reason, "error")
 		pendingEquip = nil
 	end
-	if type(newState) ~= "table" then
+	if type(newState) ~= "table" or type(newState.abilities) ~= "table" then
 		return
 	end
 
@@ -401,20 +467,13 @@ local function onState(newState: any, reason: any)
 	end
 end
 
-rollButton.Activated:Connect(function()
-	requestRoll(selectedAmount)
-end)
-
-for _, button in rollAmount:GetChildren() do
-	local amount = button:GetAttribute(AMOUNT_ATTRIBUTE)
-	if button:IsA("GuiButton") and type(amount) == "number" then
-		button.Activated:Connect(function()
-			selectedAmount = amount
-			refreshAmountButtons()
-		end)
-	end
+for _, roll in rollButtons do
+	roll.button.Activated:Connect(function()
+		requestRoll(roll.amount, roll.button)
+	end)
 end
-refreshAmountButtons()
+
+player:GetAttributeChangedSignal("Gems"):Connect(refreshPrices)
 
 --// Podium binding ---------------------------------------------------------------
 
@@ -425,10 +484,6 @@ local function onPodiumTouched(hit: BasePart)
 		return
 	end
 	window.open()
-end
-
-local function bindPodium(part: BasePart)
-	table.insert(podiumConnections, part.Touched:Connect(onPodiumTouched))
 end
 
 local function unbindPodium()
@@ -454,7 +509,7 @@ local function watchPodium()
 			continue
 		end
 
-		bindPodium(part)
+		table.insert(podiumConnections, part.Touched:Connect(onPodiumTouched))
 		while podium.Parent == shack and part:IsDescendantOf(shack) do
 			part.AncestryChanged:Wait()
 		end

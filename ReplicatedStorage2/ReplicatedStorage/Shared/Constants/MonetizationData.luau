@@ -14,7 +14,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local MonetizationConfig = require(replicatedStorage.Shared.Utils.MonetizationConfig)
 
 export type Kind = MonetizationConfig.Kind
-export type Item = MonetizationConfig.Item -- id 0 = not set up yet; perks: multiplier, durationMinutes, gems
+export type Item = MonetizationConfig.Item -- id 0 = not set up yet; perks: multiplier, durationMinutes, gems; rewardText for passes
 
 return MonetizationConfig.create({
 	--// Game passes
@@ -24,6 +24,7 @@ return MonetizationConfig.create({
 		giftable = true,
 		giftProductId = 3726902421,
 		displayName = "2x WOOL",
+		rewardText = "2x wool every shear",
 		multiplier = 2,
 	},
 	DoubleLuck = {
@@ -32,6 +33,7 @@ return MonetizationConfig.create({
 		giftable = true,
 		giftProductId = 3726902227,
 		displayName = "2x LUCK",
+		rewardText = "Higher chance for rare sheep to spawn!",
 		multiplier = 2,
 	},
 	AutoShears = {
@@ -40,6 +42,7 @@ return MonetizationConfig.create({
 		giftable = true,
 		giftProductId = 3726902027,
 		displayName = "AUTO SHEARS",
+		rewardText = "No more need for clicking!",
 	},
 
 	--// Boosts (developer products)
@@ -77,6 +80,14 @@ return MonetizationConfig.create({
 		giftProductId = 3726862793, -- shared: a picked gift reroutes the purchase (GiftService)
 		displayName = "CHEST OF GEMS",
 		gems = 150,
+	},
+	GemsBig = {
+		kind = "DevProduct",
+		id = 3729615295,
+		giftable = true,
+		giftProductId = 3729615295, -- shared: a picked gift reroutes the purchase (GiftService)
+		displayName = "BAG OF GEMS",
+		gems = 100,
 	},
 	GemsMedium = {
 		kind = "DevProduct",

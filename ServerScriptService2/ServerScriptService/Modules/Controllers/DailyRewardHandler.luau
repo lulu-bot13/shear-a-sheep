@@ -16,6 +16,7 @@ local runService = game:GetService("RunService")
 local network = require(replicatedStorage.Shared.Utils.Network)
 local DailyRewardData = require(script.Parent.Parent.Constants.DailyRewardData)
 local Analytics = require(script.Parent.Analytics)
+local GemHandler = require(script.Parent.GemHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 
 --// Configs
@@ -108,7 +109,11 @@ function DailyRewardHandler.claim(player: Player): (boolean, string?, DailyRewar
 		PlayerDataHandler.set(player, "DailyCycles", cycles + 1)
 	end
 
-	PlayerDataHandler.increment(player, reward.kind, reward.amount)
+	if reward.kind == "Gems" then
+		GemHandler.give(player, reward.amount)
+	else
+		PlayerDataHandler.increment(player, reward.kind, reward.amount)
+	end
 	Analytics.dailyRewardClaimed(player, reward.day, reward.kind, reward.amount, streak + 1)
 	return true, nil, reward
 end

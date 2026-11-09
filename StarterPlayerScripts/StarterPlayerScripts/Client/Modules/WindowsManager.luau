@@ -29,6 +29,7 @@ export type WindowOptions = {
 	frame: GuiObject,
 	openButton: GuiButton?, -- toggles the window
 	closeButton: GuiButton?, -- closes the window; defaults to the frame's "Exit" button
+	extraFrames: { GuiObject }?, -- other frames in the gui that pop in and out with the window
 	onOpen: (() -> ())?,
 	onClose: (() -> ())?,
 }
@@ -112,30 +113,47 @@ function WindowsManager.getScaleFactor(guiObject: Instance): number
 	return factor
 end
 
-function WindowsManager.register(name: string, options: WindowOptions): Window
-	local gui, frame = options.gui, options.frame
+type ScaledFrame = {
+	frame: GuiObject,
+	uiScale: UIScale,
+	baseScale: number,
+}
 
-	-- A Studio-built UIScale keeps its value as the open size; otherwise one is added at 1.
+-- A Studio-built UIScale keeps its value as the open size; otherwise one is added at 1.
+local function getScaledFrame(frame: GuiObject): ScaledFrame
 	local scale = frame:FindFirstChildOfClass("UIScale")
 	if not scale then
 		scale = Instance.new("UIScale")
 		scale.Parent = frame
 	end
 	local uiScale = scale :: UIScale
-	local baseScale = uiScale.Scale
+	return { frame = frame, uiScale = uiScale, baseScale = uiScale.Scale }
+end
+
+function WindowsManager.register(name: string, options: WindowOptions): Window
+	local gui, frame = options.gui, options.frame
+
+	local scaledFrames = { getScaledFrame(frame) } -- the window's own frame first
+	for _, extra in options.extraFrames or {} do
+		table.insert(scaledFrames, getScaledFrame(extra))
+	end
 
 	local isOpen = false
 	local token = 0
-	local tween: Tween? = nil
+	local tweens: { Tween } = {}
 
-	local function playTween(info: TweenInfo, target: number): Tween
-		if tween then
+	-- Tweens every frame to its open size (or to 0) and returns the window frame's tween.
+	local function playTweens(info: TweenInfo, opening: boolean): Tween
+		for _, tween in tweens do
 			tween:Cancel()
 		end
-		local newTween = tweenService:Create(uiScale, info, { Scale = target })
-		tween = newTween
-		newTween:Play()
-		return newTween
+		table.clear(tweens)
+		for _, scaled in scaledFrames do
+			local tween = tweenService:Create(scaled.uiScale, info, { Scale = if opening then scaled.baseScale else 0 })
+			table.insert(tweens, tween)
+			tween:Play()
+		end
+		return tweens[1]
 	end
 
 	local window: Window
@@ -148,12 +166,14 @@ function WindowsManager.register(name: string, options: WindowOptions): Window
 
 		isOpen = true
 		token += 1
-		if not gui.Enabled or not frame.Visible then
-			uiScale.Scale = baseScale * OPEN_FROM_SCALE
+		for _, scaled in scaledFrames do
+			if not gui.Enabled or not scaled.frame.Visible then
+				scaled.uiScale.Scale = scaled.baseScale * OPEN_FROM_SCALE
+			end
+			scaled.frame.Visible = true
 		end
 		gui.Enabled = true
-		frame.Visible = true
-		playTween(OPEN_TWEEN, baseScale)
+		playTweens(OPEN_TWEEN, true)
 		updateBlur()
 		opened:Fire(name)
 
@@ -170,11 +190,13 @@ function WindowsManager.register(name: string, options: WindowOptions): Window
 		isOpen = false
 		token += 1
 		local closeToken = token
-		playTween(CLOSE_TWEEN, 0).Completed:Once(function(state)
+		playTweens(CLOSE_TWEEN, false).Completed:Once(function(state)
 			if state == Enum.PlaybackState.Completed and closeToken == token then
-				frame.Visible = false
+				for _, scaled in scaledFrames do
+					scaled.frame.Visible = false
+					scaled.uiScale.Scale = scaled.baseScale
+				end
 				gui.Enabled = false
-				uiScale.Scale = baseScale
 			end
 		end)
 		updateBlur()
@@ -204,7 +226,9 @@ function WindowsManager.register(name: string, options: WindowOptions): Window
 	-- Kept across respawns: a reset would swap in a fresh copy and leave the window driving the destroyed one.
 	gui.ResetOnSpawn = false
 	gui.Enabled = false
-	frame.Visible = false
+	for _, scaled in scaledFrames do
+		scaled.frame.Visible = false
+	end
 
 	local exitButton = options.closeButton or frame:FindFirstChild(EXIT_BUTTON_NAME, true)
 	if exitButton and exitButton:IsA("GuiButton") then

@@ -28,7 +28,8 @@ local WoolData = require(replicatedStorage.Shared.Constants.WoolData)
 --// References
 local sheepModels = replicatedStorage.Assets.Models.Sheeps
 local sheepHudTemplate = replicatedStorage.Assets.UI.SheepHUD :: BillboardGui
-local sheepHudNameLabel = sheepHudTemplate:FindFirstChild("NameLabel", true) :: TextLabel? -- the health bar copies its font
+local healthHudTemplate = replicatedStorage.Assets.UI.SheepProgression :: BillboardGui -- SheepHealthBarClient animates its Bar
+local healthHudSize = healthHudTemplate.Size
 local hudStudsOffset = sheepHudTemplate.StudsOffset
 local hudWorldOffset = sheepHudTemplate.StudsOffsetWorldSpace
 local hudSize = sheepHudTemplate.Size
@@ -60,11 +61,8 @@ local SIZE_COLOR = "SizeColor" -- the tier's name colour; nil for plain sizes
 local WEIGHT = "Weight" -- kg
 local SPAWNED_AT = "SpawnedAt" -- server time, so clients only celebrate fresh spawns (not ones streaming in)
 local HEALTH_HUD_NAME = "HealthHUD"
-local HEALTH_HUD_SIZE = UDim2.fromScale(4.5, 1.3) -- studs
 local HUD_SCALE = 0.75 -- billboard size for adult and Giant sheep (and Normal/Huge sizes), times the full size
 local FULL_HUD_SIZE_TIER = "Tiny" -- SheepSizeData tier whose billboards stay full size, like babies'
-local HEALTH_FULL_COLOR = Color3.fromRGB(110, 220, 120)
-local HEALTH_EMPTY_COLOR = Color3.fromRGB(230, 90, 80)
 local WALK_MIN_SPEED = 0.1 -- below this the sheep counts as standing still
 local IDLE_FADE_SECONDS = 0.2
 local TAIL_PART_NAME = "Tail" -- used for tail VFX when the model has one; otherwise the back of the Torso
@@ -395,63 +393,14 @@ end
 
 --// Health bar ------------------------------------------------------------------------------
 
--- Builds the health billboard once per model; it sits where the info card does and takes its place while damaged.
+-- Clones the SheepProgression billboard once per model; it sits where the info card does and takes its place while damaged.
 local function createHealthHud(root: BasePart)
-	local font = sheepHudNameLabel and sheepHudNameLabel.FontFace or Font.fromEnum(Enum.Font.GothamBold)
-
-	local hud = Instance.new("BillboardGui")
+	local hud = healthHudTemplate:Clone()
 	hud.Name = HEALTH_HUD_NAME
-	hud.Size = HEALTH_HUD_SIZE
 	hud.StudsOffset = sheepHudTemplate.StudsOffset
 	hud.StudsOffsetWorldSpace = sheepHudTemplate.StudsOffsetWorldSpace
-	hud.MaxDistance = sheepHudTemplate.MaxDistance
-	hud.LightInfluence = 0
 	hud.Enabled = false
 	hud.Adornee = root
-
-	local nameLabel = Instance.new("TextLabel")
-	nameLabel.Name = "NameLabel"
-	nameLabel.BackgroundTransparency = 1
-	nameLabel.Size = UDim2.fromScale(1, 0.42)
-	nameLabel.TextScaled = true
-	nameLabel.RichText = true
-	nameLabel.Parent = hud -- coloured by SheepStyle on spawn
-	local nameStroke = Instance.new("UIStroke")
-	nameStroke.Thickness = 2
-	nameStroke.Parent = nameLabel
-
-	local bar = Instance.new("Frame")
-	bar.Name = "Bar"
-	bar.Position = UDim2.fromScale(0, 0.5)
-	bar.Size = UDim2.fromScale(1, 0.5)
-	bar.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
-	bar.Parent = hud
-	Instance.new("UICorner", bar).CornerRadius = UDim.new(0.5, 0)
-	local barStroke = Instance.new("UIStroke")
-	barStroke.Thickness = 2
-	barStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	barStroke.Parent = bar
-
-	local fill = Instance.new("Frame")
-	fill.Name = "Fill"
-	fill.Size = UDim2.fromScale(1, 1)
-	fill.BorderSizePixel = 0
-	fill.Parent = bar
-	Instance.new("UICorner", fill).CornerRadius = UDim.new(0.5, 0)
-
-	local healthText = Instance.new("TextLabel")
-	healthText.Name = "HealthText"
-	healthText.BackgroundTransparency = 1
-	healthText.Size = UDim2.fromScale(1, 1)
-	healthText.FontFace = font
-	healthText.TextScaled = true
-	healthText.TextColor3 = Color3.new(1, 1, 1)
-	healthText.ZIndex = 2
-	healthText.Parent = bar
-	local textStroke = Instance.new("UIStroke")
-	textStroke.Thickness = 1.5
-	textStroke.Parent = healthText
-
 	hud.Parent = root
 end
 
@@ -472,21 +421,8 @@ local function updateHealthHud(sheep: Model)
 		return
 	end
 
-	local ratio = math.clamp(health / maxHealth, 0, 1)
-	local nameLabel = hud:FindFirstChild("NameLabel") :: TextLabel
-	local bar = hud:FindFirstChild("Bar") :: Frame
-	local fill = bar:FindFirstChild("Fill") :: Frame
-	local healthText = bar:FindFirstChild("HealthText") :: TextLabel
-
-	local sheepType = sheep:GetAttribute("SheepType")
-	local info = if type(sheepType) == "string" then SheepData.getInfo(sheepType) else nil
-	nameLabel.Text = if info
-		then formatName(info.name, SheepSizeData.get(sheep:GetAttribute(SIZE_TIER)), info.baby)
-		else tostring(sheep:GetAttribute("SheepName") or "Sheep")
-	fill.Size = UDim2.fromScale(ratio, 1)
-	fill.Visible = ratio > 0
-	fill.BackgroundColor3 = HEALTH_EMPTY_COLOR:Lerp(HEALTH_FULL_COLOR, ratio)
-	healthText.Text = `{math.ceil(health)} / {maxHealth}`
+	local progress = hud:FindFirstChild("Progress", true) :: TextLabel
+	progress.Text = `{math.ceil(health)} / {maxHealth}`
 end
 
 --// Animation -----------------------------------------------------------------------------
@@ -912,9 +848,7 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 	local mutationLuck = if mutation then mutation.luck else 1
 	local healthHud = root:FindFirstChild(HEALTH_HUD_NAME)
 	if healthHud and healthHud:IsA("BillboardGui") then
-		local healthName = healthHud:FindFirstChild("NameLabel") :: TextLabel
-		placeHud(healthHud, scaleRatio, HEALTH_HUD_SIZE, getHudScale(info, size))
-		SheepStyle.apply(healthName, SheepStyle.getMood(info.rarity, info.baby))
+		placeHud(healthHud, scaleRatio, healthHudSize, getHudScale(info, size))
 	end
 
 	nextSheepId += 1
@@ -1097,9 +1031,7 @@ function SheepHandler.loadSheep(player: Player, saved: any): Model?
 	local scaleRatio = getScaleRatio(sheepModel)
 	local healthHud = root:FindFirstChild(HEALTH_HUD_NAME)
 	if healthHud and healthHud:IsA("BillboardGui") then
-		local healthName = healthHud:FindFirstChild("NameLabel") :: TextLabel
-		placeHud(healthHud, scaleRatio, HEALTH_HUD_SIZE, getHudScale(info, size))
-		SheepStyle.apply(healthName, SheepStyle.getMood(info.rarity, info.baby))
+		placeHud(healthHud, scaleRatio, healthHudSize, getHudScale(info, size))
 	end
 
 	local odds = if type(saved.odds) == "string" then saved.odds else ""

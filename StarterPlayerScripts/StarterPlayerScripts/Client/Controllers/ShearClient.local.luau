@@ -59,12 +59,12 @@ local DAMAGE_HEIGHT = 3 -- studs above the sheep's root the number starts
 local ELECTRIC_BURST_COUNT = 18
 local POOF_DEFAULT_EMIT_COUNT = 20 -- used when an emitter in the poof has no "EmitCount" attribute
 
---// Torso flash
-local WOOL_PART_NAME = "Torso" -- the sheep's wool mesh
+--// Wool flash
+local WOOL_PART_NAME = "Torso" -- the sheep's wool mesh, unless it has a separate Wool part
+local SEPARATE_WOOL_NAME = "Wool"
 local FLASH_COLOR = Color3.new(1, 1, 1)
-local FLASH_START_TRANSPARENCY = 0.35
-local FLASH_OUTLINE_START_TRANSPARENCY = 0.3
-local FLASH_TWEEN = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local FLASH_START_TRANSPARENCY = 0.15
+local FLASH_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 --// Screen outline flash: shearing a rare, mutated or Luck sheep bare pulses the images in Main.ScreenOutline
 local OUTLINE_NAME = "ScreenOutline"
@@ -111,6 +111,7 @@ local nextSwingAt = 0
 local nextRangeCheck = 0
 local rangeHighlights: { [Model]: Highlight } = {}
 local idleRangeHighlights: { Highlight } = {}
+local woolFlashTokens: { [Model]: number } = {} -- the latest wool flash per sheep, so only it re-enables the range highlight
 local autoShear = false -- kept for the session, across respawns
 local autoPassPrompted = false -- the toggle prompted the pass, so buying it turns Auto Shear on
 local hudGui: ScreenGui? = nil -- Main, rebuilt on respawn; TutorialClient disables it, which also pauses auto shear
@@ -230,6 +231,7 @@ local function hideRangeHighlight(sheep: Model)
 	end
 
 	rangeHighlights[sheep] = nil
+	highlight.Enabled = true -- a wool flash may have switched it off
 	highlight.Adornee = nil
 	highlight.Parent = poolFolder
 	table.insert(idleRangeHighlights, highlight)
@@ -617,22 +619,37 @@ end
 
 --// Hit feedback -------------------------------------------------------------------
 
--- The sheep's wool flashes white for a moment.
-local function flashTorso(sheep: Model)
-	local torso = sheep:FindFirstChild(WOOL_PART_NAME)
-	if not torso or not torso:IsA("BasePart") then
+-- The sheep's wool flashes white for a moment; its range highlight steps aside meanwhile so the two don't clash.
+local function flashWool(sheep: Model)
+	local wool = sheep:FindFirstChild(SEPARATE_WOOL_NAME) or sheep:FindFirstChild(WOOL_PART_NAME)
+	if not wool or not wool:IsA("BasePart") then
 		return
 	end
 
+	local token = (woolFlashTokens[sheep] or 0) + 1
+	woolFlashTokens[sheep] = token
+	local rangeHighlight = rangeHighlights[sheep]
+	if rangeHighlight then
+		rangeHighlight.Enabled = false
+	end
+
 	local flash = acquireFlash()
-	flash.Adornee = torso
+	flash.Adornee = wool
 	flash.FillTransparency = FLASH_START_TRANSPARENCY
-	flash.OutlineTransparency = FLASH_OUTLINE_START_TRANSPARENCY
+	flash.OutlineTransparency = 0
 	flash.Parent = workspace
 
 	local tween = tweenService:Create(flash, FLASH_TWEEN, { FillTransparency = 1, OutlineTransparency = 1 })
 	tween.Completed:Once(function()
 		releaseFlash(flash)
+		-- Only the latest flash on this sheep brings its range highlight back.
+		if woolFlashTokens[sheep] == token then
+			woolFlashTokens[sheep] = nil
+			local current = rangeHighlights[sheep]
+			if current then
+				current.Enabled = true
+			end
+		end
 	end)
 	tween:Play()
 end
@@ -801,7 +818,7 @@ local function onShearHit(hits: { { sheep: Model?, position: Vector3, damage: nu
 		-- No sheep means this blow sheared it bare (it is already gone), so it gets the bigger burst and the poof.
 		local sheep = hit.sheep
 		if sheep and sheep:IsDescendantOf(workspace) then
-			flashTorso(sheep)
+			flashWool(sheep)
 			throwWool(hit.position, hit.color, settings.effectCount(WOOL_CHUNKS_PER_HIT))
 		else
 			throwWool(hit.position, hit.color, settings.effectCount(WOOL_CHUNKS_FINISH))

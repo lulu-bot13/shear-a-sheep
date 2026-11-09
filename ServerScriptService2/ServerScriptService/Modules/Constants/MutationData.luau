@@ -39,6 +39,18 @@ function mutationData.get(id: any): MutationInfo?
 	return if type(id) == "string" then byId[id] else nil
 end
 
+-- N in "1 in N" for a spawn getting this mutation (rarer ones roll first and must miss); nil for an unknown id.
+function mutationData.getOdds(id: string): number?
+	local miss = 1
+	for _, mutation in mutationData.Mutations do
+		if mutation.id == id then
+			return mutation.chance / miss
+		end
+		miss *= 1 - 1 / mutation.chance
+	end
+	return nil
+end
+
 -- A mutation, or nil for a plain sheep.
 function mutationData.roll(random: Random): MutationInfo?
 	for _, mutation in mutationData.Mutations do

@@ -173,6 +173,7 @@ local GRANTS: { [string]: (Player, MonetizationData.Item) -> (boolean, string?) 
 	SkipRebirth = skipRebirth,
 	GemsSmall = giveGems,
 	GemsMedium = giveGems,
+	GemsBig = giveGems,
 	GemsLarge = giveGems,
 }
 

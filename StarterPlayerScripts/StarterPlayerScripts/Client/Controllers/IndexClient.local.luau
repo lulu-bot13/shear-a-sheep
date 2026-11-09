@@ -1,11 +1,12 @@
 --[[
-	The sheep Index (StarterGui.Index.IndexFrame): the HUD's Index button opens it and every sheep type gets a card cloned from SheepTemplate.
-	Selecting a card spins its sheep and fills SheepInfo and RewardFrame; found sheep are claimed there; IndexHandler decides everything.
+	The sheep Index (StarterGui.Index.IndexFrame): a Mutations tab per page the server lists (Normal + MutationData) and a SheepTemplate card per sheep type.
+	Selecting a card spins its sheep and fills SheepInfo and RewardFrame; found entries are claimed there; IndexHandler decides everything.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.IndexClient
 ]]--
 
 --// Services
+local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
@@ -32,6 +33,7 @@ local exitButton = indexFrame:WaitForChild("ExitButton") :: GuiButton
 local mainFrame = indexFrame:WaitForChild("Main") :: GuiObject -- the window body holding everything below
 local cardContainer = mainFrame:WaitForChild("ScrollingFrame") :: GuiObject
 local cardTemplate = cardContainer:WaitForChild("SheepTemplate") :: GuiObject
+local tabsFrame = mainFrame:WaitForChild("Mutations") :: GuiObject -- a tab Frame per page, each with an invisible ImageButton over it
 
 -- The selected sheep's details.
 local infoFrame = mainFrame:WaitForChild("SheepInfo")
@@ -65,17 +67,30 @@ local CAMERA_FOV = 40
 local PREVIEW_FILL = { Baby = 0.55, Giant = 1 } -- how much of the frame each variant fills, so Giants look biggest
 local ADULT_PREVIEW_FILL = 0.75
 local SPIN_SPEED = math.rad(60) -- per second, for the selected sheep
-local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so card sizes aren't measured
-local CELLS_PER_ROW: number? = 3 -- a sheep's Baby, adult and Giant side by side; nil = however many fit the Studio CellSize/CellPadding X scale
-local CELL_ASPECT_RATIO = 1.25 -- grid cell height / width; rows past the window make the canvas taller so it scrolls
 local UNLOCK_BAR_TWEEN = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local WHITE = Color3.new(1, 1, 1)
+local BLACK = Color3.new(0, 0, 0)
+local NORMAL_PAGE = "Normal" -- mirrors IndexHandler; the page shown on open
+local RAINBOW_TAG = "RainbowName" -- mirrors MutationData.RainbowGradientTag (MutationClient animates it)
+local MUTATION_TINT = 0.6 -- how far a mutated sheep's preview is tinted toward its mutation's colour
+local TAB_SELECTED_SCALE = 1.08
+local TAB_IDLE_SCALE = 1
+local TAB_PRESSED_SCALE = 0.9
+local TAB_DIM = 0.45 -- how far an unselected tab's background darkens
+local TAB_SCALE_TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local TAB_COLOR_TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TAB_PRESS_TWEEN = TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TAB_DOT_NAME = "ClaimDot"
+local TAB_DOT_SIZE = 0.3 -- of the tab's height
 
 type Card = {
-	id: string,
+	id: string, -- sheep type: one card per type, refilled with the current page's entry
 	frame: GuiObject,
 	nameLabel: TextLabel,
 	rarityLabel: TextLabel,
 	viewport: ViewportFrame?,
+	nameRainbow: UIGradient,
+	previewRainbow: UIGradient,
 	entry: any,
 }
 
@@ -84,10 +99,28 @@ type Preview = {
 	center: Vector3, -- spun around (the model's pivot sits at the origin)
 }
 
+type Page = { -- IndexHandler.PageInfo
+	id: string,
+	color: Color3,
+	rainbow: boolean,
+}
+
+type Tab = {
+	frame: GuiObject,
+	scale: UIScale, -- on the frame, so it never fights ButtonClient's UIScale on the ImageButton
+	dot: GuiObject, -- shown while the page has something to claim
+	baseColor: Color3,
+}
+
 --// State
 local cards: { [string]: Card } = {}
-local entries: { any } = {} -- the last IndexState from the server
-local selectedId: string? = nil
+local pages: { Page } = {} -- from the last IndexState, in tab order
+local pagesById: { [string]: Page } = {}
+local pageEntries: { [string]: { any } } = {} -- page id -> its entries in index order
+local entriesByKey: { [string]: any } = {} -- SheepIndex key -> entry
+local tabs: { [string]: Tab } = {}
+local currentPage = NORMAL_PAGE
+local selectedId: string? = nil -- sheep type of the selected card on the current page
 local previews: { [ViewportFrame]: Preview } = {}
 local spinConnection: RBXScriptConnection? = nil
 local spinAngle = 0
@@ -95,17 +128,6 @@ local spinAngle = 0
 local rewardAmountColor = rewardAmount.TextColor3
 local claimButtonImageColor = claimButton.ImageColor3
 
--- Scale on Y inside a ScrollingFrame is relative to the canvas, so these are turned into pixels of the visible window.
-local layout = cardContainer:FindFirstChildWhichIsA("UIGridStyleLayout")
-local cardSize = cardTemplate.Size
-local listPadding = if layout and layout:IsA("UIListLayout") then layout.Padding else nil
-local gridCellSize = if layout and layout:IsA("UIGridLayout") then layout.CellSize else nil
-local gridCellPadding = if layout and layout:IsA("UIGridLayout") then layout.CellPadding else nil
-local gridColumns = CELLS_PER_ROW
-if gridCellSize and gridCellPadding and not gridColumns then
-	local stride = gridCellSize.X.Scale + gridCellPadding.X.Scale
-	gridColumns = if stride > 0 then math.max(1, math.floor((1 + gridCellPadding.X.Scale) / stride + 1e-3)) else 4
-end
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -170,83 +192,57 @@ local function playLuckClaimedSound()
 	end
 end
 
---// Card sizing -------------------------------------------------------------------
+--// Mutation looks ----------------------------------------------------------------
 
-local function toWindowPixels(size: UDim, windowHeight: number): UDim
-	return UDim.new(0, math.floor(size.Offset + size.Scale * windowHeight))
+local function newRainbowGradient(): UIGradient
+	local gradient = Instance.new("UIGradient")
+	gradient.Name = "MutationRainbow"
+	collectionService:AddTag(gradient, RAINBOW_TAG)
+	return gradient
 end
 
--- The card window's visible height in Offset pixels; nil when it doesn't scroll or is shrunk by the close tween.
-local function getWindowHeight(): (number?, number)
-	local factor = windowsManager.getScaleFactor(cardContainer)
-	if not cardContainer:IsA("ScrollingFrame") or factor <= MIN_SCALE_FACTOR then
-		return nil, factor
+-- Parents the rainbow only while it's wanted (MutationClient only animates parented ones), never over a Studio gradient.
+local function setRainbow(gui: GuiObject, gradient: UIGradient, enabled: boolean)
+	local designed = false
+	for _, child in gui:GetChildren() do
+		if child:IsA("UIGradient") and child ~= gradient then
+			designed = true
+			break
+		end
 	end
-	return cardContainer.AbsoluteWindowSize.Y / factor, factor
+	gradient.Parent = if enabled and not designed then gui else nil
 end
 
--- The card window's usable width in Offset pixels, always leaving room for the scrollbar so showing it can't reflow the grid.
-local function getWindowWidth(factor: number): number
-	local scrollingFrame = cardContainer :: ScrollingFrame
-	local width = scrollingFrame.AbsoluteSize.X / factor
-	if scrollingFrame.VerticalScrollBarInset ~= Enum.ScrollBarInset.None then
-		width -= scrollingFrame.ScrollBarThickness
-	end
+local infoNameRainbow = newRainbowGradient()
+local infoPreviewRainbow = newRainbowGradient()
 
-	local padding = cardContainer:FindFirstChildOfClass("UIPadding")
-	if padding then
-		width -= padding.PaddingLeft.Offset + padding.PaddingRight.Offset
-		width *= 1 - padding.PaddingLeft.Scale - padding.PaddingRight.Scale
-	end
-	return width
+-- A found entry on a rainbow page gets the scrolling rainbow on its name and preview.
+local function isRainbow(entry: any): boolean
+	local page = pagesById[entry.mutation]
+	return entry.status ~= "Locked" and page ~= nil and page.rainbow
 end
 
--- Sizes the cards (and the layout's gaps) in pixels; grid rows always hold gridColumns cells whatever the screen.
-local function updateCardSizes()
-	local windowHeight, factor = getWindowHeight()
-	if not windowHeight then
-		return
+-- "Galaxy Basic Sheep" with the mutation in its colour (RichText); a rainbow page's stays plain so its gradient colours it.
+local function getDisplayName(entry: any): string
+	local page = pagesById[entry.mutation]
+	if not page or page.id == NORMAL_PAGE then
+		return entry.name
+	elseif page.rainbow then
+		return `{page.id} {entry.name}`
 	end
-
-	if gridCellSize and gridCellPadding and gridColumns then
-		local width = getWindowWidth(factor)
-		local gapX = toWindowPixels(gridCellPadding.X, width).Offset
-		local cellWidth = math.max(1, math.floor((width - gapX * (gridColumns - 1)) / gridColumns))
-		local grid = layout :: UIGridLayout
-		grid.CellSize = UDim2.fromOffset(cellWidth, math.floor(cellWidth * CELL_ASPECT_RATIO))
-		grid.CellPadding = UDim2.new(UDim.new(0, gapX), toWindowPixels(gridCellPadding.Y, windowHeight))
-		return
-	end
-
-	local height = toWindowPixels(cardSize.Y, windowHeight)
-	for _, card in cards do
-		card.frame.Size = UDim2.new(cardSize.X, height)
-	end
-	if listPadding then
-		(layout :: UIListLayout).Padding = toWindowPixels(listPadding, windowHeight)
-	end
+	return `<font color="#{page.color:ToHex()}">{page.id}</font> {entry.name}`
 end
 
--- Only when the cards don't fit does the canvas get taller (in pixels) so the player can scroll to the rest.
-local function updateCanvasSize()
-	local windowHeight, factor = getWindowHeight()
-	if not windowHeight or not layout then
-		return
+-- Locked sheep are silhouettes; mutated ones are tinted toward their mutation's colour (ViewportFrames can't show its VFX).
+local function getPreviewTint(entry: any): Color3
+	if entry.status == "Locked" then
+		return LOCKED_TINT
 	end
-
-	local padding = cardContainer:FindFirstChildOfClass("UIPadding")
-	local paddingY = 0
-	if padding then
-		paddingY = padding.PaddingTop.Offset + padding.PaddingTop.Scale * windowHeight
-			+ padding.PaddingBottom.Offset + padding.PaddingBottom.Scale * windowHeight
+	local page = pagesById[entry.mutation]
+	if not page or page.id == NORMAL_PAGE or page.rainbow then
+		return WHITE
 	end
-
-	local needed = math.ceil(layout.AbsoluteContentSize.Y / factor + paddingY)
-	local canvasSize = UDim2.fromOffset(0, if needed > windowHeight then needed else 0)
-	local scrollingFrame = cardContainer :: ScrollingFrame
-	if scrollingFrame.CanvasSize ~= canvasSize then
-		scrollingFrame.CanvasSize = canvasSize
-	end
+	return WHITE:Lerp(page.color, MUTATION_TINT)
 end
 
 --// Previews ----------------------------------------------------------------------
@@ -354,6 +350,8 @@ local function renderInfo()
 	local card = if selectedId then cards[selectedId] else nil
 	if not card then
 		setInfoVisible(false)
+		setRainbow(infoName, infoNameRainbow, false)
+		setRainbow(infoViewport, infoPreviewRainbow, false)
 		return
 	end
 
@@ -362,13 +360,16 @@ local function renderInfo()
 	setInfoVisible(true)
 
 	local locked = status == "Locked"
-	infoName.Text = if locked then LOCKED_TEXT else entry.name
+	local rainbow = isRainbow(entry)
+	infoName.Text = if locked then LOCKED_TEXT else getDisplayName(entry)
+	setRainbow(infoName, infoNameRainbow, rainbow)
 	infoRarity.Text = if locked then LOCKED_TEXT else entry.rarity
 	infoRarity.TextColor3 = if locked then CLAIMED_COLOR else entry.color
 	infoChances.Text = if entry.halloween
 		then `1 in {formatWithCommas(entry.odds)} (Halloween only)`
 		else `1 in {formatWithCommas(entry.odds)}`
-	infoViewport.ImageColor3 = if locked then LOCKED_TINT else Color3.new(1, 1, 1)
+	infoViewport.ImageColor3 = getPreviewTint(entry)
+	setRainbow(infoViewport, infoPreviewRainbow, rainbow)
 
 	-- BuyButton's "CLAIM" is baked into its image, so ClaimAmount carries the state.
 	if status == "Claimed" or locked then
@@ -401,43 +402,62 @@ local function selectCard(card: Card)
 	startSpin()
 end
 
--- The given sheep if it's waiting to be claimed, else the first one that is (in index order).
-local function findUnclaimed(id: string?): Card?
-	local card = if id then cards[id] else nil
-	if card and card.entry.status == "Found" then
-		return card
+-- Nothing selected: the spinning sheep turns back to face the camera and SheepInfo's preview is dropped.
+local function clearSelection()
+	local previous = if selectedId then cards[selectedId] else nil
+	if previous and previous.viewport then
+		setPreviewAngle(previous.viewport, 0)
 	end
-	for _, entry in entries do
+	selectedId = nil
+	spinAngle = 0
+	stopSpin()
+	clearPreview(infoViewport)
+end
+
+local function findFound(list: { any }?): any?
+	for _, entry in list or {} do
 		if entry.status == "Found" then
-			return cards[entry.id]
+			return entry
 		end
 	end
 	return nil
 end
 
--- Shows the HUD button's Alert badge while any sheep is waiting to be claimed.
+-- The given entry if it's waiting to be claimed, else the first that is: on the current page first, then the other tabs in order.
+local function findUnclaimed(key: string?): any?
+	local entry = if key then entriesByKey[key] else nil
+	if entry and entry.status == "Found" then
+		return entry
+	end
+	local found = findFound(pageEntries[currentPage])
+	if found then
+		return found
+	end
+	for _, page in pages do
+		found = if page.id ~= currentPage then findFound(pageEntries[page.id]) else nil
+		if found then
+			return found
+		end
+	end
+	return nil
+end
+
+-- Shows the HUD button's Alert badge while any page has an entry waiting to be claimed.
 local function renderAlertBadge()
 	alertBadge.Visible = findUnclaimed() ~= nil
 end
 
--- Opens a sheep waiting to be claimed in SheepInfo; with none waiting the selection stays as it is.
-local function focusUnclaimed(id: string?)
-	local card = findUnclaimed(id)
-	if card then
-		selectCard(card)
-	end
-end
-
--- Fills ProgressFrame's ProgressBar with the share of sheep types that aren't Locked any more.
+-- Fills ProgressFrame's ProgressBar with the share of the current page's entries that aren't Locked any more.
 local function renderUnlockBar()
+	local list = pageEntries[currentPage] or {}
 	local unlocked = 0
-	for _, entry in entries do
+	for _, entry in list do
 		if entry.status ~= "Locked" then
 			unlocked += 1
 		end
 	end
 
-	local total = #entries
+	local total = #list
 	local ratio = if total > 0 then unlocked / total else 0
 	local size = unlockProgress.Size
 	tweenService:Create(unlockProgress, UNLOCK_BAR_TWEEN, { Size = UDim2.new(ratio, 0, size.Y.Scale, size.Y.Offset) }):Play()
@@ -451,9 +471,12 @@ local function refreshCard(card: Card)
 	local status = entry.status
 
 	local locked = status == "Locked"
-	card.nameLabel.Text = if locked then LOCKED_TEXT else entry.name
+	local rainbow = isRainbow(entry)
+	card.nameLabel.Text = if locked then LOCKED_TEXT else getDisplayName(entry)
+	setRainbow(card.nameLabel, card.nameRainbow, rainbow)
 	if card.viewport then
-		card.viewport.ImageColor3 = if locked then LOCKED_TINT else Color3.new(1, 1, 1)
+		card.viewport.ImageColor3 = getPreviewTint(entry)
+		setRainbow(card.viewport, card.previewRainbow, rainbow)
 	end
 
 	if locked then
@@ -474,11 +497,6 @@ local function createCard(entry: any, order: number): Card
 	frame.LayoutOrder = order
 	frame.Visible = true
 
-	local windowHeight = getWindowHeight()
-	if windowHeight and not gridCellSize then
-		frame.Size = UDim2.new(cardSize.X, toWindowPixels(cardSize.Y, windowHeight))
-	end
-
 	local viewport = frame:FindFirstChildOfClass("ViewportFrame")
 	local card: Card = {
 		id = entry.id,
@@ -486,8 +504,11 @@ local function createCard(entry: any, order: number): Card
 		nameLabel = frame:WaitForChild("SheepName") :: TextLabel,
 		rarityLabel = frame:WaitForChild("Rarity") :: TextLabel,
 		viewport = viewport,
+		nameRainbow = newRainbowGradient(),
+		previewRainbow = newRainbowGradient(),
 		entry = entry,
 	}
+	card.nameLabel.RichText = true -- the mutation prefix is coloured
 
 	if viewport then
 		buildPreview(viewport, entry)
@@ -515,11 +536,40 @@ local function createCard(entry: any, order: number): Card
 	return card
 end
 
+-- Its preview model goes with it, so nothing is left in `previews`.
+local function removeCard(card: Card)
+	if card.viewport then
+		clearPreview(card.viewport)
+	end
+	card.nameRainbow:Destroy()
+	card.previewRainbow:Destroy()
+	card.frame:Destroy()
+end
+
+--// Tabs --------------------------------------------------------------------------
+
+-- Selected tab larger and bright, the rest dimmed; each shows a dot while its page has something to claim.
+local function renderTabs()
+	for id, tab in tabs do
+		local selected = id == currentPage
+		tweenService:Create(tab.scale, TAB_SCALE_TWEEN, { Scale = if selected then TAB_SELECTED_SCALE else TAB_IDLE_SCALE }):Play()
+		tweenService:Create(tab.frame, TAB_COLOR_TWEEN, {
+			BackgroundColor3 = if selected then tab.baseColor else tab.baseColor:Lerp(BLACK, TAB_DIM),
+		}):Play()
+		tab.dot.Visible = findFound(pageEntries[id]) ~= nil
+	end
+end
+
+-- Cards are one per sheep type and refilled with the current page's entries, so switching tabs never rebuilds previews.
 local function render()
-	for order, entry in entries do
+	local list = pageEntries[currentPage] or {}
+	local shown: { [string]: boolean } = {}
+	for order, entry in list do
+		shown[entry.id] = true
 		local card = cards[entry.id]
 		if card then
 			card.entry = entry
+			card.frame.LayoutOrder = order
 		else
 			card = createCard(entry, order)
 			cards[entry.id] = card
@@ -527,10 +577,234 @@ local function render()
 		refreshCard(card)
 	end
 
+	for id, card in cards do
+		if not shown[id] then
+			if selectedId == id then
+				clearSelection()
+			end
+			removeCard(card)
+			cards[id] = nil
+		end
+	end
+
 	renderInfo()
 	renderAlertBadge()
+	renderTabs()
 	renderUnlockBar()
-	task.defer(updateCanvasSize)
+end
+
+-- With nothing selected, the page's first card is, so SheepInfo and RewardFrame never sit empty.
+local function selectFirstCard()
+	if selectedId and cards[selectedId] then
+		return
+	end
+	local first = (pageEntries[currentPage] or {})[1]
+	local card = first and cards[first.id]
+	if card then
+		selectCard(card)
+	end
+end
+
+-- Switching pages clears the selection (and its spinning preview), scrolls back to the top and selects the first card.
+local function setPage(pageId: string)
+	if pageId == currentPage or not pagesById[pageId] then
+		return
+	end
+	clearSelection()
+	currentPage = pageId
+	if cardContainer:IsA("ScrollingFrame") then
+		cardContainer.CanvasPosition = Vector2.zero
+	end
+	render()
+	selectFirstCard()
+end
+
+-- Opens an entry waiting to be claimed in SheepInfo, switching to its page; with none waiting the selection stays as it is.
+local function focusUnclaimed(key: string?)
+	local entry = findUnclaimed(key)
+	if not entry then
+		return
+	end
+	setPage(entry.mutation)
+	local card = cards[entry.id]
+	if card then
+		selectCard(card)
+	end
+end
+
+local function findEntry(pageId: string, sheepType: string): any?
+	for _, entry in pageEntries[pageId] or {} do
+		if entry.id == sheepType then
+			return entry
+		end
+	end
+	return nil
+end
+
+-- A gradient for a cloned tab: lighter to darker shades of its page's colour, or a fixed rainbow.
+local function getTabColors(page: Page, darken: number): ColorSequence
+	if page.rainbow then
+		local keypoints = table.create(7)
+		for i = 0, 6 do
+			keypoints[i + 1] = ColorSequenceKeypoint.new(i / 6, Color3.fromHSV(i / 6, 0.65, 1 - darken))
+		end
+		return ColorSequence.new(keypoints)
+	end
+	local base = page.color:Lerp(BLACK, darken)
+	return ColorSequence.new(base:Lerp(WHITE, 0.25), base:Lerp(BLACK, 0.35))
+end
+
+-- Colours a tab cloned for a page that has none in Studio: its background gradient and a darker outline.
+local function paintTab(frame: GuiObject, page: Page)
+	local gradient = frame:FindFirstChildOfClass("UIGradient")
+	if gradient then
+		frame.BackgroundColor3 = WHITE
+		gradient.Color = getTabColors(page, 0)
+	else
+		frame.BackgroundColor3 = page.color
+	end
+
+	local stroke = frame:FindFirstChildOfClass("UIStroke")
+	local strokeGradient = stroke and stroke:FindFirstChildOfClass("UIGradient")
+	if stroke and strokeGradient then
+		stroke.Color = WHITE
+		strokeGradient.Color = getTabColors(page, 0.5)
+	elseif stroke then
+		stroke.Color = page.color:Lerp(BLACK, 0.5)
+	end
+end
+
+-- UI text rule: the tab's label is always white with a black outline.
+local function styleTabLabel(frame: GuiObject)
+	local label = frame:FindFirstChildWhichIsA("TextLabel")
+	if not label then
+		return
+	end
+	label.TextColor3 = WHITE
+	local stroke = label:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
+	stroke.Color = BLACK
+	stroke.Parent = label
+end
+
+local function getTabDot(frame: GuiObject): GuiObject
+	local existing = frame:FindFirstChild(TAB_DOT_NAME) -- a cloned tab brings its template's
+	if existing and existing:IsA("GuiObject") then
+		return existing
+	end
+
+	local dot = Instance.new("Frame")
+	dot.Name = TAB_DOT_NAME
+	dot.AnchorPoint = Vector2.new(0.5, 0.5)
+	dot.Position = UDim2.fromScale(0.06, 0.2) -- the outer corner, since the tabs hang off the window's left edge
+	dot.Size = UDim2.fromScale(TAB_DOT_SIZE, TAB_DOT_SIZE)
+	dot.SizeConstraint = Enum.SizeConstraint.RelativeYY
+	dot.BackgroundColor3 = ALERT_COLOR
+	dot.ZIndex = frame.ZIndex + 20
+	dot.Visible = false
+	Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+	local outline = Instance.new("UIStroke")
+	outline.Color = BLACK
+	outline.Thickness = 1.5
+	outline.Parent = dot
+	dot.Parent = frame
+	return dot
+end
+
+-- The tab's own invisible ImageButton, else an invisible overlay like the cards'.
+local function getTabButton(frame: GuiObject): GuiButton
+	local existing = frame:FindFirstChildWhichIsA("GuiButton")
+	if existing then
+		return existing
+	end
+	local overlay = Instance.new("TextButton")
+	overlay.Name = "TabButton"
+	overlay.Text = ""
+	overlay.BackgroundTransparency = 1
+	overlay.Size = UDim2.fromScale(1, 1)
+	overlay.ZIndex = frame.ZIndex + 10
+	overlay.Parent = frame
+	return overlay
+end
+
+-- A quick squash on the frame's UIScale, then back to the tab's selected/idle size.
+local function pressTab(tab: Tab)
+	local press = tweenService:Create(tab.scale, TAB_PRESS_TWEEN, { Scale = TAB_PRESSED_SCALE })
+	press.Completed:Once(function(state: Enum.PlaybackState)
+		if state == Enum.PlaybackState.Completed then
+			renderTabs()
+		end
+	end)
+	press:Play()
+end
+
+local function setupTab(frame: GuiObject, page: Page)
+	local tab: Tab = {
+		frame = frame,
+		scale = frame:FindFirstChildOfClass("UIScale") or Instance.new("UIScale"),
+		dot = getTabDot(frame),
+		baseColor = frame.BackgroundColor3,
+	}
+	tab.scale.Parent = frame
+	alertPulse.attach(tab.dot)
+	styleTabLabel(frame)
+	tabs[page.id] = tab
+
+	getTabButton(frame).Activated:Connect(function()
+		setPage(page.id)
+		pressTab(tab)
+	end)
+end
+
+--[[
+	The tabs come from the server's page list (Normal + MutationData, rarest first), not from Studio: a page with no tab
+	frame gets a clone of an existing one in its colour, and a Studio tab with no page is hidden but kept.
+]]
+local function buildTabs()
+	local frames: { [string]: GuiObject } = {}
+	for _, child in tabsFrame:GetChildren() do
+		if child:IsA("GuiObject") then
+			frames[child.Name] = child
+		end
+	end
+
+	-- Cloned from a Studio mutation tab (Normal's only if there's none), before any of them is dimmed.
+	local template: GuiObject? = nil
+	for _, page in pages do
+		local frame = frames[page.id]
+		if frame and (not template or page.id ~= NORMAL_PAGE) then
+			template = frame
+		end
+	end
+
+	for order, page in pages do
+		if tabs[page.id] then
+			continue
+		end
+		local frame = frames[page.id]
+		if not frame and template then
+			local clone = template:Clone()
+			clone.Name = page.id
+			local label = clone:FindFirstChildWhichIsA("TextLabel")
+			if label then
+				label.Text = page.id
+			end
+			paintTab(clone, page)
+			clone.Parent = tabsFrame
+			frame = clone
+		end
+		if frame then
+			frame.LayoutOrder = order - 1
+			frame.Visible = true
+			setupTab(frame, page)
+		end
+	end
+
+	-- e.g. Thunder: its tab waits (hidden) for a MutationData entry, which gives it a page with no other change.
+	for name, frame in frames do
+		if not pagesById[name] then
+			frame.Visible = false
+		end
+	end
 end
 
 --// Setup -------------------------------------------------------------------------------
@@ -540,9 +814,13 @@ local indexWindow = windowsManager.register("Index", {
 	frame = indexFrame,
 	openButton = openButton,
 	closeButton = exitButton, -- WindowsManager only finds a button named "Exit" on its own
+	-- Opens on Normal; only if Normal has nothing to claim does it jump to a page that has (so Claim is always reachable).
 	onOpen = function()
 		network.fireServer(network.RemoteEvents.RequestIndexState)
-		focusUnclaimed(selectedId)
+		setPage(NORMAL_PAGE)
+		local selected = if selectedId and cards[selectedId] then cards[selectedId].entry.key else nil
+		focusUnclaimed(selected)
+		selectFirstCard()
 		startSpin()
 	end,
 	onClose = stopSpin,
@@ -552,6 +830,13 @@ cardTemplate.Visible = false
 alertBadge.Visible = false
 alertPulse.attach(alertBadge)
 setInfoVisible(false)
+infoName.RichText = true -- the mutation prefix is coloured
+
+-- The tabs sit in MutationData order (LayoutOrder from buildTabs), whatever their Studio names sort to.
+local tabLayout = tabsFrame:FindFirstChildOfClass("UIListLayout")
+if tabLayout then
+	tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+end
 
 -- ProgressBar draws over its Background and IndexAmount over both; only raised (with a warning) if the import layered them wrong.
 for _, pair in { { unlockTrack, unlockProgress }, { unlockProgress, unlockText } } do
@@ -566,22 +851,10 @@ end
 local progressSize = unlockProgress.Size
 unlockProgress.Size = UDim2.new(0, 0, progressSize.Y.Scale, progressSize.Y.Offset)
 
-if cardContainer:IsA("ScrollingFrame") then
-	cardContainer.AutomaticCanvasSize = Enum.AutomaticSize.None -- updateCanvasSize sizes it instead
-	if layout then
-		layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvasSize)
-	end
-	cardContainer:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(function()
-		updateCardSizes()
-		updateCanvasSize()
-	end)
-	updateCardSizes()
-end
-
 claimButton.Activated:Connect(function()
 	local card = if selectedId then cards[selectedId] else nil
 	if card and card.entry.status == "Found" then
-		network.fireServer(network.RemoteEvents.ClaimIndexReward, card.id)
+		network.fireServer(network.RemoteEvents.ClaimIndexReward, card.entry.key)
 	else
 		shake(claimButton)
 	end
@@ -589,18 +862,48 @@ end)
 
 network.waitUntilReadyAsync()
 
-network.connectEvent(network.RemoteEvents.IndexState, function(newEntries: any)
-	entries = newEntries
+-- Every page's entries at once, plus the tab list (IndexHandler.PageInfo) they're grouped by.
+network.connectEvent(network.RemoteEvents.IndexState, function(newEntries: { any }, newPages: { Page }?)
+	pages = if type(newPages) == "table" and #newPages > 0 then newPages else { { id = NORMAL_PAGE, color = WHITE, rainbow = false } }
+	pagesById = {}
+	for _, page in pages do
+		pagesById[page.id] = page
+	end
+
+	pageEntries = {}
+	entriesByKey = {}
+	for _, entry in newEntries do
+		local pageId = entry.mutation or NORMAL_PAGE
+		local list = pageEntries[pageId]
+		if not list then
+			list = {}
+			pageEntries[pageId] = list
+		end
+		table.insert(list, entry)
+		entriesByKey[entry.key or entry.id] = entry
+	end
+
+	if not pagesById[currentPage] then
+		clearSelection()
+		currentPage = NORMAL_PAGE
+	end
+	buildTabs()
 	render()
+	if indexWindow.isOpen() then
+		selectFirstCard()
+	end
 end)
 
-network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string, success: boolean)
-	local card = cards[id]
-	if not card then
+network.connectEvent(network.RemoteEvents.IndexClaimResult, function(key: string, success: boolean)
+	local entry = entriesByKey[key]
+	if not entry then
 		return
 	end
 	if success then
-		pop(card.frame)
+		local card = cards[entry.id]
+		if card and entry.mutation == currentPage then
+			pop(card.frame)
+		end
 		playLuckClaimedSound()
 		luckRain.play(indexGui)
 		announcements.show("ClaimAlert", "Claimed 1 sheep")
@@ -613,10 +916,12 @@ network.connectEvent(network.RemoteEvents.IndexClaimResult, function(id: string,
 	end
 end)
 
--- IndexState with the new "Found" sheep arrives just before this.
-network.connectEvent(network.RemoteEvents.SheepUnlocked, function(sheepType: string)
+-- IndexState with the new "Found" entry arrives just before this; a mutated sheep's is on its mutation's page.
+network.connectEvent(network.RemoteEvents.SheepUnlocked, function(sheepType: string, _name, _rarity, _color, _weight, mutation: any)
 	if indexWindow.isOpen() then
-		focusUnclaimed(sheepType)
+		local pageId = if type(mutation) == "table" and type(mutation.name) == "string" then mutation.name else NORMAL_PAGE
+		local entry = findEntry(pageId, sheepType)
+		focusUnclaimed(if entry then entry.key else nil)
 	end
 end)
 

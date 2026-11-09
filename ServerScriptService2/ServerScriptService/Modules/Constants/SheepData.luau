@@ -6,6 +6,7 @@
 	Location: ServerScriptService.Modules.Constants.SheepData
 ]]--
 
+local MutationData = require(script.Parent.MutationData)
 local PrestigeData = require(script.Parent.PrestigeData)
 local RebirthData = require(script.Parent.RebirthData)
 
@@ -537,12 +538,53 @@ function sheepData.getIndexLuck(name: string): number
 	return math.floor(sheepData.INDEX_LUCK_BASE * odds ^ sheepData.INDEX_LUCK_EXPONENT + 0.5)
 end
 
--- Luck from every type claimed in this Index ({ [sheepType]: "Found" | "Claimed" }).
+--[[
+	Index keys in a player's SheepIndex: the plain sheep type for the Normal page, "<mutation id>:<type>" for a mutation's
+	page (e.g. "Rainbow:Basic"), so saves from before the mutation pages need no migration.
+]]
+sheepData.INDEX_KEY_SEPARATOR = ":"
+
+function sheepData.getIndexKey(sheepType: string, mutationId: string?): string
+	return if mutationId then `{mutationId}{sheepData.INDEX_KEY_SEPARATOR}{sheepType}` else sheepType
+end
+
+-- The sheep type and mutation (nil = Normal) an Index key stands for; nil for an unknown type or mutation.
+function sheepData.parseIndexKey(key: any): (string?, MutationData.MutationInfo?)
+	if type(key) ~= "string" then
+		return nil, nil
+	end
+	local split = string.find(key, sheepData.INDEX_KEY_SEPARATOR, 1, true)
+	if not split then
+		if sheepData.Sheep[key] then
+			return key, nil
+		end
+		return nil, nil
+	end
+
+	local mutation = MutationData.get(string.sub(key, 1, split - 1))
+	local sheepType = string.sub(key, split + #sheepData.INDEX_KEY_SEPARATOR)
+	if not mutation or not sheepData.Sheep[sheepType] then
+		return nil, nil
+	end
+	return sheepType, mutation
+end
+
+-- An Index entry's claim reward: its type's IndexLuck times its mutation's luck multiplier; 0 for an unknown key.
+function sheepData.getIndexEntryLuck(key: string): number
+	local sheepType, mutation = sheepData.parseIndexKey(key)
+	if not sheepType then
+		return 0
+	end
+	local luck = sheepData.getIndexLuck(sheepType)
+	return if mutation then math.floor(luck * mutation.luck + 0.5) else luck
+end
+
+-- Luck from every entry claimed in this Index ({ [index key]: "Found" | "Claimed" }); unknown keys count for nothing.
 function sheepData.getClaimedIndexLuck(index: { [string]: string }): number
 	local total = 0
-	for name, status in index do
+	for key, status in index do
 		if status == "Claimed" then
-			total += sheepData.getIndexLuck(name)
+			total += sheepData.getIndexEntryLuck(key)
 		end
 	end
 	return total

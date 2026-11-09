@@ -33,12 +33,13 @@ shearShopUIData.SpinSpeed = 1.2 -- radians per second (about 5 seconds per full 
 shearShopUIData.PreviewPitch = math.rad(20)
 shearShopUIData.PreviewFieldOfView = 35
 
---// Purchase button colours
-shearShopUIData.ButtonColors = {
-	Ready = Color3.fromRGB(110, 220, 120),
-	Equipped = Color3.fromRGB(255, 200, 70),
-	Owned = Color3.fromRGB(160, 160, 165),
-	Locked = Color3.fromRGB(95, 95, 105),
+--// Purchase button text and ImageColor3, by card state
+shearShopUIData.ButtonStyles = {
+	locked = { text = "Locked", color = Color3.fromRGB(95, 95, 105) },
+	ready = { text = "Unlock", color = Color3.fromRGB(110, 220, 120) },
+	owned = { text = "Equip", color = Color3.fromRGB(80, 160, 255) },
+	equipped = { text = "Unequip", color = Color3.fromRGB(235, 85, 85) },
+	equippedDefault = { text = "Equipped", color = Color3.fromRGB(255, 200, 70) }, -- the default shear can't be unequipped
 }
 
 local rankById: { [string]: number } = {}

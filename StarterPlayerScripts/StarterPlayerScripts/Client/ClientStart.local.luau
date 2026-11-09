@@ -16,6 +16,21 @@ local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 local backgroundMusic = require(script.Parent.Modules.BackgroundMusic)
 require(script.Parent.Modules.Settings) -- first, so the music waits for the saved Music setting
 
+local player = players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- StarterGui.Main is left disabled in Studio for working space; turn it on in game, including the copy made on each respawn.
+local function enableMainGui(gui: Instance)
+	if gui.Name == "Main" and gui:IsA("ScreenGui") then
+		gui.Enabled = true
+	end
+end
+
+playerGui.ChildAdded:Connect(enableMainGui)
+for _, gui in playerGui:GetChildren() do
+	enableMainGui(gui)
+end
+
 backgroundMusic.start()
 
 -- Started first: the wool and luck values below only appear once the player's save has loaded.
@@ -23,8 +38,6 @@ network.startClientAsync()
 moduleLoader.Init()
 
 --// Instances
-local player = players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
 local mainGui = playerGui:WaitForChild("Main")
 local currencyFrame = mainGui:WaitForChild("CurrencyFrame")
 local woolAmountLabel = currencyFrame:WaitForChild("WoolAmount") :: TextLabel

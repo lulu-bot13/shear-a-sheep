@@ -36,6 +36,7 @@ export type AbilityEntry = {
 	id: string,
 	name: string,
 	description: string,
+	icon: string, -- "" when the ability has no icon yet
 	rarity: string,
 	color: Color3,
 	cooldown: number,
@@ -126,6 +127,7 @@ function AbilityShackHandler.getState(player: Player): State
 			id = id,
 			name = info.name,
 			description = info.description,
+			icon = info.icon or "",
 			rarity = info.rarity,
 			color = SheepData.RarityColors[info.rarity] or SheepData.RarityColors.Common,
 			cooldown = info.cooldown,
