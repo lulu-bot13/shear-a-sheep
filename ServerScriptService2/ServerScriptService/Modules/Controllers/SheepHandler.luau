@@ -296,6 +296,12 @@ local function getPlainName(info: SheepData.SheepInfo, size: SheepSizeData.SizeI
 	return if mutation then `{mutation.id} {name}` else name
 end
 
+-- A plain adult's wool for this type, for the BaseWool attribute (CrookClient shows WoolAmount / BaseWool).
+local function getBaseWool(info: SheepData.SheepInfo): number
+	local adult = if info.adult then SheepData.Sheep[info.adult] else nil
+	return math.max((adult or info).WoolAmount, 1)
+end
+
 -- Babies and Tiny sheep keep their billboards at full size; everything else gets HUD_SCALE.
 local function getHudScale(info: SheepData.SheepInfo, size: SheepSizeData.SizeInfo): number
 	return if info.baby or size.id == FULL_HUD_SIZE_TIER then 1 else HUD_SCALE
@@ -866,6 +872,7 @@ local function buildSheep(player: Player, context: SheepData.RollContext, forced
 	sheepModel:SetAttribute("ShearHealth", maxHealth)
 	sheepModel:SetAttribute("MaxShearHealth", maxHealth)
 	sheepModel:SetAttribute("WoolAmount", math.max(math.floor(info.WoolAmount * size.wool * weightWool * mutationWool + 0.5), 1))
+	sheepModel:SetAttribute("BaseWool", getBaseWool(info))
 	sheepModel:SetAttribute("LuckAmount", math.floor(info.LuckAmount * mutationLuck + 0.5))
 	sheepModel:SetAttribute("SheepType", sheepType)
 	sheepModel:SetAttribute("SheepName", getPlainName(info, size, mutation))
@@ -1136,6 +1143,7 @@ function SheepHandler.loadSheep(player: Player, saved: any): Model?
 	sheepModel:SetAttribute("ShearHealth", math.clamp(tonumber(saved.health) or saved.maxHealth, 1, saved.maxHealth))
 	sheepModel:SetAttribute("MaxShearHealth", saved.maxHealth)
 	sheepModel:SetAttribute("WoolAmount", if type(saved.wool) == "number" then saved.wool else info.WoolAmount)
+	sheepModel:SetAttribute("BaseWool", getBaseWool(info))
 	sheepModel:SetAttribute("LuckAmount", math.floor(info.LuckAmount * (if mutation then mutation.luck else 1) + 0.5))
 	sheepModel:SetAttribute("SheepType", saved.type)
 	sheepModel:SetAttribute("SheepName", getPlainName(info, size, mutation))

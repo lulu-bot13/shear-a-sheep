@@ -164,7 +164,8 @@ end
 
 --// Walking ---------------------------------------------------------------------------
 
-local function startWalk(sheep: Model, humanoid: Humanoid, root: BasePart, now: number)
+-- Walks a random way (or `heading`, radians in the SheepArea's space, for `walkDistance` studs) and plans what comes after.
+local function startWalk(sheep: Model, humanoid: Humanoid, root: BasePart, now: number, heading: number?, walkDistance: number?)
 	local plot = getPlot(sheep)
 	local boxCFrame, size
 	if plot then
@@ -175,8 +176,8 @@ local function startWalk(sheep: Model, humanoid: Humanoid, root: BasePart, now: 
 		return
 	end
 
-	local angle = random:NextNumber(0, math.pi * 2)
-	local distance = random:NextNumber(WANDER.MinDistance, WANDER.MaxDistance)
+	local angle = heading or random:NextNumber(0, math.pi * 2)
+	local distance = walkDistance or random:NextNumber(WANDER.MinDistance, WANDER.MaxDistance)
 	local localStart = boxCFrame:PointToObjectSpace(root.Position)
 	local localTarget = clampToArea(localStart + Vector3.new(math.cos(angle), 0, math.sin(angle)) * distance, size)
 	local target = boxCFrame:PointToWorldSpace(localTarget)
@@ -243,6 +244,24 @@ function SheepWanderHandler.holdSheep(sheep: Model)
 	humanoid:MoveTo(root.Position)
 	cancelGraze(sheep) -- head up while being sheared
 	nextMoveAt[sheep] = os.clock() + WANDER.ShearHoldSeconds
+end
+
+-- Sends a sheep that just landed off the conveyor at `from` walking straight away from it, towards the pen's middle.
+function SheepWanderHandler.walkAwayFrom(sheep: Model, from: Vector3)
+	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
+	local root = sheep:FindFirstChild("HumanoidRootPart")
+	local plot = getPlot(sheep)
+	local boxCFrame = if plot then getAreaBox(plot) else nil
+	if not humanoid or not root or not root:IsA("BasePart") or not boxCFrame then
+		return
+	end
+
+	local inward = -boxCFrame:PointToObjectSpace(from) * Vector3.new(1, 0, 1)
+	local heading = if inward.Magnitude > 0.01 then math.atan2(inward.Z, inward.X) else random:NextNumber(0, math.pi * 2)
+	local spread = math.rad(WANDER.DropWalkSpreadDegrees)
+	root.AssemblyLinearVelocity = Vector3.zero
+	startWalk(sheep, humanoid, root, os.clock(), heading + random:NextNumber(-spread, spread),
+		random:NextNumber(WANDER.DropWalkMinDistance, WANDER.DropWalkMaxDistance))
 end
 
 function SheepWanderHandler.Start()

@@ -418,6 +418,7 @@ local window = windowsManager.register("UpgradeShop", {
 	openButton = hudButton,
 	onOpen = function()
 		openToken += 1
+		setAmountIndex(1)
 		network.fireServer(network.RemoteEvents.RequestUpgradeState)
 	end,
 	onClose = function()
@@ -506,12 +507,22 @@ updateAlert()
 if alertBadge then
 	alertPulse.attach(alertBadge)
 end
+-- MAX's level count and price follow the wool; 1X only needs its button greyed or not.
 wool.Changed:Connect(function()
 	updateAlert()
+	if getSelectedAmount() == "max" and window.isOpen() then
+		renderAll()
+		return
+	end
 	for _, card in cards do
 		updatePurchaseButton(card)
 	end
 end)
+
+amountKnob.Activated:Connect(function()
+	setAmountIndex(amountIndex % #AMOUNTS + 1)
+end)
+setAmountIndex(1)
 
 layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvasSize)
 scrollFrame:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(function()
@@ -535,7 +546,7 @@ network.waitUntilReadyAsync()
 
 network.connectEvent(network.RemoteEvents.UpgradeState, applyState)
 
-network.connectEvent(network.RemoteEvents.UpgradeResult, function(id: any, success: boolean, reason: string?, level: number?)
+network.connectEvent(network.RemoteEvents.UpgradeResult, function(id: any, success: boolean, reason: string?, level: number?, count: number?)
 	local card = if type(id) == "string" then cards[id] else nil
 	if not card then
 		return
@@ -546,7 +557,8 @@ network.connectEvent(network.RemoteEvents.UpgradeResult, function(id: any, succe
 		return
 	end
 
-	alerts.show(`Upgraded {card.state.title} -> lvl {level or card.state.level or 0}`, "success")
+	local bought = if type(count) == "number" and count > 1 then ` (+{count})` else ""
+	alerts.show(`Upgraded {card.state.title} -> lvl {level or card.state.level or 0}{bought}`, "success")
 	if cashInSound and cashInSound:IsA("Sound") then
 		cashInSound:Play()
 	end

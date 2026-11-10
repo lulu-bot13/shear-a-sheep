@@ -71,7 +71,6 @@ export type EnumType = "ShearSwing"
 	| "OfferResponse"
 	-- Phase 9/10 (Progression + Goals)
 	| "SheepPoof"
-	| "RareSheepSpawn"
 	| "RequestGoalState"
 	| "GoalState"
 
@@ -138,7 +137,6 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	OfferResponse = "OfferResponse",
 	-- Phase 9/10 (Progression + Goals)
 	SheepPoof = "SheepPoof",
-	RareSheepSpawn = "RareSheepSpawn",
 	RequestGoalState = "RequestGoalState",
 	GoalState = "GoalState",
 }

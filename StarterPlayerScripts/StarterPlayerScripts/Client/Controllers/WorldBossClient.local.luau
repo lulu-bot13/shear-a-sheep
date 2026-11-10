@@ -1,6 +1,6 @@
 --[[
-	King Sheep world boss on the client: Main.BossBar and the boss's BossHealthBar follow its Health / MaxHealth attributes,
-	and WorldBossEffect plays the stomp (ring, then knockback on your own character), wool bursts and the poof when it leaves.
+	King Sheep world boss on the client: health bars, stomps and wool bursts, the arrival and defeat cutscenes with their
+	effects, and the reward popup once the defeat has played out.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.WorldBossClient
 ]]--
 
@@ -14,16 +14,14 @@ local tweenService = game:GetService("TweenService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
-local settings = require(script.Parent.Parent.Modules.Settings)
+local cutscene = require(script.Parent.Parent.Modules.KingSheepCutscene)
+local rewardPopup = require(script.Parent.Parent.Modules.KingSheepRewardPopup)
+local vfx = require(script.Parent.Parent.Modules.KingSheepVFX)
 
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-local vfxFolder = replicatedStorage:WaitForChild("Assets"):WaitForChild("VFX", 10)
-local poofTemplate = if vfxFolder then vfxFolder:WaitForChild("PoofAttachment", 10) else nil
-if not poofTemplate then
-	warn("WorldBossClient: ReplicatedStorage.Assets.VFX.PoofAttachment is missing; build it in Studio.")
-end
+local effectsFolder = vfx.folder
 
 --// Configs
 local BOSS_TAG = "WorldBoss" -- WorldBossData.Tag on the server
@@ -44,23 +42,21 @@ local KNOCKBACK_LIFT = 0.6 -- upward speed, as a share of the stomp's power
 local KNOCKBACK_HEIGHT = 12 -- studs above/below the stomp a character still gets knocked
 
 local WOOL_PUFFS = 14
-local WOOL_PUFF_LIFETIME = 1.4
-local WOOL_COLOR = Color3.fromRGB(250, 248, 240)
 local REWARD_TEXT_SECONDS = 1.6
 local REWARD_TEXT_RISE = 4
 local REWARD_TEXT_COLOR = Color3.fromRGB(255, 255, 255)
 
-local POOF_DEFAULT_EMIT_COUNT = 20
 local POOF_SPREAD = 0.25 -- extra poofs around a big boss, as a share of its size
+local REVEAL_DELAY = 0.9 -- seconds into the arrival before the pillar rises, so the cutscene's camera is there for it
+local EXPLODE_LEAD = 0.6 -- the blast lands this long before the server removes the defeated boss
+local MIN_EXPLODE_SECONDS = 0.8
+local POPUP_WAIT_SECONDS = 10 -- the most the reward popup waits for the defeat cutscene
 
 --// State
 local boss: Model? = nil
 local bossConnections: { RBXScriptConnection } = {}
 local timerToken = 0
-
-local effectsFolder = Instance.new("Folder")
-effectsFolder.Name = "WorldBossEffects"
-effectsFolder.Parent = workspace
+local defeatShownAt = 0 -- os.clock() the blast lands, so the reward popup follows it
 
 --// Helpers ------------------------------------------------------------------------
 
@@ -153,6 +149,8 @@ local function onStateChanged()
 	timerToken += 1
 	if getState() == "Active" then
 		tickTimer(timerToken)
+	else
+		cutscene.stop("Intro") -- it escaped or was sent away mid-arrival
 	end
 	updateBars()
 end
@@ -237,26 +235,6 @@ local function playStomp(data: { [string]: any })
 	root.AssemblyLinearVelocity = direction * power + Vector3.new(0, power * KNOCKBACK_LIFT, 0)
 end
 
-local function throwWool(position: Vector3, count: number)
-	for _ = 1, settings.effectCount(count) do
-		local puff = Instance.new("Part")
-		puff.Shape = Enum.PartType.Ball
-		puff.Material = Enum.Material.SmoothPlastic
-		puff.Color = WOOL_COLOR
-		puff.Size = Vector3.one * (1 + math.random())
-		puff.CanCollide = false
-		puff.CanQuery = false
-		puff.CanTouch = false
-		puff.CastShadow = false
-		puff.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
-		puff.Parent = effectsFolder
-		local angle = math.random() * math.pi * 2
-		puff.AssemblyLinearVelocity = Vector3.new(math.cos(angle), 0, math.sin(angle)) * (14 + math.random() * 10)
-			+ Vector3.new(0, 25 + math.random() * 15, 0)
-		debris:AddItem(puff, WOOL_PUFF_LIFETIME)
-	end
-end
-
 -- "+X Wool" floating up over your own head.
 local function showReward(amount: number)
 	local character = player.Character
@@ -294,7 +272,7 @@ local function showReward(amount: number)
 end
 
 local function playWoolBurst(data: { [string]: any })
-	throwWool(data.position, WOOL_PUFFS)
+	vfx.throwWool(data.position, WOOL_PUFFS)
 	local rewards = data.rewards
 	local amount = if type(rewards) == "table" then rewards[tostring(player.UserId)] else nil
 	if type(amount) == "number" then
@@ -302,40 +280,86 @@ local function playWoolBurst(data: { [string]: any })
 	end
 end
 
-local function playPoof(position: Vector3)
-	if not poofTemplate then
-		return
-	end
-	local poof = poofTemplate:Clone()
-	poof.Parent = workspace.Terrain
-	poof.WorldPosition = position
-
-	local lifetime = 0
-	for _, descendant in poof:GetDescendants() do
-		if descendant:IsA("ParticleEmitter") then
-			local emitCount = descendant:GetAttribute("EmitCount")
-			descendant:Emit(settings.effectCount(if type(emitCount) == "number" then emitCount else POOF_DEFAULT_EMIT_COUNT))
-			lifetime = math.max(lifetime, descendant.Lifetime.Max)
-		end
-	end
-	debris:AddItem(poof, lifetime + 0.5)
-end
-
 -- A poof in the middle and four around it, so a big boss disappears in one cloud.
-local function playLeave(data: { [string]: any }, defeated: boolean)
+local function playEscape(data: { [string]: any })
 	local position: Vector3 = data.position
 	local spread = (if type(data.size) == "number" then data.size else 10) * POOF_SPREAD
-	playPoof(position)
+	vfx.poof(position)
 	for index = 1, 4 do
 		local angle = index * math.pi / 2
-		playPoof(position + Vector3.new(math.cos(angle) * spread, 0, math.sin(angle) * spread))
+		vfx.poof(position + Vector3.new(math.cos(angle) * spread, 0, math.sin(angle) * spread))
 	end
-	if defeated then
-		throwWool(position, WOOL_PUFFS * 2)
+end
+
+local function getTarget(data: { [string]: any }): cutscene.Target?
+	if typeof(data.pivot) ~= "CFrame" or type(data.height) ~= "number" or type(data.seconds) ~= "number" then
+		return nil
 	end
+	return {
+		pivot = data.pivot,
+		center = if typeof(data.center) == "Vector3" then data.center else data.position,
+		height = data.height,
+		seconds = data.seconds,
+	}
+end
+
+-- The arrival: the pillar and burst for everyone, and the fly-in for whoever can watch it.
+local function playSpawn(data: { [string]: any })
+	local target = getTarget(data)
+	if not target then
+		return
+	end
+	task.delay(REVEAL_DELAY, vfx.playReveal, { position = data.position, height = target.height })
+	cutscene.playIntro(target)
+end
+
+-- The defeat: the charge-up and blast for everyone, and the ending shot for whoever can watch it.
+local function playDefeat(data: { [string]: any })
+	local target = getTarget(data)
+	if not target then
+		return
+	end
+	local explodeAt = math.max(target.seconds - EXPLODE_LEAD, MIN_EXPLODE_SECONDS)
+	target.explodeAt = explodeAt
+	defeatShownAt = os.clock() + explodeAt
+	vfx.playDefeat({
+		boss = if typeof(data.boss) == "Instance" and data.boss:IsA("Model") then data.boss else nil,
+		center = target.center,
+		height = target.height,
+		explodeAt = explodeAt,
+	})
+	cutscene.playOutro(target)
+end
+
+local function isReward(data: any): boolean
+	return type(data) == "table"
+		and type(data.damage) == "number"
+		and type(data.share) == "number"
+		and type(data.rank) == "number"
+		and type(data.shearers) == "number"
+		and type(data.wool) == "number"
+		and type(data.luck) == "number"
+		and type(data.gems) == "number"
+		and type(data.woolBonus) == "number"
+		and type(data.luckBonus) == "number"
+end
+
+-- The popup waits for the blast and the ending shot, so it opens as the camera comes home.
+local function showRewardPopup(reward: rewardPopup.Reward)
+	local giveUpAt = os.clock() + POPUP_WAIT_SECONDS
+	while os.clock() < giveUpAt and (os.clock() < defeatShownAt or cutscene.isPlaying()) do
+		task.wait(0.1)
+	end
+	rewardPopup.show(reward)
 end
 
 local function onEffect(kind: any, data: any)
+	if kind == "Reward" then
+		if isReward(data) then
+			task.spawn(showRewardPopup, data)
+		end
+		return
+	end
 	if type(data) ~= "table" or typeof(data.position) ~= "Vector3" then
 		return
 	end
@@ -345,8 +369,12 @@ local function onEffect(kind: any, data: any)
 		playStomp(data)
 	elseif kind == "WoolBurst" then
 		playWoolBurst(data)
-	elseif kind == "Defeated" or kind == "Escaped" then
-		playLeave(data, kind == "Defeated")
+	elseif kind == "Spawn" then
+		playSpawn(data)
+	elseif kind == "Defeated" then
+		playDefeat(data)
+	elseif kind == "Escaped" then
+		playEscape(data)
 	end
 end
 

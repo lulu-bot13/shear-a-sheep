@@ -47,9 +47,8 @@ Set the priority to Action. If your impact or release frame lands at a different
 | `Client/Modules/WeatherEffects.luau` | `RAIN_SOUND_ID` | Medium rain loop, no thunder, seamless |
 | | `NIGHT_SOUND_ID` | Crickets + occasional owl loop, quiet |
 | `Client/Modules/Lightning.luau` | `THUNDER_SOUND_ID` | Sharp crack then rolling rumble, 2-4 s |
-| `Client/Modules/AbilityShackVFX.luau` | `TICK_SOUND_ID` | Short slot-machine click |
-| | `WIN_SOUND_IDS` | Rare: chime, Epic: sparkle swell, Legendary: fanfare, Mythic: choir/impact boom |
 | (no hook yet) | | Giant+ sheep spawn stinger, deeper baa for big sheep, charge zap |
+| (no hook yet, `Client/Modules/AbilityRollEffect.luau`) | | Ability roll: short slot-machine click; win stingers (Rare: chime, Epic: sparkle swell, Legendary: fanfare, Mythic: choir/impact boom) |
 
 ## 5. Textures / images (constants are `""` until you set them)
 

@@ -1,7 +1,6 @@
 --[[
-	The rebirth screen (StarterGui.RebirthScreen): wool cost, before -> after luck, rebirth / Prestige counts and the sheep the rebirth needs
-	(found or its pity countdown; optional RequirementTip.SheepViewport preview). Plays the pen's rebirth poof. RebirthHandler decides everything.
-
+	The rebirth screen (StarterGui.RebirthScreen): wool cost, before -> after luck, rebirth / Prestige counts and the sheep the rebirth
+	needs (spinning in RequirementTip.SheepViewport, found or its pity countdown). Plays the pen's rebirth poof. RebirthHandler decides everything.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.RebirthClient
 ]]--
 
@@ -12,13 +11,13 @@ local tweenService = game:GetService("TweenService")
 local soundService = game:GetService("SoundService")
 local collectionService = game:GetService("CollectionService")
 local debris = game:GetService("Debris")
+local runService = game:GetService("RunService")
 
 --// Instances
 local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local hudButtons = playerGui:WaitForChild("Main"):WaitForChild("Buttons")
 local openButton = hudButtons:WaitForChild("Rebirth") :: GuiButton
-local alertBadge = openButton:FindFirstChild("Alert", true) :: GuiObject? -- optional badge on the HUD button
 local hudProgress = openButton:WaitForChild("Progress") :: TextLabel
 
 local rebirthGui = playerGui:WaitForChild("RebirthScreen") :: ScreenGui
@@ -38,13 +37,8 @@ local woolPrice = mainFrame:WaitForChild("WoolPrice") :: TextLabel
 local requirementTip = mainFrame:WaitForChild("RequirementTip") :: GuiObject
 local requirementText = requirementTip:WaitForChild("RequirementText") :: TextLabel
 local keepNote = requirementTip:WaitForChild("KeepNote") :: TextLabel
-local sheepViewport = mainFrame:FindFirstChild("SheepViewport", true) :: ViewportFrame? -- optional: the rebirth sheep's preview
-if sheepViewport and not sheepViewport:IsA("ViewportFrame") then
-	sheepViewport = nil
-end
-if not sheepViewport then
-	warn("RebirthClient: RebirthScreen.Main has no SheepViewport (ViewportFrame); build it in Studio to preview the rebirth sheep.")
-end
+local sheepViewport = requirementTip:WaitForChild("SheepViewport") :: ViewportFrame -- the rebirth sheep's preview
+local sheepStatus = sheepViewport:WaitForChild("Status") :: TextLabel -- NOT FOUND / FOUND badge on it
 local vfxFolder = replicatedStorage:WaitForChild("Assets"):WaitForChild("VFX", 10)
 local poofTemplate = vfxFolder and vfxFolder:FindFirstChild("PoofAttachment") :: Attachment?
 if not poofTemplate then
@@ -55,7 +49,6 @@ end
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 local alerts = require(script.Parent.Parent.Modules.Alerts)
-local alertPulse = require(script.Parent.Parent.Modules.AlertPulse)
 local announcements = require(script.Parent.Parent.Modules.Announcements)
 local luckRain = require(script.Parent.Parent.Modules.LuckRain)
 local purchaseEffect = require(script.Parent.Parent.Modules.PurchaseEffect)
@@ -63,24 +56,12 @@ local rebirthVFX = require(script.Parent.Parent.Modules.RebirthVFX)
 local sheepModels = require(script.Parent.Parent.Modules.SheepModels)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
-local DEBUG = false
-
-local function debugLog(message: string)
-	if DEBUG then
-		print(`[RebirthClient] {message}`)
-	end
-end
-
-debugLog("script started")
-
 -- The before -> after labels built in Studio.
 local rewardBefore = mainFrame:WaitForChild("BeforeFrame"):WaitForChild("PreviousAmount") :: TextLabel
 local rewardAfter = mainFrame:WaitForChild("AfterFrame"):WaitForChild("AfterAmount") :: TextLabel
 
 --// Sounds
 local rebirthedSound = soundService:WaitForChild("UISounds"):FindFirstChild("Rebirthed") :: Sound?
-
-debugLog(`found the UI (Rebirth button is a {rebirthButton.ClassName}, open button is a {openButton.ClassName})`)
 
 --// Configs
 local REWARD_BEFORE_COLOR = Color3.fromRGB(170, 170, 170)
@@ -110,9 +91,14 @@ local REASON_TEXT = {
 }
 local PREVIEW_CAMERA_FOV = 40
 local PREVIEW_CAMERA_PITCH = math.rad(15)
-local PREVIEW_FILL = 0.75
-local UNFOUND_TINT = Color3.new(0, 0, 0) -- an unfound rebirth sheep shows as a silhouette, like the Index
-local FOUND_TINT = Color3.new(1, 1, 1)
+local PREVIEW_FILL = 0.9 -- of the viewport the spinning sheep fills
+local PREVIEW_SPIN_SPEED = math.rad(45) -- per second, while the screen is open
+-- The rebirth sheep stays in full colour (unlike the Index's silhouettes) so the player knows what to look for.
+local SHEEP_NAME_COLOR = "#FFD54A"
+local STATUS_LOOKS = {
+	found = { text = "FOUND ✓", color = Color3.fromRGB(66, 255, 82) },
+	missing = { text = "NOT FOUND", color = Color3.fromRGB(255, 80, 80) },
+}
 local MAX_POOFS = 45
 
 --// State
@@ -125,6 +111,10 @@ local nextStateRequest = 0
 local stateRequestQueued = false
 local tipTexts: { [TextLabel]: string } = {} -- each RequirementTip label's own text, restored while the player can't Prestige
 local previewSheep: string? = nil -- the sheep in SheepViewport right now
+local previewModel: Model? = nil
+local previewCenter = Vector3.zero
+local previewAngle = 0
+local spinConnection: RBXScriptConnection? = nil
 local knobOnePosition = amountKnob.Position -- the 1X side, as built in Studio
 -- The MAX side mirrors the 1X side across the track.
 local knobMirror = 2 * amountKnob.AnchorPoint.X - 1
@@ -211,13 +201,14 @@ local function getProgress(): number
 	return math.clamp(state.wool / state.woolCost, 0, 1)
 end
 
--- Puts a scriptless copy of the sheep in SheepViewport, facing the camera like the Index's previews.
-local function buildPreview(viewport: ViewportFrame, sheepType: string)
-	for _, child in viewport:GetChildren() do
+-- Puts a scriptless copy of the sheep in SheepViewport, sized so it stays inside the frame as it spins.
+local function buildPreview(sheepType: string)
+	for _, child in sheepViewport:GetChildren() do
 		if child:IsA("Model") or child:IsA("Camera") then
 			child:Destroy()
 		end
 	end
+	previewModel = nil
 	local template = sheepModels.find(sheepType)
 	if not template then
 		return
@@ -232,34 +223,48 @@ local function buildPreview(viewport: ViewportFrame, sheepType: string)
 		end
 	end
 	model:PivotTo(CFrame.new())
-	model.Parent = viewport
+	model.Parent = sheepViewport
 
 	local camera = Instance.new("Camera")
 	camera.FieldOfView = PREVIEW_CAMERA_FOV
-	camera.Parent = viewport
-	viewport.CurrentCamera = camera
+	camera.Parent = sheepViewport
+	sheepViewport.CurrentCamera = camera
 
 	local boxCFrame, boxSize = model:GetBoundingBox()
 	local center = boxCFrame.Position
-	local distance = (boxSize.Magnitude * 0.5) / math.tan(math.rad(PREVIEW_CAMERA_FOV / 2)) / PREVIEW_FILL
+	local radius = math.max(Vector2.new(boxSize.X, boxSize.Z).Magnitude, boxSize.Y) / 2
+	local distance = radius / math.tan(math.rad(PREVIEW_CAMERA_FOV / 2)) / PREVIEW_FILL
 	local direction = (CFrame.Angles(0, math.pi, 0) * CFrame.Angles(-PREVIEW_CAMERA_PITCH, 0, 0)).LookVector
 	camera.CFrame = CFrame.lookAt(center - direction * distance, center)
+	previewModel = model
+	previewCenter = center
 end
 
+-- The sheep the next rebirth needs, with a FOUND / NOT FOUND badge; hidden when none is needed or the player can Prestige.
 local function renderSheepPreview()
-	if not sheepViewport then
-		return
-	end
 	local sheepType = if state and not canPrestige() then state.requiredSheep else nil
 	sheepViewport.Visible = sheepType ~= nil
 	if sheepType and sheepType ~= previewSheep then
-		buildPreview(sheepViewport, sheepType)
+		buildPreview(sheepType)
 	end
 	previewSheep = sheepType
-	sheepViewport.ImageColor3 = if state and state.requiredFound then FOUND_TINT else UNFOUND_TINT
+
+	local look = if state and state.requiredFound then STATUS_LOOKS.found else STATUS_LOOKS.missing
+	sheepStatus.Text = look.text
+	sheepStatus.BackgroundColor3 = look.color
 end
 
--- The rebirth sheep: "FIND THE GOLDEN SHEEP TO REBIRTH" with its pity countdown, or "Found ✓" once it's in the Index.
+-- Turns the preview sheep round its middle while the screen is open.
+local function spinPreview(deltaTime: number)
+	local model = previewModel
+	if not model or not sheepViewport.Visible then
+		return
+	end
+	previewAngle = (previewAngle + deltaTime * PREVIEW_SPIN_SPEED) % (math.pi * 2)
+	model:PivotTo(CFrame.new(previewCenter) * CFrame.Angles(0, previewAngle, 0) * CFrame.new(-previewCenter))
+end
+
+-- The rebirth sheep: "FIND THE GOLDEN SHEEP TO REBIRTH" (its name highlighted) with its pity countdown, or "Found ✓" once it's in the Index.
 local function renderRequirementTip(prestigeReady: boolean)
 	for label, originalText in tipTexts do
 		label.Text = if prestigeReady then PRESTIGE_TIP_TEXT[label.Name] else originalText
@@ -268,11 +273,12 @@ local function renderRequirementTip(prestigeReady: boolean)
 	if prestigeReady or not name then
 		return
 	end
+	local highlighted = `<font color="{SHEEP_NAME_COLOR}">{name}</font>`
 	if state.requiredFound then
-		keepNote.Text = `{name}: Found ✓`
+		keepNote.Text = `{highlighted}: Found ✓`
 	else
-		requirementText.Text = `FIND THE {string.upper(name)} TO REBIRTH`
-		keepNote.Text = `Not found yet - guaranteed in {state.pityLeft} {if state.pityLeft == 1 then "spawn" else "spawns"}`
+		requirementText.Text = `FIND THE <font color="{SHEEP_NAME_COLOR}">{string.upper(name)}</font> TO REBIRTH`
+		keepNote.Text = `{highlighted} not found yet - guaranteed in {state.pityLeft} {if state.pityLeft == 1 then "spawn" else "spawns"}`
 	end
 end
 
@@ -300,11 +306,8 @@ local function render()
 	rebirthButton.ImageColor3 = if affordable or prestigeReady then normalTint else GREY_TINT
 end
 
--- The HUD button's "Alert" badge shows while a rebirth is ready, and Progress shows the wool percentage.
+-- The HUD button's Progress shows the wool percentage.
 local function updateHud()
-	if alertBadge then
-		alertBadge.Visible = state ~= nil and state.canRebirth == true
-	end
 	if state then
 		-- Rounded down, so 100% only shows once the rebirth is actually affordable.
 		hudProgress.Text = if state.maxed then "MAX" else `{math.floor(getProgress() * 100)}%`
@@ -323,13 +326,21 @@ local window = windowsManager.register("Rebirth", {
 		setAmountIndex(1)
 		render()
 		requestState()
+		if not spinConnection then
+			spinConnection = runService.RenderStepped:Connect(spinPreview)
+		end
 	end,
 	-- WindowsManager only pops Main in and out, so the Switch beside it is hidden as soon as the window closes.
 	onClose = function()
 		amountSwitch.Visible = false
+		if spinConnection then
+			spinConnection:Disconnect()
+			spinConnection = nil
+		end
 	end,
 })
 amountSwitch.Visible = false
+sheepViewport.Visible = false -- until the server says which sheep is needed
 
 setAmountIndex(1)
 
@@ -345,13 +356,12 @@ end
 for _, label in { requirementText, keepNote } do
 	tipTexts[label] = label.Text
 end
-keepNote.RichText = true -- its Prestige text is coloured with a font tag
+-- The sheep's name and the Prestige warning are coloured with font tags.
+requirementText.RichText = true
+keepNote.RichText = true
 collectionService:AddTag(rebirthButton, SHINE_TAG)
 hudProgress.Text = "0%"
 updateHud()
-if alertBadge then
-	alertPulse.attach(alertBadge)
-end
 
 task.spawn(function()
 	while true do
@@ -366,16 +376,12 @@ amountKnob.MouseButton1Click:Connect(toggleAmount)
 
 rebirthButton.MouseButton1Click:Connect(function()
 	if canPrestige() then
-		debugLog("clicked Prestige, sending RequestPrestige")
 		network.fireServer(network.RemoteEvents.RequestPrestige)
 	elseif not state or state.amount ~= getSelectedAmount() then
-		debugLog("clicked Rebirth, but no state for the selected amount yet; asking for it")
 		requestState()
 	elseif state.amountCanRebirth and not state.maxed then
-		debugLog(`clicked Rebirth, sending RequestRebirth x{getSelectedAmount()}`)
 		network.fireServer(network.RemoteEvents.RequestRebirth, getSelectedAmount())
 	else
-		debugLog(`clicked Rebirth, not ready: wool {state.wool}/{state.amountCost}, amountCanRebirth {state.amountCanRebirth}, maxed {state.maxed}`)
 		local text = if state.maxed then REASON_TEXT.MaxRebirths elseif state.needsSheep then getNeedSheepText() else REASON_TEXT.NotReady
 		alerts.show(text, "error")
 		shake(rebirthButton, CLICK_SHAKE_ANGLES)
@@ -393,11 +399,9 @@ skipRebirthButton.MouseButton1Click:Connect(function()
 	network.fireServer(network.RemoteEvents.RequestProductPrompt, "SkipRebirth")
 end)
 
-debugLog("button clicks connected, waiting for the network")
 network.waitUntilReadyAsync()
 
 network.connectEvent(network.RemoteEvents.RebirthState, function(newState: any)
-	debugLog(`got state: rebirths {newState.rebirths}, wool {newState.wool}/{newState.woolCost}, canRebirth {newState.canRebirth}`)
 	state = newState
 	local ready = newState.canRebirth == true and not newState.maxed
 	if ready and not wasReady then
@@ -411,7 +415,6 @@ network.connectEvent(network.RemoteEvents.RebirthState, function(newState: any)
 end)
 
 network.connectEvent(network.RemoteEvents.RebirthResult, function(success: boolean, reason: string?, rebirths: number?, count: number?)
-	debugLog(`rebirth result: success {success}, reason {reason}, count {count}`)
 	if success then
 		local times = if count and count > 1 then ` x{count}` else ""
 		announcements.show("Rebirthed", `Rebirthed{times} ({rebirths or "?"})`)

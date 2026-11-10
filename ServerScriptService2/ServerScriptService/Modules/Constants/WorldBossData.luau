@@ -74,7 +74,7 @@ worldBossData.RankGems = { 4, 2, 1 } -- extra Gems for the top 3
 
 -- Wool: a share of the player's next rebirth cost (their last one's at max rebirths), which grows x1.4 a rebirth with the
 -- economy. Times their Prestige, 2x WOOL pass, podium and friend multipliers, like shearing, so it keeps up after Prestiges.
-worldBossData.WoolPerShare = 0.3 -- of the next rebirth cost, per even share (~30-90 s of play at that rebirth)
+worldBossData.WoolPerShare = 0.25 -- of the next rebirth cost, per even share (~30-90 s of play at that rebirth)
 worldBossData.MoreWoolWeight = 0.25 -- More Wool's multiplier counts as multiplier ^ this; rebirth costs already track most of it
 worldBossData.MinWool = 25 -- floor for any rewarded player, so a brand-new farm still sees a number
 
@@ -82,7 +82,7 @@ worldBossData.MinWool = 25 -- floor for any rewarded player, so a brand-new farm
 -- few-% luck factor bump later on. Times the 2x LUCK pass and the podium's Luck bonus.
 worldBossData.LuckFlat = 30 -- per even share; ~+6% luck factor for a brand-new player
 worldBossData.LuckPerShare = 0.05 -- of (their Luck + SpawnOdds.LUCK_SCALE), per even share; ~+1% luck factor at any stage
-worldBossData.LuckScale = 100 -- SpawnOdds.LUCK_SCALE
+worldBossData.LuckScale = 100 -- matches SpawnOdds.LUCK_SCALE
 
 -- Gems are the rare currency (an Ability Shack roll is 4), so they barely scale: 4 for an even share, ~10 for the top shearer.
 worldBossData.GemsBase = 2

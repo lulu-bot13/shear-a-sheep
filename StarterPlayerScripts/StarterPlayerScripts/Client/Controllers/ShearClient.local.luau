@@ -304,7 +304,9 @@ local function updateRangeHighlights(center: Vector3)
 		local root = boss:FindFirstChild("HumanoidRootPart")
 		local hitRadius = boss:GetAttribute("HitRadius")
 		local health = boss:GetAttribute("Health")
-		if not boss:IsA("Model") or not root or not root:IsA("BasePart") or type(health) ~= "number" or health <= 0 then
+		if not boss:IsA("Model") or not root or not root:IsA("BasePart") or type(health) ~= "number" or health <= 0
+			or boss:GetAttribute("Vulnerable") == false
+		then
 			continue
 		end
 		local offset = root.Position - center

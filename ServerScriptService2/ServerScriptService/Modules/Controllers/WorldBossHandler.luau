@@ -293,6 +293,7 @@ local function buildFight(): Fight?
 	boss:SetAttribute("Health", maxHealth)
 	boss:SetAttribute("MaxHealth", maxHealth)
 	boss:SetAttribute("HitRadius", WorldBossData.HitRadius)
+	boss:SetAttribute("Vulnerable", false) -- true once the intro ends, so ShearClient only outlines it when hits count
 
 	-- Feet on the ground at the spawn, facing a random way.
 	local spawnPosition = findGround(spawnPart.Position)
@@ -402,6 +403,9 @@ end
 -- Stands still through the intro cutscene, then wanders and uses its abilities until it's gone.
 local function runBoss(current: Fight)
 	task.wait(math.max(current.vulnerableAt - os.clock(), 0))
+	if isCurrent(current) then
+		current.boss:SetAttribute("Vulnerable", true)
+	end
 	local nextAbilityAt = os.clock() + random:NextNumber(WorldBossData.MinAbilitySeconds, WorldBossData.MaxAbilitySeconds)
 	while isCurrent(current) do
 		if os.clock() >= nextAbilityAt then
@@ -435,7 +439,7 @@ local function getWoolBonus(player: Player): number
 		* (if type(friendBoost) == "number" and friendBoost > 0 then friendBoost else 1)
 end
 
--- The 2x LUCK pass and the podium's Luck bonus (not the timed boosts, which would make it swing wildly).
+-- The 2x LUCK pass and the podium's Luck bonus (not the timed boosts, which would make it swing too much).
 local function getLuckBonus(player: Player): number
 	local passMultiplier = if GamePassService.ownsPass(player, "DoubleLuck")
 		then MonetizationData.Items.DoubleLuck.multiplier or 1
@@ -632,7 +636,6 @@ local function finish(current: Fight, defeated: boolean)
 		bar:Destroy()
 	end
 
-	local rewards, top, shearers = payOut(current)
 	fireEffect("Defeated", {
 		position = boxCFrame.Position,
 		size = boxSize.Magnitude,
@@ -641,6 +644,7 @@ local function finish(current: Fight, defeated: boolean)
 		boss = boss,
 		seconds = WorldBossData.DefeatSequenceSeconds,
 	})
+	local rewards, top, shearers = payOut(current)
 	AnnouncementHandler.worldBossDefeated(top, shearers)
 	for player, reward in rewards do
 		network.fireClient(network.RemoteEvents.WorldBossEffect, player, "Reward", reward)
@@ -663,7 +667,7 @@ local function spawnBoss(source: string)
 	fight = current
 	setState("Active", now() + WorldBossData.IntroSeconds + WorldBossData.TimeLimit)
 	WeatherHandler.markNotable()
-	AnnouncementHandler.worldBossSpawn(WorldBossData.TimeLimit, WorldBossData.IntroSeconds)
+	-- The cutscene starts before the announcement lands, so its banner waits for the camera to come back.
 	local boxCFrame, boxSize = current.boss:GetBoundingBox()
 	fireEffect("Spawn", {
 		position = current.spawnPosition,
@@ -672,6 +676,7 @@ local function spawnBoss(source: string)
 		height = boxSize.Y,
 		seconds = WorldBossData.IntroSeconds,
 	})
+	AnnouncementHandler.worldBossSpawn(WorldBossData.TimeLimit, WorldBossData.IntroSeconds)
 	for _, player in players:GetPlayers() do
 		Analytics.worldBossSpawned(player, source, WeatherHandler.getWeather())
 	end

@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	New sheep ride each plot's Conveyor.Belt from Feed to PenDrop, up to QUEUE_SIZE at a time, and hop into the pen while it has room.
+	New sheep ride each plot's Conveyor.Belt from Feed to PenDrop, up to QUEUE_SIZE at a time, then hop into the pen while it has room and walk straight off.
 	The belt's Paused attribute is true while the pen is full and nothing is riding (ConveyorHandler and ConveyorClient follow it).
 
 	Location: ServerScriptService.Modules.Controllers.SheepBeltHandler
@@ -155,7 +155,9 @@ local function stepFarm(farm: Farm, dt: number)
 		local hop = farm.hops[index]
 		if stepHop(hop, dt) then
 			table.remove(farm.hops, index)
-			SheepHandler.admitBeltSheep(hop.sheep, hop.to) -- CountChanged then updates freeSlots
+			if SheepHandler.admitBeltSheep(hop.sheep, hop.to) then -- CountChanged then updates freeSlots
+				SheepWanderHandler.walkAwayFrom(hop.sheep, hop.to)
+			end
 		end
 	end
 

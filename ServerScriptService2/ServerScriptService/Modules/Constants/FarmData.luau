@@ -41,6 +41,11 @@ farmData.Wander = {
 	TickSeconds = 0.25, -- how often the wander loop checks every sheep
 	ShearHoldSeconds = 3, -- a sheared sheep stands still this long after the last snip before wandering again
 
+	-- A sheep that lands off the conveyor walks straight away from the drop, towards the pen's middle, with no idle first.
+	DropWalkMinDistance = 12, -- studs from where it landed
+	DropWalkMaxDistance = 22,
+	DropWalkSpreadDegrees = 50, -- random turn either side of the line from the drop to the pen's middle
+
 	-- Grazing: after some walks the sheep bends down and eats grass (animated by SheepGrazeClient).
 	GrazeChance = 0.6, -- chance a walk ends in grazing
 	MinGrazeSeconds = 3, -- how long it keeps its head down

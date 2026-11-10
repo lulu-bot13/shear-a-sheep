@@ -14,6 +14,7 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
+local kingSheepBanner = require(script.Parent.Parent.Modules.KingSheepBanner)
 local settings = require(script.Parent.Parent.Modules.Settings)
 
 --// Instances
@@ -91,16 +92,30 @@ type Announcement = {
 	multiplier: number,
 	minutes: number,
 } | {
-	kind: "ReaperRaid" | "WorldBossSpawn" | "WorldBossEscaped",
+	kind: "ReaperRaid" | "WorldBossEscaped",
 } | {
 	kind: "WorldBossPending",
 	seconds: number,
+} | {
+	kind: "WorldBossSpawn",
+	seconds: number?,
+	introSeconds: number?,
 } | {
 	kind: "ReaperDefeated",
 	userName: string,
 } | {
 	kind: "WorldBossDefeated",
 	topUserName: string?,
+	topDisplayName: string?,
+	shearers: number?,
+}
+
+-- King Sheep announcements also get KingSheepBanner's on-screen ribbon.
+local KING_BANNERS: { [string]: kingSheepBanner.Kind } = {
+	WorldBossPending = "Pending",
+	WorldBossSpawn = "Spawn",
+	WorldBossDefeated = "Defeated",
+	WorldBossEscaped = "Escaped",
 }
 
 type BestFind = {
@@ -403,6 +418,18 @@ local function onAnnouncement(announcement: Announcement)
 			oddsText = announcement.oddsText,
 		})
 		task.spawn(playQueue)
+	end
+
+	local bannerKind = KING_BANNERS[announcement.kind]
+	if bannerKind then
+		local raw = announcement :: any
+		kingSheepBanner.show(bannerKind, {
+			seconds = if type(raw.seconds) == "number" then raw.seconds else nil,
+			topName = if type(raw.topDisplayName) == "string" then raw.topDisplayName
+				elseif type(raw.topUserName) == "string" then raw.topUserName
+				else nil,
+			shearers = if type(raw.shearers) == "number" then raw.shearers else nil,
+		})
 	end
 
 	local textChannel = getChannel()

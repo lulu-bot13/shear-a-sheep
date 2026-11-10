@@ -37,20 +37,6 @@ local BEAM_ATTACHMENT_ROTATION = Vector3.new(0, 0, 90) -- degrees, matches Tutor
 local WOOL_COLOR = Color3.fromRGB(255, 236, 179) -- PodiumData's Wool colour
 local TEXT_WOOL = "x%s Wool"
 
---[[
-	Mirrors how SheepHandler rolls a sheep's WoolAmount (SheepData.Variants, SheepSizeData, MutationData, WeatherData's Charged x3),
-	so the hover shows how much more wool the sheep gives than a plain adult of its type.
-]]
-local VARIANT_WOOL = { Baby = { wool = 1, weight = 0.4 }, Giant = { wool = 2.5, weight = 2.5 } }
-local SIZE_WOOL = {
-	Tiny = { wool = 0.6, minWeight = 15, maxWeight = 40 },
-	Normal = { wool = 1, minWeight = 40, maxWeight = 60 },
-	Huge = { wool = 3, minWeight = 110, maxWeight = 250 },
-}
-local WEIGHT_WOOL_SPREAD = 0.1 -- the heaviest sheep in a tier gives this much more wool, the lightest this much less
-local MUTATION_WOOL = { Galaxy = 2, Haunted = 1.35, Rainbow = 1.4, Shiny = 1.25 }
-local CHARGED_WOOL = 3
-
 -- "%s" is "Click", or "Tap" on touch screens.
 local TEXT_PICK_UP = "%s a sheep to pick it up"
 local TEXT_PLACE = "Place it on a podium stand"
@@ -197,32 +183,14 @@ local function getRoot(model: Model?): BasePart?
 	return if root and root:IsA("BasePart") then root else nil
 end
 
--- Its variant, size tier, weight within the tier, mutation and Charge, read from the attributes SheepHandler sets.
+-- How much more wool it gives than a plain adult of its type (variant, size, weight, mutation and Charge are all in WoolAmount).
 local function getWoolMultiplier(sheep: Model): number
-	local sheepType = sheep:GetAttribute("SheepType")
-	local variant = nil
-	if type(sheepType) == "string" then
-		for id, info in VARIANT_WOOL do
-			if string.sub(sheepType, 1, #id) == id then
-				variant = info
-				break
-			end
-		end
+	local wool = sheep:GetAttribute("WoolAmount")
+	local baseWool = sheep:GetAttribute("BaseWool")
+	if type(wool) ~= "number" or type(baseWool) ~= "number" or baseWool <= 0 then
+		return 1
 	end
-
-	local size = SIZE_WOOL[sheep:GetAttribute("SizeTier")]
-	local multiplier = (if variant then variant.wool else 1)
-		* (if size then size.wool else 1)
-		* (MUTATION_WOOL[sheep:GetAttribute("Mutation")] or 1)
-		* (if sheep:GetAttribute("Charged") == true then CHARGED_WOOL else 1)
-
-	local weight = sheep:GetAttribute("Weight")
-	if size and type(weight) == "number" then
-		local tierWeight = weight / (if variant then variant.weight else 1)
-		local position = math.clamp((tierWeight - size.minWeight) / (size.maxWeight - size.minWeight), 0, 1)
-		multiplier *= 1 + WEIGHT_WOOL_SPREAD * (position * 2 - 1)
-	end
-	return multiplier
+	return wool / baseWool
 end
 
 -- 2.5 -> "2.5", 3 -> "3"
