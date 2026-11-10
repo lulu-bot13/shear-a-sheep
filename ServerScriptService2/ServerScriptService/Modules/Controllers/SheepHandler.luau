@@ -71,6 +71,7 @@ local HUGE_WINDUP_SECONDS = if type(hugeWindup) == "number" then hugeWindup else
 local RISING = "Rising" -- true while a Halloween spawn climbs out of its pit; nothing shears or picks it up meanwhile
 local PIT_OPEN_SECONDS = if type(pitOpen) == "number" then pitOpen else 0.45
 local PIT_RISE_SECONDS = if type(pitRise) == "number" then pitRise else 1.3
+local ON_BELT = "OnBelt" -- true while a sheep rides its plot's conveyor; it is not registered, counted or shearable yet
 
 --// Object pool keys
 local SHEEP_POOL = "SheepModel" -- keyed by sheep type name, since meshes differ per type
@@ -93,6 +94,7 @@ local sheepById: { [number]: Model } = {}
 local woolConnections: { [number]: RBXScriptConnection } = {}
 local countByOwner: { [number]: number? } = {}
 local pendingSheep: { [Model]: number } = {} -- Huge windups and Halloween rises, by owner id: counted but not yet registered
+local beltSheep: { [Model]: number } = {} -- riding a conveyor, by owner id: neither counted nor registered
 local nextSheepId = 0
 local random = Random.new()
 
@@ -170,6 +172,7 @@ end
 createVariantModels()
 
 SheepHandler.CountChanged = Signal.new() -- (player, count)
+SheepHandler.Sheared = Signal.new() -- (owner, sheep) when a sheep shorn bare starts to vanish; its attributes are still set
 
 --// Lookups ---------------------------------------------------------------------------
 
@@ -532,6 +535,7 @@ local function resetSheepForPool(sheep: Instance)
 	sheep:SetAttribute(OWNER_ATTRIBUTE, nil)
 	sheep:SetAttribute("Grazing", nil)
 	sheep:SetAttribute(RISING, nil)
+	sheep:SetAttribute(ON_BELT, nil)
 	sheep:SetAttribute("TutorialSheep", nil) -- TutorialHandler's override must not follow the pooled model to a normal spawn
 
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
@@ -623,6 +627,10 @@ function SheepHandler.vanishSheep(id: number)
 	end
 	if ownerId then
 		setCount(ownerId, (countByOwner[ownerId] or 1) - 1)
+		local owner = players:GetPlayerByUserId(ownerId)
+		if owner then
+			SheepHandler.Sheared:Fire(owner, sheep)
+		end
 	end
 
 	playVanish(sheep, function()
@@ -660,6 +668,12 @@ function SheepHandler.clearSheep(player: Player)
 	for sheep, ownerId in pendingSheep do
 		if ownerId == player.UserId then
 			pendingSheep[sheep] = nil
+			poolSheep(sheep)
+		end
+	end
+	for sheep, ownerId in beltSheep do
+		if ownerId == player.UserId then
+			beltSheep[sheep] = nil
 			poolSheep(sheep)
 		end
 	end
@@ -809,33 +823,26 @@ function SheepHandler.returnSheep(player: Player, sheep: Model, position: Vector
 end
 
 --[[
-	Rolls a sheep type with the player's Luck, rebirths and Prestiges and drops it at `position` on their plot.
-	Halloween sheep can only roll when `halloween` is true. Returns the sheep and its id, or nil if it couldn't be spawned.
-	A Huge sheep is counted at once but only registered and shown after the HugeSpawnVFX windup; during Halloween every
-	sheep (Huge too) instead rises out of a pit and is registered once it is out.
-	`forced` skips the rolls it sets (the tutorial's first sheep).
+	Rolls a sheep type with the player's roll context (Luck, rebirths, Prestiges, Spawn Luck, Sheep Size and their SheepPools pool;
+	Halloween types only during Halloween), sizes it and gives it its attributes and billboards. Not placed, parented, registered
+	or counted yet. Returns the model, its id, its size and how far its pivot must sit above the ground. `forced` skips the rolls it sets.
 ]]
-function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number, rebirths: number, prestiges: number, luckBoost: number?, halloween: boolean?, forced: ForcedSpawn?): (Model?, number?)
-	local sheepFolder = getSheepFolder(player)
-	if not sheepFolder then
-		return nil, nil
-	end
-
+local function buildSheep(player: Player, context: SheepData.RollContext, forced: ForcedSpawn?): (Model?, number?, SheepSizeData.SizeInfo?, number?)
 	local sheepType = if forced and forced.sheepType and SheepData.getInfo(forced.sheepType)
 		then forced.sheepType
-		else SheepData.roll(luck, rebirths, prestiges, random, luckBoost, halloween)
+		else SheepData.rollWith(context, random)
 	local info = sheepType and SheepData.getInfo(sheepType)
 	if not sheepType or not info then
-		return nil, nil
+		return nil, nil, nil, nil
 	end
 
 	local sheepModel = acquireModel(sheepType)
 	if not sheepModel then
-		return nil, nil
+		return nil, nil, nil, nil
 	end
 
 	local root = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
-	local oddsText = SheepData.getOddsText(sheepType, luck, rebirths, prestiges, luckBoost, halloween)
+	local oddsText = SheepData.getOddsTextWith(sheepType, context)
 
 	local size = (forced and SheepSizeData.get(forced.size)) or SheepSizeData.roll(random)
 	local mutation = if forced and forced.noMutation then nil else MutationData.roll(random)
@@ -871,35 +878,55 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 	sheepModel:SetAttribute(WEIGHT, weight)
 	sheepModel:SetAttribute("Charged", nil) -- SheepSpawnHandler charges it after; pooled models must not keep an old charge
 
-	local yaw = random:NextNumber(0, math.pi * 2)
-	sheepModel:PivotTo(CFrame.new(position + Vector3.new(0, lift, 0)) * CFrame.Angles(0, yaw, 0))
+	attachHud(root, info, oddsText, size, scaleRatio)
+	addMutationVfx(sheepModel, root, mutation, scaleRatio)
+	updateWoolVisual(sheepModel)
+	updateHealthHud(sheepModel)
+	return sheepModel, id, size, lift
+end
 
-	local function dress()
-		attachHud(root, info, oddsText, size, scaleRatio)
-		addMutationVfx(sheepModel, root, mutation, scaleRatio)
+-- Puts a built sheep on the farm: registered, tagged and walking, so it can be sheared. The caller counts it.
+local function registerSheep(sheepModel: Model, id: number, sheepFolder: Folder)
+	local root = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
+	sheepById[id] = sheepModel
+	sheepModel:SetAttribute(SPAWNED_AT, workspace:GetServerTimeNow())
+	root.Anchored = false
+	collectionService:AddTag(sheepModel, SHEEP_TAG)
+	sheepModel.Parent = sheepFolder
+
+	-- The server walks the sheep, so it keeps physics ownership (no handing it to a nearby player).
+	pcall(function()
+		root:SetNetworkOwner(nil)
+	end)
+	updateAnimation(sheepModel, 0) -- stands idle until its first walk
+
+	-- Shearing only ever changes ShearHealth; the wool and health bar follow it.
+	woolConnections[id] = sheepModel:GetAttributeChangedSignal("ShearHealth"):Connect(function()
 		updateWoolVisual(sheepModel)
 		updateHealthHud(sheepModel)
+	end)
+end
+
+--[[
+	Rolls a sheep (see buildSheep) and drops it at `position` on the player's plot. Returns the sheep and its id, or nil.
+	A Huge sheep is counted at once but only registered and shown after the HugeSpawnVFX windup; during Halloween every
+	sheep (Huge too) instead rises out of a pit and is registered once it is out.
+]]
+function SheepHandler.spawnSheep(player: Player, position: Vector3, context: SheepData.RollContext, forced: ForcedSpawn?): (Model?, number?)
+	local sheepFolder = getSheepFolder(player)
+	if not sheepFolder then
+		return nil, nil
 	end
 
-	local function place()
-		sheepById[id] = sheepModel
-		sheepModel:SetAttribute(SPAWNED_AT, workspace:GetServerTimeNow())
-		root.Anchored = false
-		collectionService:AddTag(sheepModel, SHEEP_TAG)
-		sheepModel.Parent = sheepFolder
-
-		-- The server walks the sheep, so it keeps physics ownership (no handing it to a nearby player).
-		pcall(function()
-			root:SetNetworkOwner(nil)
-		end)
-		updateAnimation(sheepModel, 0) -- stands idle until its first walk
-
-		-- Shearing only ever changes ShearHealth; the wool and health bar follow it.
-		woolConnections[id] = sheepModel:GetAttributeChangedSignal("ShearHealth"):Connect(function()
-			updateWoolVisual(sheepModel)
-			updateHealthHud(sheepModel)
-		end)
+	local halloween = context.halloween
+	local sheepModel, id, size, lift = buildSheep(player, context, forced)
+	if not sheepModel or not id or not size or not lift then
+		return nil, nil
 	end
+	local root = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
+
+	local yaw = random:NextNumber(0, math.pi * 2)
+	sheepModel:PivotTo(CFrame.new(position + Vector3.new(0, lift, 0)) * CFrame.Angles(0, yaw, 0))
 
 	if halloween then
 		--[[
@@ -916,7 +943,6 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 		root.Anchored = true
 		sheepModel:PivotTo(emerged - Vector3.new(0, boxSize.Y, 0))
 		sheepModel.Parent = sheepFolder
-		dress()
 
 		network.fireAllClients(network.RemoteEvents.HalloweenSheepSpawn, {
 			floor = floor,
@@ -935,7 +961,7 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 			pendingSheep[sheepModel] = nil
 			sheepModel:PivotTo(emerged) -- where the clients' rise ends
 			sheepModel:SetAttribute(RISING, nil)
-			place()
+			registerSheep(sheepModel, id, sheepFolder)
 
 			-- It sat anchored underground with no floor below, so its humanoid thinks it is falling; stand it up.
 			root.AssemblyLinearVelocity = Vector3.zero
@@ -946,8 +972,7 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 			end
 		end)
 	elseif size.id ~= HUGE_TIER then
-		place()
-		dress()
+		registerSheep(sheepModel, id, sheepFolder)
 	else
 		-- Clients play HugeSpawnVFX on the ground below; the sheep lands as its windup ends. It counts meanwhile so the cap holds.
 		pendingSheep[sheepModel] = player.UserId
@@ -958,13 +983,84 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, luck: number
 				return -- the farm was cleared during the windup, which already pooled it
 			end
 			pendingSheep[sheepModel] = nil
-			place()
-			dress()
+			registerSheep(sheepModel, id, sheepFolder)
 		end)
 	end
 
 	setCount(player.UserId, (countByOwner[player.UserId] or 0) + 1)
 	return sheepModel, id
+end
+
+--// Conveyor --------------------------------------------------------------------------------
+
+--[[
+	Rolls a sheep (see buildSheep) standing on the player's conveyor: feet at `at.Position`, root facing `at.LookVector`.
+	It stays anchored, unregistered and uncounted (OnBelt) until admitBeltSheep, so nothing shears, walks or carries it.
+]]
+function SheepHandler.spawnBeltSheep(player: Player, at: CFrame, context: SheepData.RollContext, forced: ForcedSpawn?): Model?
+	local sheepFolder = getSheepFolder(player)
+	if not sheepFolder then
+		return nil
+	end
+	local sheepModel = buildSheep(player, context, forced)
+	if not sheepModel then
+		return nil
+	end
+
+	local root = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
+	root.Anchored = true
+	sheepModel:PivotTo(at * root.CFrame:ToObjectSpace(sheepModel:GetPivot()))
+	local boxCFrame, boxSize = sheepModel:GetBoundingBox()
+	sheepModel:PivotTo(sheepModel:GetPivot() + Vector3.new(0, at.Position.Y - (boxCFrame.Position.Y - boxSize.Y / 2), 0))
+
+	sheepModel:SetAttribute(ON_BELT, true)
+	beltSheep[sheepModel] = player.UserId
+	sheepModel.Parent = sheepFolder
+	updateAnimation(sheepModel, 0) -- idles while it rides
+	return sheepModel
+end
+
+function SheepHandler.isBeltSheep(sheep: Model): boolean
+	return beltSheep[sheep] ~= nil
+end
+
+-- Moves a belt sheep into the pen with its feet at `position` and counts it. Returns its id, or nil if it was cleared meanwhile.
+function SheepHandler.admitBeltSheep(sheep: Model, position: Vector3): number?
+	local ownerId = beltSheep[sheep]
+	local owner = if ownerId then players:GetPlayerByUserId(ownerId) else nil
+	local sheepFolder = if owner then getSheepFolder(owner) else nil
+	local id = sheep:GetAttribute("id")
+	if not ownerId then
+		return nil -- already pooled by clearSheep
+	end
+	beltSheep[sheep] = nil
+	if not sheepFolder or type(id) ~= "number" then
+		poolSheep(sheep)
+		return nil
+	end
+
+	local boxCFrame, boxSize = sheep:GetBoundingBox()
+	local footDepth = sheep:GetPivot().Position.Y - (boxCFrame.Position.Y - boxSize.Y / 2)
+	local _, yaw = sheep:GetPivot():ToOrientation()
+	sheep:SetAttribute(ON_BELT, nil)
+	sheep:PivotTo(CFrame.new(position + Vector3.new(0, footDepth, 0)) * CFrame.Angles(0, yaw, 0))
+	registerSheep(sheep, id, sheepFolder)
+
+	-- A Huge sheep was already seen riding in, so it only gets HugeSpawnVFX's landing burst.
+	if sheep:GetAttribute(SIZE_TIER) == HUGE_TIER then
+		network.fireAllClients(network.RemoteEvents.HugeSheepSpawn, CFrame.new(position) * CFrame.Angles(0, yaw, 0), ownerId, true)
+	end
+
+	setCount(ownerId, (countByOwner[ownerId] or 0) + 1)
+	return id
+end
+
+-- Pools a belt sheep that never reached the pen.
+function SheepHandler.discardBeltSheep(sheep: Model)
+	if beltSheep[sheep] then
+		beltSheep[sheep] = nil
+		poolSheep(sheep)
+	end
 end
 
 --// Saving -------------------------------------------------------------------------------

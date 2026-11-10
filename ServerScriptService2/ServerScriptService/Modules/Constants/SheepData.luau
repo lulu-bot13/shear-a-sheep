@@ -6,6 +6,7 @@
 	Location: ServerScriptService.Modules.Constants.SheepData
 ]]--
 
+local SpawnOdds = require(game:GetService("ReplicatedStorage").Shared.Utils.SpawnOdds)
 local MutationData = require(script.Parent.MutationData)
 local PrestigeData = require(script.Parent.PrestigeData)
 local RebirthData = require(script.Parent.RebirthData)
@@ -25,7 +26,8 @@ export type SheepInfo = {
 	idleAnimation: string?, -- its own looped idle; nil = the adult/baby default in IdleAnimations
 	rarity: string,
 	color: Color3,
-	chance: number, -- base spawn weight (before luck)
+	chance: number, -- base spawn weight (before luck); an adult's is its share after the Baby/Giant split
+	typeChance: number?, -- adults only: the whole type's weight (adult + variants), which the roll uses
 }
 
 local rarityColors = {
@@ -344,7 +346,7 @@ export type VariantInfo = {
 --[[
 	Every type gets a Baby and a Giant copy. Their models live in Assets.Models.Sheeps.BabySheeps / GiantSheeps;
 	SheepHandler makes any that are missing by scaling the adult's model. The type's spawn weight is split between
-	the three, so its overall odds stay the same (adult 30%, baby 60%, giant 10%).
+	the three, so its overall odds stay the same (adult 30%, baby 60%, giant 10%; the Sheep Size upgrade shifts these, see SpawnOdds).
 ]]
 sheepData.Variants = {
 	{ id = "Baby", folder = "BabySheeps", share = 0.6, scale = 0.6, health = 1, wool = 1, luck = 1, weight = 0.4 },
@@ -362,6 +364,7 @@ for key in sheepData.Sheep do
 end
 for _, key in adultKeys do
 	local base = sheepData.Sheep[key]
+	base.typeChance = base.chance
 	local adultShare = 1
 	for _, variant in sheepData.Variants do
 		sheepData.Sheep[`{variant.id}{key}`] = {
@@ -445,73 +448,148 @@ function sheepData.getVariant(name: string): VariantInfo?
 end
 
 --[[
-	Luck boosts every tier above Common: a sheep's weight is multiplied by luckFactor ^ (tier index), where
-	luckFactor = (1 + LUCK_STRENGTH * log10(1 + luck / LUCK_SCALE)) * the rebirth and Prestige luck multipliers.
+	Luck boosts every tier above Common: a type's weight is multiplied by luckFactor ^ (tier index), where luckFactor is
+	SpawnOdds.getLuckFactor (Luck, the rebirth and Prestige multipliers, Spawn Luck and any boost). The roll picks a type
+	(from the player's SheepPools pool, if given), then its Baby / adult / Giant variant by the Sheep Size level.
 ]]
-sheepData.LUCK_STRENGTH = 0.5
-sheepData.LUCK_SCALE = 100
+sheepData.LUCK_STRENGTH = SpawnOdds.LUCK_STRENGTH
+sheepData.LUCK_SCALE = SpawnOdds.LUCK_SCALE
+
+-- Everything a spawn roll depends on. `pool` = adult keys that can spawn (nil = every type); `scales` = adult key -> weight multiplier.
+export type RollContext = {
+	luck: number,
+	rebirths: number,
+	prestiges: number,
+	boost: number?,
+	halloween: boolean?,
+	spawnLuck: number?,
+	sizeLevel: number?,
+	pool: { [string]: boolean }?,
+	scales: { [string]: number }?,
+}
 
 local tierIndex: { [string]: number } = {}
 for index, rarity in rarityOrder do
 	tierIndex[rarity] = index - 1
 end
 
-function sheepData.getLuckFactor(luck: number, rebirths: number, prestiges: number, boost: number?): number
-	local luckPart = 1 + sheepData.LUCK_STRENGTH * math.log10(1 + math.max(luck, 0) / sheepData.LUCK_SCALE)
-	return luckPart * RebirthData.getLuckMultiplier(rebirths) * PrestigeData.getLuckMultiplier(prestiges) * (boost or 1)
+function sheepData.getLuckFactor(luck: number, rebirths: number, prestiges: number, boost: number?, spawnLuck: number?): number
+	return SpawnOdds.getLuckFactor(luck, RebirthData.getLuckMultiplier(rebirths), PrestigeData.getLuckMultiplier(prestiges), spawnLuck, boost)
 end
 
--- Halloween sheep weigh 0 unless `halloween` is true.
-local function getWeight(info: SheepInfo, luckFactor: number, halloween: boolean?): number
+local function getContextLuckFactor(context: RollContext): number
+	return sheepData.getLuckFactor(context.luck, context.rebirths, context.prestiges, context.boost, context.spawnLuck)
+end
+
+-- An adult type's whole spawn weight; 0 outside the pool, and for Halloween types unless `halloween` is true.
+local function getTypeWeight(key: string, luckFactor: number, context: RollContext, halloween: boolean?): number
+	local info = sheepData.Sheep[key]
 	if info.halloween and not halloween then
 		return 0
+	elseif context.pool and not context.pool[key] then
+		return 0
 	end
-	return info.chance * luckFactor ^ (tierIndex[info.rarity] or 0)
+	local scale = if context.scales then context.scales[key] or 1 else 1
+	return (info.typeChance or info.chance) * luckFactor ^ (tierIndex[info.rarity] or 0) * scale
 end
 
-local function getTotalWeight(luckFactor: number, halloween: boolean?): number
+local function getTotalWeight(luckFactor: number, context: RollContext, halloween: boolean?): number
 	local total = 0
-	for _, info in sheepData.Sheep do
-		total += getWeight(info, luckFactor, halloween)
+	for _, key in adultKeys do
+		total += getTypeWeight(key, luckFactor, context, halloween)
 	end
 	return total
 end
 
--- Picks a sheep type name for a player with this much Luck, rebirths and Prestiges; `boost` multiplies the luck factor (e.g. Night).
--- Halloween sheep can only be picked when `halloween` is true.
-function sheepData.roll(luck: number, rebirths: number, prestiges: number, random: Random?, boost: number?, halloween: boolean?): string?
-	local luckFactor = sheepData.getLuckFactor(luck, rebirths, prestiges, boost)
-	local roll = (random or Random.new()):NextNumber() * getTotalWeight(luckFactor, halloween)
+-- The share of an adult type's spawns that are this sheep (its variant's share, or what's left for the adult).
+local function getVariantShare(name: string, sizeLevel: number?): number
+	local info = sheepData.Sheep[name]
+	local adultShare = 1
+	for _, variant in sheepData.Variants do
+		local share = SpawnOdds.getVariantShare(variant.id, variant.share, sizeLevel)
+		if info.variant == variant.id then
+			return share
+		end
+		adultShare -= share
+	end
+	return math.max(adultShare, 0)
+end
+
+-- Picks the Baby, adult or Giant of an adult type by the Sheep Size level; returns its type key.
+function sheepData.rollVariant(adultKey: string, sizeLevel: number?, random: Random?): string
+	local roll = (random or Random.new()):NextNumber()
+	local cumulative = 0
+	for _, variant in sheepData.Variants do
+		cumulative += SpawnOdds.getVariantShare(variant.id, variant.share, sizeLevel)
+		if roll < cumulative then
+			return `{variant.id}{adultKey}`
+		end
+	end
+	return adultKey
+end
+
+-- Picks a sheep type key (variant included) for this roll context; Halloween types only when context.halloween is true.
+function sheepData.rollWith(context: RollContext, random: Random?): string?
+	local rng = random or Random.new()
+	local luckFactor = getContextLuckFactor(context)
+	local roll = rng:NextNumber() * getTotalWeight(luckFactor, context, context.halloween)
 
 	local cumulative = 0
-	for name, info in sheepData.Sheep do
-		cumulative += getWeight(info, luckFactor, halloween)
-		if roll < cumulative then
-			return name
+	for _, key in adultKeys do
+		local weight = getTypeWeight(key, luckFactor, context, context.halloween)
+		cumulative += weight
+		if weight > 0 and roll < cumulative then
+			return sheepData.rollVariant(key, context.sizeLevel, rng)
 		end
 	end
 	return nil
 end
 
--- N in "1 in N" for this sheep type with this Luck, rebirths and Prestiges (all 0 = base odds); nil for an unknown type.
--- A Halloween sheep outside Halloween gets its Halloween odds, so the Index can still show them.
-function sheepData.getOdds(name: string, luck: number, rebirths: number, prestiges: number, boost: number?, halloween: boolean?): number?
+--[[
+	N in "1 in N" for this sheep type (variant included) in this roll context; nil for an unknown type or one that can't
+	spawn (outside the pool). A Halloween sheep outside Halloween gets its Halloween odds, so the Index can still show them.
+]]
+function sheepData.getOddsWith(name: string, context: RollContext, anyVariant: boolean?): number?
 	local info = sheepData.Sheep[name]
 	if not info then
 		return nil
 	end
 
-	local includeHalloween = halloween or info.halloween
-	local luckFactor = sheepData.getLuckFactor(luck, rebirths, prestiges, boost)
-	return math.max(1, math.floor(getTotalWeight(luckFactor, includeHalloween) / getWeight(info, luckFactor, includeHalloween) + 0.5))
+	local includeHalloween = context.halloween or info.halloween
+	local luckFactor = getContextLuckFactor(context)
+	local share = if anyVariant then 1 else getVariantShare(name, context.sizeLevel)
+	local weight = getTypeWeight(info.adult or name, luckFactor, context, includeHalloween) * share
+	if weight <= 0 then
+		return nil
+	end
+	return math.max(1, math.floor(getTotalWeight(luckFactor, context, includeHalloween) / weight + 0.5))
 end
 
-function sheepData.getOddsText(name: string, luck: number, rebirths: number, prestiges: number, boost: number?, halloween: boolean?): string
+-- Odds of any Baby, adult or Giant of this type (what finding a rebirth sheep needs).
+function sheepData.getTypeOddsWith(name: string, context: RollContext): number?
+	return sheepData.getOddsWith(name, context, true)
+end
+
+function sheepData.getOddsTextWith(name: string, context: RollContext): string
 	if sheepData.Bosses[name] then
 		return "Night Event"
 	end
-	local odds = sheepData.getOdds(name, luck, rebirths, prestiges, boost, halloween)
+	local odds = sheepData.getOddsWith(name, context)
 	return if odds then `1 in {odds}` else "1 in ?"
+end
+
+-- The older calls: every type can spawn and the split is the base one.
+function sheepData.roll(luck: number, rebirths: number, prestiges: number, random: Random?, boost: number?, halloween: boolean?): string?
+	return sheepData.rollWith({ luck = luck, rebirths = rebirths, prestiges = prestiges, boost = boost, halloween = halloween }, random)
+end
+
+-- N in "1 in N" for this sheep type with this Luck, rebirths and Prestiges (all 0 = base odds); nil for an unknown type.
+function sheepData.getOdds(name: string, luck: number, rebirths: number, prestiges: number, boost: number?, halloween: boolean?): number?
+	return sheepData.getOddsWith(name, { luck = luck, rebirths = rebirths, prestiges = prestiges, boost = boost, halloween = halloween })
+end
+
+function sheepData.getOddsText(name: string, luck: number, rebirths: number, prestiges: number, boost: number?, halloween: boolean?): string
+	return sheepData.getOddsTextWith(name, { luck = luck, rebirths = rebirths, prestiges = prestiges, boost = boost, halloween = halloween })
 end
 
 --[[
@@ -524,7 +602,10 @@ end
 sheepData.INDEX_LUCK_BASE = 5
 sheepData.INDEX_LUCK_EXPONENT = 0.6
 
-local baseTotalWeight = getTotalWeight(1, true) -- Halloween sheep included, so Index Luck doesn't depend on the season
+local baseTotalWeight = 0 -- every type, Halloween ones included, so Index Luck doesn't depend on the season
+for _, info in sheepData.Sheep do
+	baseTotalWeight += info.chance
+end
 
 function sheepData.getIndexLuck(name: string): number
 	local info = sheepData.Sheep[name]

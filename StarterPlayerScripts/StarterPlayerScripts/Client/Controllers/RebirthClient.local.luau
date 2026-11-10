@@ -1,6 +1,6 @@
 --[[
-	The rebirth screen (StarterGui.RebirthScreen): fills in the wool cost, the before -> after luck multiplier and the rebirth / Prestige counts.
-	Only displays what the server sends; RebirthHandler decides everything.
+	The rebirth screen (StarterGui.RebirthScreen): wool cost, before -> after luck, rebirth / Prestige counts and the sheep the rebirth needs
+	(found or its pity countdown; optional RequirementTip.SheepViewport preview). Plays the pen's rebirth poof. RebirthHandler decides everything.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.RebirthClient
 ]]--
@@ -11,6 +11,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local tweenService = game:GetService("TweenService")
 local soundService = game:GetService("SoundService")
 local collectionService = game:GetService("CollectionService")
+local debris = game:GetService("Debris")
 
 --// Instances
 local player = players.LocalPlayer
@@ -37,6 +38,18 @@ local woolPrice = mainFrame:WaitForChild("WoolPrice") :: TextLabel
 local requirementTip = mainFrame:WaitForChild("RequirementTip") :: GuiObject
 local requirementText = requirementTip:WaitForChild("RequirementText") :: TextLabel
 local keepNote = requirementTip:WaitForChild("KeepNote") :: TextLabel
+local sheepViewport = mainFrame:FindFirstChild("SheepViewport", true) :: ViewportFrame? -- optional: the rebirth sheep's preview
+if sheepViewport and not sheepViewport:IsA("ViewportFrame") then
+	sheepViewport = nil
+end
+if not sheepViewport then
+	warn("RebirthClient: RebirthScreen.Main has no SheepViewport (ViewportFrame); build it in Studio to preview the rebirth sheep.")
+end
+local vfxFolder = replicatedStorage:WaitForChild("Assets"):WaitForChild("VFX", 10)
+local poofTemplate = vfxFolder and vfxFolder:FindFirstChild("PoofAttachment") :: Attachment?
+if not poofTemplate then
+	warn("RebirthClient: ReplicatedStorage.Assets.VFX.PoofAttachment is missing, so the rebirth poof is skipped.")
+end
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
@@ -47,6 +60,7 @@ local announcements = require(script.Parent.Parent.Modules.Announcements)
 local luckRain = require(script.Parent.Parent.Modules.LuckRain)
 local purchaseEffect = require(script.Parent.Parent.Modules.PurchaseEffect)
 local rebirthVFX = require(script.Parent.Parent.Modules.RebirthVFX)
+local sheepModels = require(script.Parent.Parent.Modules.SheepModels)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 local DEBUG = false
@@ -92,7 +106,14 @@ local REASON_TEXT = {
 	NotReady = "Not enough wool to rebirth",
 	MaxRebirths = "Rebirths are MAXED",
 	Busy = "Already rebirthing",
+	NeedSheep = "Find the rebirth sheep first!",
 }
+local PREVIEW_CAMERA_FOV = 40
+local PREVIEW_CAMERA_PITCH = math.rad(15)
+local PREVIEW_FILL = 0.75
+local UNFOUND_TINT = Color3.new(0, 0, 0) -- an unfound rebirth sheep shows as a silhouette, like the Index
+local FOUND_TINT = Color3.new(1, 1, 1)
+local MAX_POOFS = 45
 
 --// State
 local state: any = nil -- the last RebirthState from the server
@@ -103,6 +124,7 @@ local amountIndex = 1 -- into AMOUNTS; back to 1X every time the screen opens
 local nextStateRequest = 0
 local stateRequestQueued = false
 local tipTexts: { [TextLabel]: string } = {} -- each RequirementTip label's own text, restored while the player can't Prestige
+local previewSheep: string? = nil -- the sheep in SheepViewport right now
 local knobOnePosition = amountKnob.Position -- the 1X side, as built in Studio
 -- The MAX side mirrors the 1X side across the track.
 local knobMirror = 2 * amountKnob.AnchorPoint.X - 1
@@ -189,10 +211,74 @@ local function getProgress(): number
 	return math.clamp(state.wool / state.woolCost, 0, 1)
 end
 
+-- Puts a scriptless copy of the sheep in SheepViewport, facing the camera like the Index's previews.
+local function buildPreview(viewport: ViewportFrame, sheepType: string)
+	for _, child in viewport:GetChildren() do
+		if child:IsA("Model") or child:IsA("Camera") then
+			child:Destroy()
+		end
+	end
+	local template = sheepModels.find(sheepType)
+	if not template then
+		return
+	end
+
+	local model = template:Clone()
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BaseScript") or descendant:IsA("BillboardGui") then
+			descendant:Destroy()
+		elseif descendant:IsA("BasePart") then
+			descendant.Anchored = true
+		end
+	end
+	model:PivotTo(CFrame.new())
+	model.Parent = viewport
+
+	local camera = Instance.new("Camera")
+	camera.FieldOfView = PREVIEW_CAMERA_FOV
+	camera.Parent = viewport
+	viewport.CurrentCamera = camera
+
+	local boxCFrame, boxSize = model:GetBoundingBox()
+	local center = boxCFrame.Position
+	local distance = (boxSize.Magnitude * 0.5) / math.tan(math.rad(PREVIEW_CAMERA_FOV / 2)) / PREVIEW_FILL
+	local direction = (CFrame.Angles(0, math.pi, 0) * CFrame.Angles(-PREVIEW_CAMERA_PITCH, 0, 0)).LookVector
+	camera.CFrame = CFrame.lookAt(center - direction * distance, center)
+end
+
+local function renderSheepPreview()
+	if not sheepViewport then
+		return
+	end
+	local sheepType = if state and not canPrestige() then state.requiredSheep else nil
+	sheepViewport.Visible = sheepType ~= nil
+	if sheepType and sheepType ~= previewSheep then
+		buildPreview(sheepViewport, sheepType)
+	end
+	previewSheep = sheepType
+	sheepViewport.ImageColor3 = if state and state.requiredFound then FOUND_TINT else UNFOUND_TINT
+end
+
+-- The rebirth sheep: "FIND THE GOLDEN SHEEP TO REBIRTH" with its pity countdown, or "Found ✓" once it's in the Index.
 local function renderRequirementTip(prestigeReady: boolean)
 	for label, originalText in tipTexts do
 		label.Text = if prestigeReady then PRESTIGE_TIP_TEXT[label.Name] else originalText
 	end
+	local name = state and state.requiredName
+	if prestigeReady or not name then
+		return
+	end
+	if state.requiredFound then
+		keepNote.Text = `{name}: Found ✓`
+	else
+		requirementText.Text = `FIND THE {string.upper(name)} TO REBIRTH`
+		keepNote.Text = `Not found yet - guaranteed in {state.pityLeft} {if state.pityLeft == 1 then "spawn" else "spawns"}`
+	end
+end
+
+local function getNeedSheepText(): string
+	local name = state and state.requiredName
+	return if name then `Find the {name} first!` else REASON_TEXT.NeedSheep
 end
 
 local function render()
@@ -208,6 +294,7 @@ local function render()
 	woolPrice.Text = if state.maxed then "MAX" else numberFormatter:Format(state.amountCost, 1)
 	local prestigeReady = canPrestige()
 	renderRequirementTip(prestigeReady)
+	renderSheepPreview()
 
 	local affordable = state.amountCanRebirth and not state.maxed
 	rebirthButton.ImageColor3 = if affordable or prestigeReady then normalTint else GREY_TINT
@@ -289,15 +376,16 @@ rebirthButton.MouseButton1Click:Connect(function()
 		network.fireServer(network.RemoteEvents.RequestRebirth, getSelectedAmount())
 	else
 		debugLog(`clicked Rebirth, not ready: wool {state.wool}/{state.amountCost}, amountCanRebirth {state.amountCanRebirth}, maxed {state.maxed}`)
-		alerts.show(if state.maxed then REASON_TEXT.MaxRebirths else REASON_TEXT.NotReady, "error")
+		local text = if state.maxed then REASON_TEXT.MaxRebirths elseif state.needsSheep then getNeedSheepText() else REASON_TEXT.NotReady
+		alerts.show(text, "error")
 		shake(rebirthButton, CLICK_SHAKE_ANGLES)
 	end
 end)
 
--- The server prompts the Skip Rebirth product, so it can refuse at max rebirths.
+-- The server prompts the Skip Rebirth product, so it can refuse at max rebirths or before the rebirth sheep is found.
 skipRebirthButton.MouseButton1Click:Connect(function()
-	if state and state.maxed then
-		alerts.show(REASON_TEXT.MaxRebirths, "error")
+	if state and (state.maxed or (state.requiredSheep and not state.requiredFound)) then
+		alerts.show(if state.maxed then REASON_TEXT.MaxRebirths else getNeedSheepText(), "error")
 		shake(skipRebirthButton, CLICK_SHAKE_ANGLES)
 		return
 	end
@@ -335,8 +423,32 @@ network.connectEvent(network.RemoteEvents.RebirthResult, function(success: boole
 			rebirthVFX.play(player.Character)
 		end
 	else
-		alerts.show(REASON_TEXT[reason or ""] or "Can't rebirth", "error")
+		alerts.show(if reason == "NeedSheep" then getNeedSheepText() else REASON_TEXT[reason or ""] or "Can't rebirth", "error")
 		shake(rebirthButton, CLICK_SHAKE_ANGLES)
+	end
+end)
+
+-- A rebirth clears that player's pen in a burst of PoofAttachment puffs (everyone nearby sees it).
+network.connectEvent(network.RemoteEvents.SheepPoof, function(positions: { Vector3 })
+	if not poofTemplate or type(positions) ~= "table" then
+		return
+	end
+	for index, position in positions do
+		if index > MAX_POOFS or typeof(position) ~= "Vector3" then
+			break
+		end
+		local poof = poofTemplate:Clone()
+		poof.WorldPosition = position
+		poof.Parent = workspace.Terrain
+		local longest = 0
+		for _, emitter in poof:GetDescendants() do
+			if emitter:IsA("ParticleEmitter") then
+				local count = emitter:GetAttribute("EmitCount")
+				emitter:Emit(if type(count) == "number" then count else 10)
+				longest = math.max(longest, emitter.Lifetime.Max)
+			end
+		end
+		debris:AddItem(poof, longest + 0.1)
 	end
 end)
 

@@ -28,6 +28,7 @@ local PodiumBonusHandler = require(script.Parent.PodiumBonusHandler)
 local SheepHandler = require(script.Parent.SheepHandler)
 local ShearShopHandler = require(script.Parent.ShearShopHandler)
 local SheepWanderHandler = require(script.Parent.SheepWanderHandler)
+local WorldBossHandler = require(script.Parent.WorldBossHandler)
 
 --// Configs
 local COOLDOWN_LENIENCY = 0.8 -- swings may arrive this fraction of the cooldown apart (network jitter bunches them up)
@@ -78,6 +79,7 @@ local function getWoolReward(player: Player, sheep: Model): number
 		* UpgradeData.getMoreWoolMultiplier(getNumber(player, "MoreWoolLevel"))
 		* PodiumBonusHandler.getWoolMultiplier(player)
 		* MonetizationHandler.getWoolMultiplier(player)
+		* ((player:GetAttribute("FriendBoost") :: number?) or 1) -- FriendBoostHandler: +10% per friend in the server
 	return math.floor((if type(baseWool) == "number" then baseWool else 0) * multiplier)
 end
 
@@ -151,8 +153,9 @@ end
 
 --// Shearing ----------------------------------------------------------------------
 
--- Pays out the wool and Luck a hit taking the sheep from `health` to `newHealth` knocked off; nil when it was nothing.
-local function payHit(player: Player, sheep: Model, health: number, newHealth: number, position: Vector3): Drop?
+-- The wool and Luck a hit taking the sheep from `health` to `newHealth` knocked off; nil when it was nothing.
+-- shearSheep pays every drop of a swing in one go.
+local function getHitDrop(player: Player, sheep: Model, health: number, newHealth: number, position: Vector3): Drop?
 	local maxAttribute = sheep:GetAttribute("MaxShearHealth")
 	local luckAttribute = sheep:GetAttribute("LuckAmount")
 	local maxHealth: number = if type(maxAttribute) == "number" and maxAttribute > 0 then maxAttribute else health
@@ -161,14 +164,6 @@ local function payHit(player: Player, sheep: Model, health: number, newHealth: n
 
 	local wool = getEarnedShare(totalWool, maxHealth, newHealth) - getEarnedShare(totalWool, maxHealth, health)
 	local luck = getEarnedShare(totalLuck, maxHealth, newHealth) - getEarnedShare(totalLuck, maxHealth, health)
-	if wool > 0 then
-		PlayerDataHandler.increment(player, "Wool", wool)
-		Analytics.woolEarned(player, wool, "Shearing")
-	end
-	if luck > 0 then
-		PlayerDataHandler.increment(player, "Luck", luck)
-		Analytics.luckEarned(player, luck)
-	end
 	if wool <= 0 and luck <= 0 then
 		return nil
 	end
@@ -210,6 +205,15 @@ function ShearHandler.shearSheep(
 	local drops: { Drop } = {}
 
 	for _, sheep in targets do
+		-- The King Sheep world boss belongs to no plot: its shared health lives in WorldBossHandler (a flat hit, never a % of it).
+		if sheep:GetAttribute(WorldBossHandler.ATTRIBUTE) == true then
+			local bossHit = WorldBossHandler.applyDamage(player, if type(getDamage) == "number" then getDamage else getShearDamage(player))
+			if bossHit then
+				table.insert(hits, bossHit)
+			end
+			continue
+		end
+
 		local sheepId = sheep:GetAttribute("id")
 		local health = sheep:GetAttribute("ShearHealth")
 		local maxHealth = sheep:GetAttribute("MaxShearHealth")
@@ -239,7 +243,7 @@ function ShearHandler.shearSheep(
 			flashPulses = flashPulses,
 		})
 
-		local drop = payHit(player, sheep, health, newHealth, position)
+		local drop = getHitDrop(player, sheep, health, newHealth, position)
 		if drop then
 			table.insert(drops, drop)
 		end
@@ -257,6 +261,20 @@ function ShearHandler.shearSheep(
 		network.fireClient(network.RemoteEvents.ShearHit, player, hits)
 	end
 	if #drops > 0 then
+		-- One data write (and one Changed signal) per swing, however many sheep it hit.
+		local wool, luck = 0, 0
+		for _, drop in drops do
+			wool += drop.wool
+			luck += drop.luck
+		end
+		if wool > 0 then
+			PlayerDataHandler.increment(player, "Wool", wool)
+			Analytics.woolEarned(player, wool, "Shearing")
+		end
+		if luck > 0 then
+			PlayerDataHandler.increment(player, "Luck", luck)
+			Analytics.luckEarned(player, luck)
+		end
 		network.fireClient(network.RemoteEvents.SheepSheared, player, drops)
 	end
 end
@@ -271,6 +289,10 @@ function ShearHandler.shearAround(player: Player, rangeMultiplier: number?, dama
 	local shear = ShearShopHandler.getShear(player)
 	local range = shear.range * (rangeMultiplier or 1) + ShearData.RangeTolerance
 	local targets = ShearHandler.getSheepInRange(player, playerRoot.Position, range)
+	local boss = WorldBossHandler.getBossInRange(playerRoot.Position, range)
+	if boss then
+		table.insert(targets, boss)
+	end
 	ShearHandler.shearSheep(player, targets, getShearDamage(player) * (damageMultiplier or 1))
 end
 

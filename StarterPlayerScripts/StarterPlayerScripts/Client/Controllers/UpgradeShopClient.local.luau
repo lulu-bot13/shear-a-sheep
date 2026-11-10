@@ -1,8 +1,6 @@
 --[[
-	The upgrade shop UI (StarterGui.UpgradeShop), opened from the "UpgradeShop" prompt on the player's own shack
-	or the HUD's Upgrades button.
-	One card per upgrade is cloned from the Template and filled from the server's UpgradeState; UpgradeHandler decides everything.
-
+	The upgrade shop (StarterGui.UpgradeShop), opened at the player's own shack or the HUD's Upgrades button: one card per upgrade from
+	the server's UpgradeState, bought 1X or MAX with the MultiplierFrame switch. UpgradeHandler decides everything.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.UpgradeShopClient
 ]]--
 
@@ -29,6 +27,10 @@ local mainFrame = shopGui:WaitForChild("Main") :: Frame
 local scrollFrame = mainFrame:WaitForChild("ScrollingFrame") :: ScrollingFrame
 local cardTemplate = scrollFrame:WaitForChild("Template") :: ImageLabel
 local layout = scrollFrame:WaitForChild("UIListLayout") :: UIListLayout
+-- The 1X / MAX switch: its Button slides along the MultiplierFrame track like the rebirth screen's Switch.
+local amountSwitch = mainFrame:WaitForChild("MultiplierFrame") :: Frame
+local amountKnob = amountSwitch:WaitForChild("Button") :: TextButton
+local amountLabel = amountKnob:WaitForChild("Multiplier") :: TextLabel
 local hudButtons = playerGui:WaitForChild("Main"):FindFirstChild("Buttons")
 local hudButton = hudButtons and hudButtons:FindFirstChild("Upgrades") :: GuiButton? -- optional: the shack prompts work without it
 local alertBadge = hudButton and hudButton:FindFirstChild("Alert", true) :: GuiObject? -- optional badge on the HUD button
@@ -52,11 +54,14 @@ local LEVEL_BOUGHT_COLOR = Color3.fromRGB(102, 255, 56) -- a ProgressionFrame ce
 local LEVEL_EMPTY_COLOR = Color3.fromRGB(120, 120, 120)
 local LEVELS_PER_PAGE = 16 -- cells in a full ProgressionFrame; buying past them starts the next page
 local CELLS_PER_ROW = 8
+local AMOUNTS = { 1, "max" } -- what the switch flips between; "max" buys as many levels as the wool covers
+local KNOB_TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out) -- the rebirth Switch's slide
 
 -- Alert text when an upgrade can't be bought; "%s" is the upgrade's name.
 local REASON_TEXT = {
 	NoWool = "Not enough wool for %s",
 	Maxed = "%s is MAXED",
+	Capped = "%s is maxed for this rebirth",
 	NotLoaded = "Still loading, try again",
 }
 
@@ -80,6 +85,16 @@ type Card = {
 local cards: { [string]: Card } = {}
 local activePrompt: ProximityPrompt? = nil
 local openToken = 0
+local amountIndex = 1 -- into AMOUNTS; back to 1X every time the shop opens
+local knobOnePosition = amountKnob.Position -- the 1X side, as built in Studio
+-- The MAX side mirrors the 1X side across the track.
+local knobMirror = 2 * amountKnob.AnchorPoint.X - 1
+local knobMaxPosition = UDim2.new(
+	1 - knobOnePosition.X.Scale + knobMirror * amountKnob.Size.X.Scale,
+	-knobOnePosition.X.Offset + knobMirror * amountKnob.Size.X.Offset,
+	knobOnePosition.Y.Scale,
+	knobOnePosition.Y.Offset
+)
 
 --[[
 	Scale on Y inside a ScrollingFrame is relative to the canvas, so these are turned into pixels using the canvas
@@ -98,6 +113,10 @@ local function shake(button: GuiObject, restRotation: number)
 			task.wait(0.04)
 		end
 	end)
+end
+
+local function getSelectedAmount(): number | string
+	return AMOUNTS[amountIndex]
 end
 
 -- The plot the instance sits in, or nil if it isn't inside one.
@@ -220,14 +239,41 @@ local function renderProgression(card: Card)
 	card.progressionText.Text = `{page}/{pages}`
 end
 
--- Each click buys one level, so the card shows the next level's price and value.
+--[[
+	How many levels a click buys right now and their total wool: 1X buys the next level, MAX as many of the server's
+	`steps` (in order) as the player's wool covers. A count of 0 means not even one is affordable.
+	Only a preview; UpgradeHandler works the MAX count out again from its own data.
+]]
+local function getPurchase(state: any): (number, number)
+	local steps = if type(state.steps) == "table" then state.steps else {}
+	local limit = if getSelectedAmount() == "max" then #steps else math.min(#steps, 1)
+	local count, total = 0, 0
+	for index = 1, limit do
+		local nextTotal = total + steps[index].cost
+		if nextTotal > wool.Value then
+			break
+		end
+		count, total = index, nextTotal
+	end
+	return count, total
+end
+
+-- The card previews what a click buys: the value after those levels and their price (one level's while none is affordable).
 local function renderCard(card: Card)
 	local state = card.state
 	card.title.Text = state.title
 
 	if state.after then
-		card.upgrade.Text = `{state.before} -> <font color="{AFTER_COLOR}"><b>{state.after}</b></font>`
-		card.price.Text = `{numberFormatter:Format(state.cost, 1)} Wool`
+		local count, total = getPurchase(state)
+		local lastStep = if type(state.steps) == "table" then state.steps[math.max(count, 1)] else nil
+		local after = if lastStep then lastStep.after else state.after
+		local levels = if count > 1 then ` <font color="{AFTER_COLOR}">(+{count})</font>` else ""
+		card.upgrade.Text = `{state.before} -> <font color="{AFTER_COLOR}"><b>{after}</b></font>{levels}`
+		card.price.Text = `{numberFormatter:Format(if count > 0 then total else state.cost, 1)} Wool`
+	elseif state.note then
+		-- A cap that rises later (Spawn Luck's per rebirth) says how to raise it instead of "(MAX)".
+		card.upgrade.Text = `{state.before}\n<font color="{MAX_COLOR}"><b>{state.note}</b></font>`
+		card.price.Text = "MAXED"
 	else
 		card.upgrade.Text = `{state.before} <font color="{MAX_COLOR}"><b>(MAX)</b></font>`
 		card.price.Text = "MAXED"
@@ -240,11 +286,26 @@ local function renderCard(card: Card)
 	renderProgression(card)
 end
 
--- Greys out the Purchase button's image while the player can't afford the upgrade (or it's maxed).
+-- Greys out the Purchase button's image while the player can't afford a level (or it's maxed).
 local function updatePurchaseButton(card: Card)
-	local cost = card.state.cost
-	local canBuy = card.state.after ~= nil and cost ~= nil and wool.Value >= cost
+	local canBuy = card.state.after ~= nil and getPurchase(card.state) > 0
 	card.purchase.ImageColor3 = if canBuy then card.purchaseColor else DISABLED_COLOR
+end
+
+local function renderAll()
+	for _, card in cards do
+		renderCard(card)
+		updatePurchaseButton(card)
+	end
+end
+
+local function setAmountIndex(index: number)
+	amountIndex = index
+	local amount = getSelectedAmount()
+	amountLabel.Text = if amount == "max" then "MAX" else `{amount}X`
+	local knobPosition = if amount == "max" then knobMaxPosition else knobOnePosition
+	tweenService:Create(amountKnob, KNOB_TWEEN, { Position = knobPosition }):Play()
+	renderAll()
 end
 
 -- The card's text stays as it is; the reason goes in an alert at the top of the screen.
@@ -289,12 +350,13 @@ local function createCard(state: any, order: number): Card
 	}
 	card.upgrade.RichText = true
 
+	-- Sends 1 or "max"; for MAX the server counts the affordable levels itself.
 	card.purchase.Activated:Connect(function()
 		if not card.state.after then
-			showFailure(card, "Maxed")
+			showFailure(card, if card.state.note then "Capped" else "Maxed")
 			return
 		end
-		network.fireServer(network.RemoteEvents.PurchaseUpgrade, card.state.id, 1)
+		network.fireServer(network.RemoteEvents.PurchaseUpgrade, card.state.id, getSelectedAmount())
 	end)
 
 	frame.Parent = scrollFrame

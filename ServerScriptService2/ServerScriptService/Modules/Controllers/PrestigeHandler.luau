@@ -1,8 +1,8 @@
 --!strict
 
 --[[
-	Prestige rules: after enough rebirths, reset wool, rebirths, Luck, capacity and upgrades for a permanent wool and luck boost.
-	Shears and the Index are kept. Requirements and rewards live in PrestigeData.
+	Prestige rules: after enough rebirths, reset wool, rebirths, Luck, capacity and upgrades (Spawn Luck and Sheep Size too) for a
+	permanent wool and luck boost; the pool gains the Prestige sheep (SheepPools). Shears and the Index are kept.
 
 	Location: ServerScriptService.Modules.Controllers.PrestigeHandler
 ]]--
@@ -55,6 +55,9 @@ local function resetProgress(player: Player)
 	PlayerDataHandler.set(player, "SpeedLevel", 0)
 	PlayerDataHandler.set(player, "DamageLevel", 0)
 	PlayerDataHandler.set(player, "RespawnLevel", 0)
+	PlayerDataHandler.set(player, "SpawnLuckLevel", 0)
+	PlayerDataHandler.set(player, "SizeLevel", 0)
+	PlayerDataHandler.set(player, "RebirthPitySpawns", 0)
 end
 
 --// Public API ------------------------------------------------------------------
@@ -75,7 +78,7 @@ function PrestigeHandler.getState(player: Player): State
 		canPrestige = rebirths >= PrestigeData.REQUIRED_REBIRTHS,
 		multiplier = PrestigeData.getWoolMultiplier(prestiges),
 		nextMultiplier = PrestigeData.getWoolMultiplier(prestiges + 1),
-		luckFactor = SheepData.getLuckFactor(getNumber(player, "Luck"), rebirths, prestiges),
+		luckFactor = SheepData.getLuckFactor(getNumber(player, "Luck"), rebirths, prestiges, nil, getNumber(player, "SpawnLuckLevel")),
 		nextLuckFactor = SheepData.getLuckFactor(IndexHandler.getClaimedLuck(player), 0, prestiges + 1),
 		nextLuckBonus = PrestigeData.getLuckMultiplier(prestiges + 1),
 	}

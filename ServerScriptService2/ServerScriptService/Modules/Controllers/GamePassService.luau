@@ -18,6 +18,7 @@ local Wiring = require(script.Parent.MonetizationWiring)
 local GIFTED_KEY = "GiftedPasses" -- save key: { [pass key]: true } for passes another player gifted
 local CHECK_ATTEMPTS = 3
 local CHECK_RETRY_SECONDS = 2
+local PASS_ATTRIBUTE_PREFIX = "Pass" -- player attribute Pass<key> = true once owned (bought or gifted), for every client to show
 
 export type Source = "Owned" | "Purchased" | "Gifted" -- Owned = already had it when they joined
 
@@ -41,6 +42,7 @@ local function notify(player: Player, key: string, source: Source)
 		return
 	end
 	done[key] = true
+	player:SetAttribute(PASS_ATTRIBUTE_PREFIX .. key, true)
 
 	for _, callback in callbacks[key] or {} do
 		task.spawn(callback, player, source)

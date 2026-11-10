@@ -3,7 +3,7 @@
 --[[
 	Rebirth tuning: the wool each rebirth costs, and the luck-factor boost it gives until the next Prestige.
 	Rebirths give no wool multiplier (More Wool covers that), so costs grow gently: a rebirth every ~2-6 minutes of
-	active play, with the 10th (the first Prestige) around minute 33.
+	active play, with the 10th (the first Prestige) around minute 33 before the sheep hunts (SheepPools: ~6 min each at tiers 1, 3, 5, 8).
 
 	Location: ServerScriptService.Modules.Constants.RebirthData
 ]]--

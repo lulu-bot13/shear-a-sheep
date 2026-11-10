@@ -8,6 +8,7 @@
 ]]--
 
 --// Services
+local collectionService = game:GetService("CollectionService")
 local serverStorage = game:GetService("ServerStorage")
 
 --// Instances
@@ -18,6 +19,8 @@ local TEMPLATE_NAME = "TemplatePlot"
 local ANCHOR_NAME = "SpawnArea"
 local CENTER_NAME = "Center"
 local OWNER_GUI_NAMES = { "PlayerBase", "SheepCapacity" } -- hidden until PlotOwnerClient shows them on a claimed plot
+local CONVEYOR_TAG = "Conveyor"
+local PAUSED_ATTRIBUTE = "Paused"
 
 local PlotLayoutHandler = {}
 
@@ -72,12 +75,17 @@ local function buildPlots()
 
 	template.Parent = serverStorage
 
-	-- Every plot starts unclaimed, so its owner signs start hidden.
+	-- Every plot starts unclaimed, so its owner signs start hidden and its conveyor stopped (SheepBeltHandler runs it).
 	local center = template:FindFirstChild(CENTER_NAME)
 	for _, name in OWNER_GUI_NAMES do
 		local gui = center and center:FindFirstChild(name)
 		if gui and gui:IsA("LayerCollector") then
 			gui.Enabled = false
+		end
+	end
+	for _, descendant in template:GetDescendants() do
+		if collectionService:HasTag(descendant, CONVEYOR_TAG) then
+			descendant:SetAttribute(PAUSED_ATTRIBUTE, true)
 		end
 	end
 

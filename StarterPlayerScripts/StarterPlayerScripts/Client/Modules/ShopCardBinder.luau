@@ -59,8 +59,23 @@ local player = players.LocalPlayer
 local priceCache: { [string]: number } = {}
 local priceFetching: { [string]: boolean } = {}
 local buttonLooks: { [GuiButton]: ButtonLook } = {}
+local giftHandler: ((item: Item) -> ())? = nil
 
 local ShopCardBinder = {}
+
+-- Sets what starting a gift does (RobuxShopClient opens its gift window), so other scripts can call openGift.
+function ShopCardBinder.setGiftHandler(handler: (item: Item) -> ())
+	giftHandler = handler
+end
+
+-- Starts gifting a giftable item from anywhere (e.g. a pass board); false if it can't be gifted or no gift window is set up.
+function ShopCardBinder.openGift(item: Item): boolean
+	if not giftHandler or not item.giftable or item.giftProductId == 0 then
+		return false
+	end
+	giftHandler(item)
+	return true
+end
 
 -- How a price shows on a Buy button; replace to change the format everywhere.
 ShopCardBinder.formatPrice = function(price: number): string

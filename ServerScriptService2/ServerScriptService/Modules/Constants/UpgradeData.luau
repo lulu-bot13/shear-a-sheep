@@ -1,10 +1,12 @@
 --!strict
 
 --[[
-	Wool-priced farm upgrades (sheep capacity, more wool, faster speed, shear damage, faster respawn). Costs grow exponentially with each level bought.
+	Wool-priced farm upgrades (sheep capacity, more wool, faster speed, shear damage, faster respawn, spawn luck, sheep size). Costs grow exponentially with each level bought.
 
 	Location: ServerScriptService.Modules.Constants.UpgradeData
 ]]--
+
+local SpawnOdds = require(game:GetService("ReplicatedStorage").Shared.Utils.SpawnOdds)
 
 export type UpgradeInfo = {
 	id: string, -- must match its key in Upgrades
@@ -23,9 +25,13 @@ upgradeData.Upgrades = {
 	FasterSpeed = { id = "FasterSpeed", displayName = "Faster Speed", icon = "rbxassetid://73292507992618", baseCost = 100, costGrowth = 2.2, maxLevel = 8 },
 	ShearDamage = { id = "ShearDamage", displayName = "Shear Damage", icon = "rbxassetid://74100799276370", baseCost = 60, costGrowth = 1.8, maxLevel = 10 },
 	FasterRespawn = { id = "FasterRespawn", displayName = "Faster Respawn", icon = "rbxassetid://75508274630013", baseCost = 120, costGrowth = 1.9, maxLevel = 8 },
+	-- Spawn Luck's levels are also capped per rebirth (SpawnOdds.getSpawnLuckCap: 4 + 2 per rebirth); levels 1-20 cost ~41k in total.
+	SpawnLuck = { id = "SpawnLuck", displayName = "Spawn Luck", icon = "", baseCost = 120, costGrowth = 1.25, maxLevel = SpawnOdds.SPAWN_LUCK_MAX_LEVEL },
+	-- Shifts the Baby/Adult/Giant split from 60/30/10 to 20/50/30 at level 5 (~10.5k in total).
+	SheepSize = { id = "SheepSize", displayName = "Sheep Size", icon = "", baseCost = 250, costGrowth = 2.2, maxLevel = 5 },
 } :: { [string]: UpgradeInfo }
 
-upgradeData.Order = { "MoreWool", "Capacity", "FasterSpeed", "ShearDamage", "FasterRespawn" } -- top to bottom in the UpgradeShop
+upgradeData.Order = { "MoreWool", "Capacity", "FasterSpeed", "ShearDamage", "FasterRespawn", "SpawnLuck", "SheepSize" } -- top to bottom in the UpgradeShop
 
 upgradeData.MoreWoolPerLevel = 0.25 -- each More Wool level adds this to the wool multiplier
 upgradeData.BaseWalkSpeed = 16 -- Roblox's default walk speed

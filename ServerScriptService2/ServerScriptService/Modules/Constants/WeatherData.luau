@@ -24,6 +24,12 @@ weatherData.Halloween = "Night" -- Halloween mode runs while this weather is up 
 weatherData.MinClearSeconds = 120 -- Clear spell between two events
 weatherData.MaxClearSeconds = 120
 
+-- Notable events (an event weather starting, a King Sheep arriving) are kept this many seconds apart by stretching or
+-- shortening Clear. Events last 90-150 s, so the next one starts 3.5-4.5 min after the last; Night stays 3 of 9 picks.
+weatherData.MinEventGap = 120
+weatherData.MaxEventGap = 300
+weatherData.MinClearFloor = 30 -- a Clear spell never lasts less than this
+
 --// Charged sheep -------------------------------------------------------------------------
 
 weatherData.ChargedAttribute = "Charged"

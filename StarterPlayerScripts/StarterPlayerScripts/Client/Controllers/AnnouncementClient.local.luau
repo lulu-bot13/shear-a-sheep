@@ -1,5 +1,5 @@
 --[[
-	Server-wide announcements from AnnouncementHandler: a coloured chat line for rare best finds, Legendary+ ability rolls, rebirths, Prestiges, gifts, Server Luck and Reaper raids.
+	Server-wide announcements from AnnouncementHandler: a coloured chat line for rare best finds, Legendary+ ability rolls, rebirths, Prestiges, gifts, Server Luck, Reapers and the King Sheep.
 	Rare best finds also pop up a metal plaque at the top of the screen, one at a time.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AnnouncementClient
@@ -37,6 +37,8 @@ local GIFT_ITEM_COLOR = "#7CF0FF"
 local ROBUX_COLOR = "#3DDC84"
 local REAPER_COLOR = "#C084FC"
 local SERVER_LUCK_COLOR = "#3DDC84"
+local KING_COLOR = "#FFD54A"
+local KING_ESCAPED_COLOR = "#FF9F43"
 local ROBUX_GLYPH = "\u{E002}"
 local ARROW = "-&gt;" -- escaped, since it sits inside rich text
 
@@ -89,7 +91,16 @@ type Announcement = {
 	multiplier: number,
 	minutes: number,
 } | {
-	kind: "ReaperRaid",
+	kind: "ReaperRaid" | "WorldBossSpawn" | "WorldBossEscaped",
+} | {
+	kind: "WorldBossPending",
+	seconds: number,
+} | {
+	kind: "ReaperDefeated",
+	userName: string,
+} | {
+	kind: "WorldBossDefeated",
+	topUserName: string?,
 }
 
 type BestFind = {
@@ -148,6 +159,20 @@ end
 local function getChatLine(announcement: Announcement): string
 	if announcement.kind == "ReaperRaid" then
 		return paint("The King Reaper has risen! Shear it before the Night ends.", REAPER_COLOR, true)
+	elseif announcement.kind == "WorldBossPending" then
+		return paint(`The King Sheep approaches! It arrives at the plaza in {announcement.seconds} seconds.`, KING_COLOR, true)
+	elseif announcement.kind == "WorldBossSpawn" then
+		return paint("The King Sheep has arrived at the plaza! Shear it together before it escapes!", KING_COLOR, true)
+	elseif announcement.kind == "WorldBossEscaped" then
+		return paint("The King Sheep escaped... it will be back!", KING_ESCAPED_COLOR, true)
+	elseif announcement.kind == "WorldBossDefeated" then
+		local line = paint("The King Sheep has been defeated!", KING_COLOR, true)
+		local topName = announcement.topUserName
+		return if topName
+			then `{line} {paint("Top shearer:", SOFT_WHITE)} {paint(escape(topName), NAME_COLOR, true)}`
+			else line
+	elseif announcement.kind == "ReaperDefeated" then
+		return `{paint(escape(announcement.userName), NAME_COLOR, true)} {paint("defeated the King Reaper!", REAPER_COLOR, true)}`
 	end
 	local userName = escape(announcement.userName)
 
@@ -339,9 +364,19 @@ end
 
 --// Setup -------------------------------------------------------------------------------
 
--- The ones the Server Announcements setting can't turn off: the Reaper raid, Server Luck, and anything about this player.
+-- Server-wide events everyone needs to hear about, whatever the Server Announcements setting.
+local ALWAYS_SHOWN = {
+	ReaperRaid = true,
+	ServerLuck = true,
+	WorldBossPending = true,
+	WorldBossSpawn = true,
+	WorldBossDefeated = true,
+	WorldBossEscaped = true,
+}
+
+-- The ones the Server Announcements setting can't turn off: ALWAYS_SHOWN and anything about this player.
 local function isForMe(announcement: Announcement): boolean
-	if announcement.kind == "ReaperRaid" or announcement.kind == "ServerLuck" then
+	if ALWAYS_SHOWN[announcement.kind] then
 		return true
 	elseif announcement.kind == "Gift" and announcement.recipientName == player.Name then
 		return true

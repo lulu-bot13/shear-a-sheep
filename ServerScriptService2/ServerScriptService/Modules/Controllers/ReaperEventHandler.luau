@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Night event: some Nights a King Reaper rises in every farm and summons Small Reapers until it is sheared or the Night ends.
+	Night event: some Nights a King Reaper rises in every farm and summons Small Reapers until it is sheared (announced) or the Night ends.
 	/reaper starts it now (admins, or anyone in Studio).
 
 	Location: ServerScriptService.Modules.Controllers.ReaperEventHandler
@@ -26,6 +26,8 @@ local MINION_INTERVAL = 8 -- seconds between Small Reapers while the King is on 
 local MAX_MINIONS = 4 -- Small Reapers on one farm at once
 local KING_TYPE = "KingReaper"
 local MINION_TYPE = "SmallReaper"
+local SCHEDULE_SOURCE = "ReaperRaid" -- WeatherHandler's next-event countdown
+local EVENT_NAME = "Reaper Raid"
 
 type Spawned = { sheep: Model, id: number }
 
@@ -49,6 +51,22 @@ local function spawnReaper(player: Player, sheepType: string): Spawned?
 	return if sheep and type(id) == "number" then { sheep = sheep, id = id } else nil
 end
 
+-- Only the plot's owner can shear their King, so shearing it bare is credited to them.
+local function watchKing(player: Player, king: Spawned): RBXScriptConnection
+	local connection: RBXScriptConnection
+	connection = king.sheep:GetAttributeChangedSignal("ShearHealth"):Connect(function()
+		local health = king.sheep:GetAttribute("ShearHealth")
+		if king.sheep:GetAttribute("id") ~= king.id or type(health) ~= "number" or health > 0 then
+			return
+		end
+		connection:Disconnect()
+		if player.Parent then
+			AnnouncementHandler.reaperDefeated(player)
+		end
+	end)
+	return connection
+end
+
 -- The King rises, then a Small Reaper joins it every MINION_INTERVAL (up to MAX_MINIONS) until it's gone or the Night ends.
 local function runRaid(player: Player, raidRound: number)
 	local king = spawnReaper(player, KING_TYPE)
@@ -56,6 +74,7 @@ local function runRaid(player: Player, raidRound: number)
 		return
 	end
 	kings[player] = king
+	local defeatConnection = watchKing(player, king)
 
 	local minions: { Spawned } = {}
 	while raidRound == round and kings[player] == king and isOnFarm(king) do
@@ -73,12 +92,14 @@ local function runRaid(player: Player, raidRound: number)
 		end
 	end
 
+	defeatConnection:Disconnect()
 	if kings[player] == king then
 		kings[player] = nil
 	end
 end
 
 local function startRaid()
+	WeatherHandler.setScheduled(SCHEDULE_SOURCE, nil, nil)
 	local raidRound = round
 	for _, player in players:GetPlayers() do
 		if not kings[player] then
@@ -100,6 +121,7 @@ end
 
 local function onHalloweenChanged(halloween: boolean)
 	round += 1
+	WeatherHandler.setScheduled(SCHEDULE_SOURCE, nil, nil)
 	if not halloween then
 		endRaid()
 		return
@@ -109,7 +131,9 @@ local function onHalloweenChanged(halloween: boolean)
 	end
 
 	local nightRound = round
-	task.delay(random:NextNumber(MIN_START_DELAY, MAX_START_DELAY), function()
+	local startDelay = random:NextNumber(MIN_START_DELAY, MAX_START_DELAY)
+	WeatherHandler.setScheduled(SCHEDULE_SOURCE, EVENT_NAME, workspace:GetServerTimeNow() + startDelay)
+	task.delay(startDelay, function()
 		if nightRound == round then
 			startRaid()
 		end

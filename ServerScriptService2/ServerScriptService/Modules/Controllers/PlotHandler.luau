@@ -18,6 +18,11 @@ local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 
 --// Configs
 local NO_OWNER = 0
+local SPAWN_AREA_NAME = "SpawnArea"
+local SPAWN_LIFT = 2 -- studs above a plot's SpawnArea a character is placed
+local SPAWN_LOCATION_LIFT = 3 -- studs above Workspace.SpawnLocation and the shear shop's ShearSpawn
+local SHEAR_SPAWN_PATH = { "Base", "CenterPlaza", "ShearShop", "ShearSpawn" } -- in Workspace, in front of the shop, facing it
+local TELEPORT_ON_JOIN = true -- false: joiners start at Workspace.SpawnLocation and PathGuideClient's trail walks them home
 
 local PlotHandler = {}
 
@@ -38,11 +43,16 @@ local function findPlot(ownerId: number): Folder?
 	return nil
 end
 
+local function getPlotSpawn(plot: Instance): CFrame?
+	local spawnArea = plot:FindFirstChild(SPAWN_AREA_NAME)
+	return if spawnArea and spawnArea:IsA("BasePart") then spawnArea.CFrame * CFrame.new(0, SPAWN_LIFT, 0) else nil
+end
+
 local function teleportToPlot(player: Player, plot: Folder)
 	local character = player.Character or player.CharacterAdded:Wait()
-	local spawnArea = plot:FindFirstChild("SpawnArea")
-	if spawnArea and spawnArea:IsA("BasePart") then
-		character:PivotTo(spawnArea.CFrame * CFrame.new(0, 2, 0))
+	local target = getPlotSpawn(plot)
+	if target then
+		character:PivotTo(target)
 	end
 end
 
@@ -61,7 +71,9 @@ local function assignPlot(player: Player)
 	player:SetAttribute("PlotName", plot.Name)
 	PlotHandler.PlotAssigned:Fire(player, plot)
 
-	teleportToPlot(player, plot)
+	if TELEPORT_ON_JOIN then
+		teleportToPlot(player, plot)
+	end
 end
 
 local function releasePlot(player: Player)
@@ -75,6 +87,35 @@ end
 -- The plot Folder the player owns, or nil if they haven't been given one (yet).
 function PlotHandler.getPlayerPlot(player: Player): Folder?
 	return findPlot(player.UserId)
+end
+
+-- Where a character goes "home": over their plot's SpawnArea, or over Workspace.SpawnLocation without a plot.
+function PlotHandler.getRespawnCFrame(player: Player): CFrame?
+	local plot = findPlot(player.UserId)
+	local target = if plot then getPlotSpawn(plot) else nil
+	return target or PlotHandler.getPlazaCFrame()
+end
+
+-- Over Workspace.SpawnLocation (the east end of the main avenue), or nil if it is missing.
+function PlotHandler.getPlazaCFrame(): CFrame?
+	local spawnLocation = workspace:FindFirstChild("SpawnLocation")
+	if spawnLocation and spawnLocation:IsA("BasePart") then
+		return spawnLocation.CFrame * CFrame.new(0, SPAWN_LOCATION_LIFT, 0)
+	end
+	warn("PlotHandler: Workspace.SpawnLocation is missing; build it in Studio.")
+	return nil
+end
+
+-- Over the ShearSpawn in front of the shear shop, facing it; Workspace.SpawnLocation if it is missing.
+function PlotHandler.getShopCFrame(): CFrame?
+	local shearSpawn: Instance? = workspace
+	for _, name in SHEAR_SPAWN_PATH do
+		shearSpawn = shearSpawn and shearSpawn:FindFirstChild(name)
+	end
+	if shearSpawn and shearSpawn:IsA("BasePart") then
+		return shearSpawn.CFrame * CFrame.new(0, SPAWN_LOCATION_LIFT, 0)
+	end
+	return PlotHandler.getPlazaCFrame()
 end
 
 -- Yields until the player owns a plot; nil if they leave (or none frees up) first.

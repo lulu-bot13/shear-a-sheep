@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Server-wide announcements: tells every client about a rare best find, a Legendary+ ability roll, a rebirth, a Prestige, a gift or Server Luck.
+	Server-wide announcements: best finds, Legendary+ ability rolls, rebirths, Prestiges, gifts, Server Luck, Reapers and the King Sheep.
 	Only names and numbers are sent; AnnouncementClient builds the chat lines and the best-find panel.
 
 	Location: ServerScriptService.Modules.Controllers.AnnouncementHandler
@@ -49,7 +49,22 @@ export type Announcement = {
 	multiplier: number,
 	minutes: number,
 } | {
-	kind: "ReaperRaid",
+	kind: "ReaperRaid" | "WorldBossEscaped",
+} | {
+	kind: "WorldBossPending",
+	seconds: number, -- until it arrives
+} | {
+	kind: "WorldBossSpawn",
+	seconds: number?, -- to shear it before it escapes
+	introSeconds: number?, -- the arrival cutscene, before the fight starts
+} | {
+	kind: "ReaperDefeated",
+	userName: string,
+} | {
+	kind: "WorldBossDefeated",
+	topUserName: string?, -- the top contributor, nil if they left
+	topDisplayName: string?,
+	shearers: number?, -- players rewarded
 }
 
 local AnnouncementHandler = {}
@@ -108,6 +123,34 @@ end
 -- The Night event's King Reaper has risen in every farm.
 function AnnouncementHandler.reaperRaid()
 	announce({ kind = "ReaperRaid" })
+end
+
+-- The player sheared their King Reaper bare: a chat line for the server and a toast for them.
+function AnnouncementHandler.reaperDefeated(player: Player)
+	announce({ kind = "ReaperDefeated", userName = player.Name })
+	network.fireClient(network.RemoteEvents.ShowAlert, player, "You defeated the King Reaper!", "success")
+end
+
+-- The King Sheep world boss: warned 30 s ahead, arrived, defeated (naming the top contributor) or escaped.
+function AnnouncementHandler.worldBossPending(seconds: number)
+	announce({ kind = "WorldBossPending", seconds = math.ceil(seconds) })
+end
+
+function AnnouncementHandler.worldBossSpawn(seconds: number?, introSeconds: number?)
+	announce({ kind = "WorldBossSpawn", seconds = seconds, introSeconds = introSeconds })
+end
+
+function AnnouncementHandler.worldBossDefeated(topPlayer: Player?, shearers: number?)
+	announce({
+		kind = "WorldBossDefeated",
+		topUserName = if topPlayer then topPlayer.Name else nil,
+		topDisplayName = if topPlayer then topPlayer.DisplayName else nil,
+		shearers = shearers,
+	})
+end
+
+function AnnouncementHandler.worldBossEscaped()
+	announce({ kind = "WorldBossEscaped" })
 end
 
 -- Called by GiftService once a gift purchase is granted; the recipient may have left by then, so it can be just their name.

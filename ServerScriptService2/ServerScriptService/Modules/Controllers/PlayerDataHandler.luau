@@ -28,7 +28,8 @@ local INVENTORY_KEYS = { Wool = true, Luck = true } -- the rest of the numbers b
 local RENAMED_KEYS = { WoolGainLevel = "MoreWoolLevel" } -- old save key -> current key
 local REMOVED_KEYS = { LuckLevel = true } -- dropped from older saves
 -- Preferences and anything bought with Robux, not progress.
-local KEPT_ON_RESET = { Settings = true, GiftedPasses = true, Boosts = true, FreeRebirths = true, PendingGifts = true, GiftOutbox = true }
+local KEPT_ON_RESET = { Settings = true, GiftedPasses = true, Boosts = true, FreeRebirths = true, PendingGifts = true, GiftOutbox = true,
+	FirstJoinAt = true, SessionCount = true, StarterPackBought = true, AutoShearTrialUsed = true }
 
 export type Data = {
 	Wool: number,
@@ -40,8 +41,13 @@ export type Data = {
 	SpeedLevel: number, -- Faster Speed upgrade levels
 	DamageLevel: number, -- Shear Damage upgrade levels
 	RespawnLevel: number, -- Faster Respawn upgrade levels
+	SpawnLuckLevel: number,
+	SizeLevel: number,
 	Rebirths: number,
 	Prestiges: number,
+	RebirthPitySpawns: number,
+	GoalStep: number,
+	GoalQuests: { [string]: any },
 	ShearId: string,
 	OwnedShears: { string },
 	AbilityEquipped: string, -- AbilityData id of the ability used on E
@@ -61,6 +67,10 @@ export type Data = {
 	FreeRebirths: number, -- Skip Rebirths bought while at max rebirths, used once a rebirth is possible again
 	PendingGifts: { [string]: { userId: number, name: string } }, -- item key -> the player picked in the gift window, until its receipt arrives
 	GiftOutbox: { [string]: { item: string, userId: number, name: string } }, -- PurchaseId -> paid gift not yet delivered
+	FirstJoinAt: number,
+	SessionCount: number,
+	StarterPackBought: number,
+	AutoShearTrialUsed: number,
 }
 
 local DataTemplate = {
@@ -78,10 +88,17 @@ local DataTemplate = {
 	SpeedLevel = 0,
 	DamageLevel = 0,
 	RespawnLevel = 0,
+	SpawnLuckLevel = 0, -- Spawn Luck upgrade levels (capped per rebirth, see SpawnOdds)
+	SizeLevel = 0, -- Sheep Size upgrade levels
 
 	-- Progression
 	Rebirths = 0,
 	Prestiges = 0,
+	RebirthPitySpawns = 0, -- spawns rolled while hunting the rebirth sheep (RebirthHandler)
+
+	-- Goals (GoalHandler)
+	GoalStep = 0, -- milestones done, in GoalData.Milestones order
+	GoalQuests = {}, -- this session's quest set: { ids = { string }, index = number, progress = number }
 
 	-- Shears
 	ShearId = ShearData.DefaultShearId,
@@ -115,6 +132,12 @@ local DataTemplate = {
 	FreeRebirths = 0,
 	PendingGifts = {},
 	GiftOutbox = {},
+
+	-- Offers (OfferHandler)
+	FirstJoinAt = 0, -- os.time() of the first load with offers; 0 = not set yet (older saves get it on their next load)
+	SessionCount = 0, -- loads since FirstJoinAt was set
+	StarterPackBought = 0, -- 1 once the Starter Pack was bought
+	AutoShearTrialUsed = 0, -- 1 once the free Auto Shears trial was used
 }
 
 -- Creating a profile store (Studio saves go to a separate test store)

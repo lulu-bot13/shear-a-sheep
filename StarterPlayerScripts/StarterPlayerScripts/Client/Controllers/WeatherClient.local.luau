@@ -1,8 +1,8 @@
 --!strict
 
 --[[
-	Follows the server's workspace "Weather" / "WeatherEndsAt" attributes: blends the scene's look, shows a small
-	weather + time-left in Main.Weather, announces changes and throws lightning (at random and onto newly Charged sheep) in storms.
+	Follows the server's workspace "Weather" / "WeatherEndsAt" attributes: blends the scene's look, shows weather + time left in Main.Weather
+	(the King Sheep's countdown while it's Pending), announces changes and throws lightning (at random and onto newly Charged sheep) in storms.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.WeatherClient
 ]]--
 
@@ -22,6 +22,10 @@ local ENDS_AT_ATTRIBUTE = "WeatherEndsAt"
 local STORM = "Thunderstorm"
 local CLEAR = "Clear"
 local HALLOWEEN = "Night" -- Halloween mode is on while it's Night (WeatherData.Halloween on the server)
+local BOSS_STATE_ATTRIBUTE = "WorldBossState" -- WorldBossHandler's King Sheep state and the time it arrives
+local BOSS_AT_ATTRIBUTE = "WorldBossAt"
+local BOSS_PENDING = "Pending"
+local KING_COLOR = Color3.fromRGB(255, 215, 80)
 
 local WEATHER_TEXT: { [string]: { label: string, announcement: string, color: Color3 } } = {
 	Clear = { label = "☀️ Clear", announcement = "The skies have cleared", color = Color3.fromRGB(255, 225, 120) },
@@ -87,6 +91,8 @@ announceScale.Parent = announcement
 
 --// State
 local current = CLEAR
+local colorLabel: TextLabel? = nil -- the Weather label whose Studio colour is labelColor
+local labelColor = Color3.new(1, 1, 1)
 local weatherToken = 0
 local announceToken = 0
 local lastSheepStrike = 0
@@ -109,18 +115,31 @@ local function getLabel(): TextLabel?
 	return if label and label:IsA("TextLabel") then label else nil
 end
 
+-- The King Sheep's countdown while it's on its way, otherwise the weather and its time left; true for the King Sheep.
+local function getLabelText(): (string, boolean)
+	local now = workspace:GetServerTimeNow()
+	local bossAt = workspace:GetAttribute(BOSS_AT_ATTRIBUTE)
+	if workspace:GetAttribute(BOSS_STATE_ATTRIBUTE) == BOSS_PENDING and type(bossAt) == "number" then
+		return `👑 KING SHEEP IN {formatTime(bossAt - now)}`, true
+	end
+
+	local text = WEATHER_TEXT[current] or WEATHER_TEXT.Clear
+	local endsAt = workspace:GetAttribute(ENDS_AT_ATTRIBUTE)
+	return if type(endsAt) == "number" then `{text.label}  {formatTime(endsAt - now)}` else text.label, false
+end
+
 local function updateLabel()
 	local label = getLabel()
 	if not label then
 		return
 	end
-	local text = WEATHER_TEXT[current] or WEATHER_TEXT.Clear
-	local endsAt = workspace:GetAttribute(ENDS_AT_ATTRIBUTE)
-	if type(endsAt) == "number" then
-		label.Text = `{text.label}  {formatTime(endsAt - workspace:GetServerTimeNow())}`
-	else
-		label.Text = text.label
+	if label ~= colorLabel then
+		colorLabel = label
+		labelColor = label.TextColor3
 	end
+	local text, isKing = getLabelText()
+	label.Text = text
+	label.TextColor3 = if isKing then KING_COLOR else labelColor
 	label.Visible = true
 end
 
@@ -252,6 +271,7 @@ workspace:GetAttributeChangedSignal(WEATHER_ATTRIBUTE):Connect(function()
 	setWeather(readWeather(), false)
 end)
 workspace:GetAttributeChangedSignal(ENDS_AT_ATTRIBUTE):Connect(updateLabel)
+workspace:GetAttributeChangedSignal(BOSS_STATE_ATTRIBUTE):Connect(updateLabel)
 
 while true do
 	task.wait(TIMER_TICK)

@@ -253,7 +253,13 @@ end
 for key, item in MonetizationData.Items do
 	local card = itemsFrame:FindFirstChild(key, true)
 	if not card or not card:IsA("GuiObject") then
-		warn(`[RobuxShopClient] no {key} card in RobuxShop.Main.Items`)
+		-- Items still at id 0 (e.g. the Starter Pack) are hidden everywhere, so they need no card yet.
+		if item.id ~= 0 then
+			warn(`[RobuxShopClient] no {key} card in RobuxShop.Main.Items; build it in Studio`)
+		end
+		continue
+	elseif item.id == 0 then
+		card.Visible = false
 		continue
 	end
 	fillCard(card, item)
@@ -302,6 +308,12 @@ local window = windowsManager.register("RobuxShop", {
 		picker.close()
 	end,
 })
+
+-- Gifting from outside the shop (pass boards) opens the shop straight onto the gift window.
+shopCardBinder.setGiftHandler(function(item)
+	window.open()
+	picker.open(item)
+end)
 
 -- The gift window takes the shop's place while it's open; closing it (its Exit) brings the shop back unless the whole window closed.
 giftFrame:GetPropertyChangedSignal("Visible"):Connect(function()

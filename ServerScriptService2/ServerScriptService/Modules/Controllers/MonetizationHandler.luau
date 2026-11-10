@@ -19,7 +19,9 @@ local AnnouncementHandler = require(script.Parent.AnnouncementHandler)
 local GamePassService = require(script.Parent.GamePassService)
 local GemHandler = require(script.Parent.GemHandler)
 local GiftService = require(script.Parent.GiftService)
+local OfferHandler = require(script.Parent.OfferHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
+local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local RebirthHandler = require(script.Parent.RebirthHandler)
 local ReceiptProcessor = require(script.Parent.ReceiptProcessor)
 
@@ -33,6 +35,8 @@ local PRESTIGE_SETTLE_SECONDS = 3 -- saved Skip Rebirths are used this long afte
 local ENDS_AT_SUFFIX = "EndsAt" -- player attribute <boost key>EndsAt: workspace:GetServerTimeNow() the boost runs out (for a future timer UI)
 local SERVER_LUCK_ATTRIBUTE = "ServerLuckEndsAt" -- workspace attribute, the same for Server Luck
 local AUTO_SHEAR_ATTRIBUTE = "AutoShearPass" -- player attribute ShearClient reads to unlock Auto Shear
+local REBIRTH_SHEEP_ID_ATTRIBUTE = "RebirthSheepId" -- set by RebirthHandler: the sheep the next rebirth needs
+local REBIRTH_SHEEP_FOUND_ATTRIBUTE = "RebirthSheepFound"
 local STATE_KEYS = { Rebirths = true, Prestiges = true, GiftedPasses = true }
 
 local Items = MonetizationData.Items
@@ -116,18 +120,40 @@ end
 --// Grants ------------------------------------------------------------------------------
 -- Each one applies an item to a player with loaded data and returns whether it worked, plus the toast for a buyer.
 
-local function addBoost(player: Player, item: MonetizationData.Item): (boolean, string?)
+local function extendBoost(player: Player, key: string, minutes: number): boolean
 	local boosts = PlayerDataHandler.get(player, "Boosts")
 	if type(boosts) ~= "table" then
-		return false, nil
+		return false
 	end
 
-	local minutes = item.durationMinutes or 0
 	local newBoosts = table.clone(boosts)
-	newBoosts[item.key] = math.max(newBoosts[item.key] or 0, 0) + minutes * 60
+	newBoosts[key] = math.max(newBoosts[key] or 0, 0) + minutes * 60
 	PlayerDataHandler.set(player, "Boosts", newBoosts)
 	updateBoostAttributes(player)
-	return true, `{item.displayName} active! +{minutes} minutes`
+	return true
+end
+
+local function addBoost(player: Player, item: MonetizationData.Item): (boolean, string?)
+	local minutes = item.durationMinutes or 0
+	return extendBoost(player, item.key, minutes), `{item.displayName} active! +{minutes} minutes`
+end
+
+-- Gems plus boost time, once per player (OfferHandler only offers it to new players).
+local function grantStarterPack(player: Player, item: MonetizationData.Item): (boolean, string?)
+	local boostItem = Items[item.boostKey or ""]
+	if not PlayerDataHandler.getData(player) or not boostItem then
+		return false, nil
+	end
+	local gems = item.gems or 0
+	local minutes = item.boostMinutes or 0
+	if gems > 0 then
+		GemHandler.give(player, gems)
+	end
+	if minutes > 0 then
+		extendBoost(player, boostItem.key, minutes)
+	end
+	PlayerDataHandler.set(player, "StarterPackBought", 1)
+	return true, `{item.displayName}: +{gems} Gems and {minutes} min of {boostItem.displayName}!`
 end
 
 local function activateServerLuck(player: Player, item: MonetizationData.Item): (boolean, string?)
@@ -136,6 +162,12 @@ local function activateServerLuck(player: Player, item: MonetizationData.Item): 
 	workspace:SetAttribute(SERVER_LUCK_ATTRIBUTE, serverLuckEndsAt)
 	AnnouncementHandler.serverLuck(player, item.multiplier or 1, minutes)
 	return true, `{item.displayName} is on for everyone for +{minutes} minutes!`
+end
+
+local function getRebirthSheepName(player: Player): string
+	local sheepId = player:GetAttribute(REBIRTH_SHEEP_ID_ATTRIBUTE)
+	local info = if type(sheepId) == "string" then SheepData.Sheep[sheepId] else nil
+	return if info and type(info.name) == "string" then info.name else "rebirth sheep"
 end
 
 local function showRebirthResult(player: Player)
@@ -155,9 +187,9 @@ local function skipRebirth(player: Player, _item: MonetizationData.Item): (boole
 	return false, nil
 end
 
+-- No alert: GemClient's "+N" gem popup already shows the amount.
 local function giveGems(player: Player, item: MonetizationData.Item): (boolean, string?)
-	local amount = item.gems or 0
-	return GemHandler.give(player, amount) ~= nil, `+{amount} Gems!`
+	return GemHandler.give(player, item.gems or 0) ~= nil, nil
 end
 
 local function grantPass(player: Player, item: MonetizationData.Item): (boolean, string?)
@@ -171,6 +203,7 @@ local GRANTS: { [string]: (Player, MonetizationData.Item) -> (boolean, string?) 
 	LuckBoost = addBoost,
 	ServerLuck = activateServerLuck,
 	SkipRebirth = skipRebirth,
+	StarterPack = grantStarterPack,
 	GemsSmall = giveGems,
 	GemsMedium = giveGems,
 	GemsBig = giveGems,
@@ -270,6 +303,15 @@ local function onPromptRequest(player: Player, key: any)
 	end
 	if item.key == "SkipRebirth" and RebirthHandler.getState(player).maxed then
 		showAlert(player, "You're at max rebirths! Prestige first.", "error")
+		return
+	end
+	-- Skip Rebirth only skips the wool: the rebirth's sheep still has to be found (RebirthHandler enforces it too).
+	if item.key == "SkipRebirth" and player:GetAttribute(REBIRTH_SHEEP_FOUND_ATTRIBUTE) == false then
+		showAlert(player, `Find the {getRebirthSheepName(player)} first!`, "error")
+		return
+	end
+	if item.key == "StarterPack" and not OfferHandler.canBuyStarterPack(player) then
+		showAlert(player, "The Starter Pack is only for new farmers!", "error")
 		return
 	end
 	-- Bought from the shop, so it's for the buyer even if a gift of it was picked earlier.

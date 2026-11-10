@@ -64,6 +64,16 @@ export type EnumType = "ShearSwing"
 	| "ShopState"
 	| "RequestProductPrompt"
 	| "GlobalAnnouncement"
+	-- Phase 4 (WorldBoss)
+	| "WorldBossEffect"
+	-- Phase 8 (Offers)
+	| "ShowOffer"
+	| "OfferResponse"
+	-- Phase 9/10 (Progression + Goals)
+	| "SheepPoof"
+	| "RareSheepSpawn"
+	| "RequestGoalState"
+	| "GoalState"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	ShearSwing = "ShearSwing",
@@ -121,6 +131,16 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	ShopState = "ShopState",
 	RequestProductPrompt = "RequestProductPrompt",
 	GlobalAnnouncement = "GlobalAnnouncement",
+	-- Phase 4 (WorldBoss)
+	WorldBossEffect = "WorldBossEffect",
+	-- Phase 8 (Offers)
+	ShowOffer = "ShowOffer",
+	OfferResponse = "OfferResponse",
+	-- Phase 9/10 (Progression + Goals)
+	SheepPoof = "SheepPoof",
+	RareSheepSpawn = "RareSheepSpawn",
+	RequestGoalState = "RequestGoalState",
+	GoalState = "GoalState",
 }
 
 return RemoteEventName

@@ -1,6 +1,6 @@
 --[[
 	The sheep Index (StarterGui.Index.IndexFrame): a Mutations tab per page the server lists (Normal + MutationData) and a SheepTemplate card per sheep type.
-	Selecting a card spins its sheep and fills SheepInfo and RewardFrame; found entries are claimed there; IndexHandler decides everything.
+	Selecting a card spins its sheep and fills SheepInfo and RewardFrame; found entries are claimed there or all at once with Claim All; IndexHandler decides everything.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.IndexClient
 ]]--
@@ -45,6 +45,13 @@ local infoViewport = infoFrame:WaitForChild("ViewportFrame") :: ViewportFrame
 local rewardsFrame = mainFrame:WaitForChild("RewardFrame") :: GuiObject
 local rewardAmount = rewardsFrame:WaitForChild("ClaimAmount") :: TextLabel
 local claimButton = rewardsFrame:WaitForChild("BuyButton") :: ImageButton
+
+-- Claim All under RewardFrame: a BuyButton copy drawn with the CLAIM art (Left/Middle/Right ImageLabels) and a red Count badge.
+local claimAllFrame = rewardsFrame:WaitForChild("ClaimAll") :: GuiObject -- popped/shaken instead of its button, which ButtonClient tweens
+local claimAllButton = claimAllFrame:WaitForChild("ClaimAllButton") :: ImageButton
+local claimAllLabel = claimAllButton:WaitForChild("Label") :: TextLabel
+local claimAllCount = claimAllButton:WaitForChild("Count") :: GuiObject
+local claimAllCountLabel = claimAllCount:WaitForChild("Amount") :: TextLabel
 
 -- How many sheep types have been unlocked out of all of them.
 local unlockBar = mainFrame:WaitForChild("ProgressFrame") :: GuiObject
@@ -127,6 +134,14 @@ local spinAngle = 0
 
 local rewardAmountColor = rewardAmount.TextColor3
 local claimButtonImageColor = claimButton.ImageColor3
+local claimAllLabelColor = claimAllLabel.TextColor3
+local claimAllArt: { ImageLabel } = {}
+for _, child in claimAllButton:GetChildren() do
+	if child:IsA("ImageLabel") then
+		table.insert(claimAllArt, child)
+	end
+end
+local claimAllArtColor = if claimAllArt[1] then claimAllArt[1].ImageColor3 else WHITE
 
 
 --// Helpers ---------------------------------------------------------------------
@@ -447,6 +462,30 @@ local function renderAlertBadge()
 	alertBadge.Visible = findUnclaimed() ~= nil
 end
 
+local function countClaimable(): number
+	local count = 0
+	for _, entry in entriesByKey do
+		if entry.status == "Found" then
+			count += 1
+		end
+	end
+	return count
+end
+
+-- Claim All shows how many entries (on every page) are waiting, and dims with none.
+local function renderClaimAll()
+	local count = countClaimable()
+	local canClaim = count > 0
+	claimAllCount.Visible = canClaim
+	claimAllCountLabel.Text = tostring(count)
+	claimAllButton.AutoButtonColor = canClaim
+	claimAllButton.Active = canClaim
+	claimAllLabel.TextColor3 = if canClaim then claimAllLabelColor else claimAllLabelColor:Lerp(CLAIMED_COLOR, 0.5)
+	for _, art in claimAllArt do
+		art.ImageColor3 = if canClaim then claimAllArtColor else CLAIMED_COLOR
+	end
+end
+
 -- Fills ProgressFrame's ProgressBar with the share of the current page's entries that aren't Locked any more.
 local function renderUnlockBar()
 	local list = pageEntries[currentPage] or {}
@@ -589,6 +628,7 @@ local function render()
 
 	renderInfo()
 	renderAlertBadge()
+	renderClaimAll()
 	renderTabs()
 	renderUnlockBar()
 end
@@ -830,6 +870,7 @@ cardTemplate.Visible = false
 alertBadge.Visible = false
 alertPulse.attach(alertBadge)
 setInfoVisible(false)
+renderClaimAll()
 infoName.RichText = true -- the mutation prefix is coloured
 
 -- The tabs sit in MutationData order (LayoutOrder from buildTabs), whatever their Studio names sort to.
@@ -857,6 +898,14 @@ claimButton.Activated:Connect(function()
 		network.fireServer(network.RemoteEvents.ClaimIndexReward, card.entry.key)
 	else
 		shake(claimButton)
+	end
+end)
+
+claimAllButton.Activated:Connect(function()
+	if countClaimable() > 0 then
+		network.fireServer(network.RemoteEvents.ClaimAllIndexRewards)
+	else
+		shake(claimAllFrame)
 	end
 end)
 
@@ -894,7 +943,20 @@ network.connectEvent(network.RemoteEvents.IndexState, function(newEntries: { any
 	end
 end)
 
-network.connectEvent(network.RemoteEvents.IndexClaimResult, function(key: string, success: boolean)
+-- Claim All answers under the key "All" with how many were claimed and their Luck, shown as one combined effect.
+network.connectEvent(network.RemoteEvents.IndexClaimResult, function(key: string, success: boolean, _reason, count: number?, luck: number?)
+	if key == "All" then
+		if success then
+			pop(claimAllFrame)
+			playLuckClaimedSound()
+			luckRain.play(indexGui)
+			announcements.show("ClaimAlert", `Claimed {count or 0} sheep (+{formatWithCommas(luck or 0)} Luck)`)
+		else
+			shake(claimAllFrame)
+		end
+		return
+	end
+
 	local entry = entriesByKey[key]
 	if not entry then
 		return

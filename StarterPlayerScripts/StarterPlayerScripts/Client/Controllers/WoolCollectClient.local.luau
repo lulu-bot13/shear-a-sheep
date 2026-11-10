@@ -18,6 +18,7 @@ local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
 local iconIds = require(replicatedStorage.Shared.Constants.IconIds)
 local iconUtil = require(replicatedStorage.Shared.Utils.IconUtil)
+local MonetizationData = require(replicatedStorage.Shared.Constants.MonetizationData)
 
 --// Instances
 local player = players.LocalPlayer
@@ -52,6 +53,10 @@ local POP_PITCH_STEP = 0.04 -- each pop in a run is slightly higher
 local POP_MAX_STEPS = 10
 local HOLD_TIMEOUT_SECONDS = 5 -- the counters are never held back longer than this, whatever happens
 
+local DOUBLE_WOOL_ATTRIBUTE = "PassDoubleWool" -- set by GamePassService for 2x WOOL owners
+local PASS_TAG_TEXT = `x{MonetizationData.Items.DoubleWool.multiplier or 2}` -- tagged on wool drops for 2x WOOL owners
+local PASS_TAG_ROTATION = -12
+
 type Kind = "Wool" | "Luck"
 
 local ICONS: { [Kind]: string } = {
@@ -66,6 +71,7 @@ type DropObject = {
 	gui: BillboardGui,
 	icon: ImageLabel,
 	label: TextLabel,
+	passTag: TextLabel,
 	trail: Trail?,
 }
 
@@ -150,6 +156,33 @@ end
 
 local function formatAmount(amount: number): string
 	return `+{numberFormatter:Format(amount, 1)}`
+end
+
+-- A small tilted "x2" over the drop's icon, shown on wool while the player owns 2x WOOL.
+local function addPassTag(gui: BillboardGui): TextLabel
+	local tag = Instance.new("TextLabel")
+	tag.Name = "PassTag"
+	tag.AnchorPoint = Vector2.new(0.5, 1)
+	tag.Position = UDim2.fromScale(0.17, 0.25)
+	tag.Size = UDim2.fromScale(0.35, 0.6)
+	tag.Rotation = PASS_TAG_ROTATION
+	tag.BackgroundTransparency = 1
+	tag.FontFace = Font.fromEnum(Enum.Font.SourceSansBold)
+	tag.Text = PASS_TAG_TEXT
+	tag.TextColor3 = Color3.new(1, 1, 1)
+	tag.TextScaled = true
+	tag.ZIndex = 2
+	tag.Visible = false
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.new(0, 0, 0)
+	stroke.Thickness = 2
+	stroke.Parent = tag
+	tag.Parent = gui
+	return tag
+end
+
+local function showsPassTag(kind: Kind): boolean
+	return kind == "Wool" and player:GetAttribute(DOUBLE_WOOL_ATTRIBUTE) == true
 end
 
 -- Plays a fresh copy of the pop so overlapping pops don't cut each other off.
@@ -241,6 +274,7 @@ local function getTotal(kind: Kind, root: BasePart): Total
 	gui.Adornee = root
 	gui.Parent = root
 	iconUtil.setImage(gui:FindFirstChild("Icon") :: ImageLabel, ICONS[kind])
+	addPassTag(gui)
 
 	local newTotal = { gui = gui, label = gui:FindFirstChild("TextLabel") :: TextLabel, amount = 0, token = 0 }
 	totals[kind] = newTotal
@@ -257,6 +291,10 @@ local function addToTotal(kind: Kind, root: BasePart, amount: number)
 	total.amount += amount
 	total.label.Text = formatAmount(total.amount)
 	total.gui.Enabled = true
+	local passTag = total.gui:FindFirstChild("PassTag")
+	if passTag and passTag:IsA("GuiObject") then
+		passTag.Visible = showsPassTag(kind)
+	end
 	punchLabel(total.label)
 
 	if kind == "Luck" then
@@ -302,6 +340,7 @@ local function createDropObject(): DropObject
 		gui = gui,
 		icon = gui:FindFirstChild("Icon") :: ImageLabel,
 		label = gui:FindFirstChild("TextLabel") :: TextLabel,
+		passTag = addPassTag(gui),
 		trail = trail,
 	}
 end
@@ -398,10 +437,12 @@ end
 
 local function spawnDrops(kind: Kind, origin: Vector3, amount: number, count: number, root: BasePart, pop: () -> ())
 	local now = os.clock()
+	local tagged = showsPassTag(kind)
 	for index, share in splitShares(amount, count) do
 		local object = table.remove(idleDrops) or createDropObject()
 		iconUtil.setImage(object.icon, ICONS[kind]) -- pooled drops switch between wool and Luck
 		object.label.Text = formatAmount(share)
+		object.passTag.Visible = tagged
 		object.part.CFrame = CFrame.new(origin)
 
 		local angle = math.random() * math.pi * 2

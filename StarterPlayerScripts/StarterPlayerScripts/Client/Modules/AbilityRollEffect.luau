@@ -754,7 +754,10 @@ local function animate(effect: Effect, pool: { Entry }, items: { Item })
 	track(effect, pointer, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = POINTER_POS })
 
 	if isLocal then
-		tagLabel.Text = if landedItem.isNew then "NEW!" else `DUPLICATE  +{landedItem.refund} Wool`
+		tagLabel.Text = if landedItem.isNew
+			then "NEW!"
+			elseif landedItem.refund > 0 then `DUPLICATE  +{landedItem.refund} Gems`
+			else "DUPLICATE"
 		track(effect, tagGroup, fadeInfo, { GroupTransparency = 0 })
 		playUISound(if LEGENDARY_RARITIES[landed.rarity] then "UnlockedSheep" else "LuckClaimed")
 		if landed.rarity == "Mythic" then

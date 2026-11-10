@@ -15,6 +15,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local network = require(replicatedStorage.Shared.Utils.Network)
 local MutationData = require(script.Parent.Parent.Constants.MutationData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
+local SheepPools = require(script.Parent.Parent.Constants.SheepPools)
 local Analytics = require(script.Parent.Analytics)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local WeatherHandler = require(script.Parent.WeatherHandler)
@@ -74,6 +75,20 @@ local function setStatus(player: Player, key: string, status: string)
 	PlayerDataHandler.set(player, "SheepIndex", index)
 end
 
+-- Why this entry can't be claimed ("Unknown", "NotFound" or "Claimed"), or nil when it can; single and Claim All claims share it.
+local function getClaimError(index: { [string]: string }, key: any): string?
+	if not SheepData.parseIndexKey(key) then
+		return "Unknown"
+	end
+	local status = index[key]
+	if status == CLAIMED then
+		return "Claimed"
+	elseif status ~= FOUND then
+		return "NotFound"
+	end
+	return nil
+end
+
 --// Public API ------------------------------------------------------------------------
 
 function IndexHandler.getPages(): { PageInfo }
@@ -86,9 +101,20 @@ function IndexHandler.getState(player: Player): { EntryState }
 	local luck, rebirths, prestiges = getNumber(player, "Luck"), getNumber(player, "Rebirths"), getNumber(player, "Prestiges")
 	local halloween = WeatherHandler.isHalloween()
 
+	-- The player's real odds (their SheepPools pool, Spawn Luck and Sheep Size); types outside the pool keep their all-sheep odds.
+	local context: SheepData.RollContext = {
+		luck = luck,
+		rebirths = rebirths,
+		prestiges = prestiges,
+		halloween = halloween,
+		spawnLuck = getNumber(player, "SpawnLuckLevel"),
+		sizeLevel = getNumber(player, "SizeLevel"),
+		pool = SheepPools.getPool(rebirths, prestiges),
+		scales = SheepPools.getScales(rebirths),
+	}
 	local baseOdds: { [string]: number } = {}
 	for _, sheepType in SheepData.IndexOrder do
-		baseOdds[sheepType] = SheepData.getOdds(sheepType, luck, rebirths, prestiges, nil, halloween) or 1
+		baseOdds[sheepType] = SheepData.getOddsWith(sheepType, context) or SheepData.getOdds(sheepType, luck, rebirths, prestiges, nil, halloween) or 1
 	end
 
 	local state: { EntryState } = {}
@@ -154,15 +180,9 @@ function IndexHandler.claim(player: Player, key: any): (boolean, string?)
 	if not PlayerDataHandler.getData(player) then
 		return false, "NotLoaded"
 	end
-	if not SheepData.parseIndexKey(key) then
-		return false, "Unknown"
-	end
-
-	local status = getIndex(player)[key]
-	if status == CLAIMED then
-		return false, "Claimed"
-	elseif status ~= FOUND then
-		return false, "NotFound"
+	local reason = getClaimError(getIndex(player), key)
+	if reason then
+		return false, reason
 	end
 
 	local luck = SheepData.getIndexEntryLuck(key)
@@ -172,16 +192,17 @@ function IndexHandler.claim(player: Player, key: any): (boolean, string?)
 	return true, nil
 end
 
--- Claims every found entry on every page at once. Returns how many were claimed (0 if none were ready).
-function IndexHandler.claimAll(player: Player): number
+-- Claims every claimable entry on every page in one data write. Returns how many were claimed and the Luck they gave (0, 0 if none).
+function IndexHandler.claimAll(player: Player): (number, number)
 	if not PlayerDataHandler.getData(player) then
-		return 0
+		return 0, 0
 	end
 
-	local index = table.clone(getIndex(player))
+	local current = getIndex(player)
+	local index = table.clone(current)
 	local count, luck = 0, 0
-	for key, status in index do
-		if status == FOUND and SheepData.parseIndexKey(key) then
+	for key in current do
+		if not getClaimError(current, key) then
 			index[key] = CLAIMED
 			count += 1
 			luck += SheepData.getIndexEntryLuck(key)
@@ -193,7 +214,7 @@ function IndexHandler.claimAll(player: Player): number
 		PlayerDataHandler.increment(player, "Luck", luck)
 		Analytics.indexClaimed(player, count, luck)
 	end
-	return count
+	return count, luck
 end
 
 --// Lifecycle ---------------------------------------------------------------------
@@ -213,10 +234,10 @@ function IndexHandler.Start()
 		network.fireClient(network.RemoteEvents.IndexClaimResult, player, key, success, reason)
 	end, { network.Middleware.RateLimit(CLAIM_COOLDOWN) })
 
-	-- Answered with IndexClaimResult under the id "All", plus how many were claimed.
+	-- Answered with IndexClaimResult under the id "All", plus how many were claimed and the Luck they gave.
 	network.connectEvent(network.RemoteEvents.ClaimAllIndexRewards, function(player: Player)
-		local claimed = IndexHandler.claimAll(player)
-		network.fireClient(network.RemoteEvents.IndexClaimResult, player, "All", claimed > 0, if claimed > 0 then nil else "NotFound", claimed)
+		local claimed, luck = IndexHandler.claimAll(player)
+		network.fireClient(network.RemoteEvents.IndexClaimResult, player, "All", claimed > 0, if claimed > 0 then nil else "NotFound", claimed, luck)
 	end, { network.Middleware.RateLimit(CLAIM_COOLDOWN) })
 
 	network.connectEvent(network.RemoteEvents.RequestIndexState, pushState, {
@@ -226,7 +247,7 @@ function IndexHandler.Start()
 	PlayerDataHandler.Loaded:Connect(pushState)
 	PlayerDataHandler.Changed:Connect(function(player: Player, key: string)
 		-- Luck changes every hit, so its odds refresh when the Index is opened instead.
-		if key == "SheepIndex" or key == "Rebirths" or key == "Prestiges" then
+		if key == "SheepIndex" or key == "Rebirths" or key == "Prestiges" or key == "SpawnLuckLevel" or key == "SizeLevel" then
 			pushState(player)
 		end
 	end)

@@ -1,5 +1,5 @@
 --[[
-	The Shepherd's Crook: a "HOLD" tag over the hovered sheep, clicks to pick it up or let it go in the pen, a hint of what to do next
+	The Shepherd's Crook: a "HOLD" tag with its wool multiplier over the hovered sheep, clicks to pick it up or let it go in the pen, a hint of what to do next
 	and a beam to an open podium. The rest of the UI hides while the crook is out or a sheep is carried.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.CrookClient
 ]]--
@@ -34,6 +34,22 @@ local HINT_SIZE = UDim2.fromScale(0.4, 0.05)
 local HOLD_COLOR = Color3.fromRGB(255, 230, 90)
 local HOVER_RAY_LENGTH = 300
 local BEAM_ATTACHMENT_ROTATION = Vector3.new(0, 0, 90) -- degrees, matches TutorialClient
+local WOOL_COLOR = Color3.fromRGB(255, 236, 179) -- PodiumData's Wool colour
+local TEXT_WOOL = "x%s Wool"
+
+--[[
+	Mirrors how SheepHandler rolls a sheep's WoolAmount (SheepData.Variants, SheepSizeData, MutationData, WeatherData's Charged x3),
+	so the hover shows how much more wool the sheep gives than a plain adult of its type.
+]]
+local VARIANT_WOOL = { Baby = { wool = 1, weight = 0.4 }, Giant = { wool = 2.5, weight = 2.5 } }
+local SIZE_WOOL = {
+	Tiny = { wool = 0.6, minWeight = 15, maxWeight = 40 },
+	Normal = { wool = 1, minWeight = 40, maxWeight = 60 },
+	Huge = { wool = 3, minWeight = 110, maxWeight = 250 },
+}
+local WEIGHT_WOOL_SPREAD = 0.1 -- the heaviest sheep in a tier gives this much more wool, the lightest this much less
+local MUTATION_WOOL = { Galaxy = 2, Haunted = 1.35, Rainbow = 1.4, Shiny = 1.25 }
+local CHARGED_WOOL = 3
 
 -- "%s" is "Click", or "Tap" on touch screens.
 local TEXT_PICK_UP = "%s a sheep to pick it up"
@@ -117,15 +133,16 @@ playerGui.ChildAdded:Connect(hideGui)
 
 --// HOLD tag ---------------------------------------------------------------------------
 
+-- "HOLD" stays where it always was (1 stud above the root); the wool multiplier sits just under it.
 local holdTag = Instance.new("BillboardGui")
 holdTag.Name = "CrookHold"
-holdTag.Size = UDim2.fromScale(3, 1.2)
-holdTag.StudsOffset = Vector3.new(0, 1, 0)
+holdTag.Size = UDim2.fromScale(3, 2)
+holdTag.StudsOffset = Vector3.new(0, 0.6, 0)
 holdTag.AlwaysOnTop = true
 holdTag.LightInfluence = 0
 local holdLabel = Instance.new("TextLabel")
 holdLabel.BackgroundTransparency = 1
-holdLabel.Size = UDim2.fromScale(1, 1)
+holdLabel.Size = UDim2.fromScale(1, 0.6)
 holdLabel.Font = Enum.Font.GothamBlack
 holdLabel.TextScaled = true
 holdLabel.TextColor3 = HOLD_COLOR
@@ -134,6 +151,19 @@ holdLabel.Parent = holdTag
 local holdStroke = Instance.new("UIStroke")
 holdStroke.Thickness = 2
 holdStroke.Parent = holdLabel
+
+local woolLabel = Instance.new("TextLabel")
+woolLabel.Name = "Wool"
+woolLabel.BackgroundTransparency = 1
+woolLabel.Position = UDim2.fromScale(0, 0.6)
+woolLabel.Size = UDim2.fromScale(1, 0.4)
+woolLabel.Font = Enum.Font.GothamBlack
+woolLabel.TextScaled = true
+woolLabel.TextColor3 = WOOL_COLOR
+woolLabel.Parent = holdTag
+local woolStroke = Instance.new("UIStroke")
+woolStroke.Thickness = 2
+woolStroke.Parent = woolLabel
 
 local hoverHighlight = Instance.new("Highlight")
 hoverHighlight.Name = "CrookHover"
@@ -165,6 +195,39 @@ beam.Parent = workspace.Terrain
 local function getRoot(model: Model?): BasePart?
 	local root = model and model:FindFirstChild("HumanoidRootPart")
 	return if root and root:IsA("BasePart") then root else nil
+end
+
+-- Its variant, size tier, weight within the tier, mutation and Charge, read from the attributes SheepHandler sets.
+local function getWoolMultiplier(sheep: Model): number
+	local sheepType = sheep:GetAttribute("SheepType")
+	local variant = nil
+	if type(sheepType) == "string" then
+		for id, info in VARIANT_WOOL do
+			if string.sub(sheepType, 1, #id) == id then
+				variant = info
+				break
+			end
+		end
+	end
+
+	local size = SIZE_WOOL[sheep:GetAttribute("SizeTier")]
+	local multiplier = (if variant then variant.wool else 1)
+		* (if size then size.wool else 1)
+		* (MUTATION_WOOL[sheep:GetAttribute("Mutation")] or 1)
+		* (if sheep:GetAttribute("Charged") == true then CHARGED_WOOL else 1)
+
+	local weight = sheep:GetAttribute("Weight")
+	if size and type(weight) == "number" then
+		local tierWeight = weight / (if variant then variant.weight else 1)
+		local position = math.clamp((tierWeight - size.minWeight) / (size.maxWeight - size.minWeight), 0, 1)
+		multiplier *= 1 + WEIGHT_WOOL_SPREAD * (position * 2 - 1)
+	end
+	return multiplier
+end
+
+-- 2.5 -> "2.5", 3 -> "3"
+local function formatMultiplier(value: number): string
+	return (string.format("%.1f", value):gsub("%.0$", ""))
 end
 
 local function isHoldingCrook(): boolean
@@ -279,6 +342,9 @@ local function setHovered(sheep: Model?)
 		return
 	end
 	hovered = sheep
+	if sheep then
+		woolLabel.Text = string.format(TEXT_WOOL, formatMultiplier(getWoolMultiplier(sheep)))
+	end
 
 	local root = getRoot(sheep)
 	holdTag.Adornee = root
@@ -314,14 +380,22 @@ local function getGoal(playerRoot: BasePart): (string?, Vector3?)
 	return nil, nil
 end
 
+local idleApplied = false -- the idle state (no crook, nothing carried) is already on screen
+
 local function update()
 	local carrying = getCarrySource() ~= nil
+	local active = carrying or isHoldingCrook()
+	if not active and idleApplied then
+		return
+	end
+	idleApplied = not active
+
 	for _, prompt in getOwnPodiums() do
 		if prompt.Enabled ~= carrying then
 			prompt.Enabled = carrying
 		end
 	end
-	setUiHidden(carrying or isHoldingCrook())
+	setUiHidden(active)
 
 	setHovered(if isHoldingCrook() and not carrying then getSheepUnderMouse() else nil)
 
@@ -400,8 +474,12 @@ end
 for _, prompt in collectionService:GetTagged(PODIUM_TAG) do
 	hideForeignPodium(prompt)
 end
-collectionService:GetInstanceAddedSignal(PODIUM_TAG):Connect(hideForeignPodium)
+collectionService:GetInstanceAddedSignal(PODIUM_TAG):Connect(function(instance: Instance)
+	idleApplied = false -- a new own podium prompt starts enabled until the next update turns it off
+	hideForeignPodium(instance)
+end)
 player:GetAttributeChangedSignal("PlotName"):Connect(function()
+	idleApplied = false
 	for _, prompt in collectionService:GetTagged(PODIUM_TAG) do
 		hideForeignPodium(prompt)
 	end

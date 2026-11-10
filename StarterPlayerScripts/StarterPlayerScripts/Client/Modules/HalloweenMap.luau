@@ -1,8 +1,8 @@
 --!strict
 
 --[[
-	Halloween recolour of the map: "BaseFloor" tagged parts, workspace.Base.GrassWalls "Grass" and every "TreeLeaves" go orange,
-	and blend back to their own colours when it ends. Parts that stream in later are picked up too.
+	Halloween recolour of the map: "BaseFloor" tagged parts (not the "WaterReset" sea), Base.GrassWalls "Grass" and every
+	"TreeLeaves" go orange, and blend back when it ends. Parts that stream in later are picked up too.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Modules.HalloweenMap
 ]]--
 
@@ -12,6 +12,7 @@ local tweenService = game:GetService("TweenService")
 
 --// Configs
 local FLOOR_TAG = "BaseFloor"
+local WATER_TAG = "WaterReset" -- BaseFloor parts with this tag (the sea) keep their colour
 local BASE_NAME = "Base"
 local GRASS_WALLS_NAME = "GrassWalls"
 local GRASS_NAME = "Grass"
@@ -102,6 +103,9 @@ local function trackFloorPiece(instance: Instance)
 end
 
 local function trackFloor(root: Instance)
+	if collectionService:HasTag(root, WATER_TAG) then
+		return -- the sea is tagged BaseFloor too, but stays blue
+	end
 	trackFloorPiece(root)
 	for _, descendant in root:GetDescendants() do
 		trackFloorPiece(descendant)

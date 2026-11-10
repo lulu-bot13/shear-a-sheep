@@ -1,15 +1,20 @@
 --!strict
 
 --[[
-	Plays while a Robux purchase prompt is open: the screen darkens, a rainbow spins over it and the camera zooms in a little.
+	Plays while a Robux purchase prompt is open (the screen darkens, a rainbow spins, the camera zooms in), then a celebration once it's bought.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Modules.PurchaseEffect
 ]]--
 
 --// Services
 local marketplaceService = game:GetService("MarketplaceService")
 local players = game:GetService("Players")
+local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
+local soundService = game:GetService("SoundService")
 local tweenService = game:GetService("TweenService")
+
+--// Modules
+local network = require(replicatedStorage.Shared.Utils.Network)
 
 --// Configs
 local DIM_TRANSPARENCY = 0.45 -- the black overlay at full strength
@@ -20,6 +25,11 @@ local FADE_IN = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.
 local FADE_OUT = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local MAX_SECONDS = 60 -- ends by itself if no prompt ever closes (the server refused to prompt)
 local DISPLAY_ORDER = 1000
+local CELEBRATE_TEXT = "THANK YOU!"
+local CELEBRATE_FLASH_TRANSPARENCY = 0.35
+local CELEBRATE_HOLD = 1.4 -- seconds the text stays before fading
+local CELEBRATE_POP = TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local CELEBRATE_FADE = TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local RAINBOW = ColorSequence.new({
 	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 70, 70)),
@@ -60,8 +70,55 @@ local gradient = Instance.new("UIGradient")
 gradient.Color = RAINBOW
 gradient.Parent = rainbow
 
+-- The celebration has its own gui, so stop()'s fade out never hides it.
+local celebrateGui = Instance.new("ScreenGui")
+celebrateGui.Name = "PurchaseCelebration"
+celebrateGui.ResetOnSpawn = false
+celebrateGui.IgnoreGuiInset = true
+celebrateGui.DisplayOrder = DISPLAY_ORDER + 1
+celebrateGui.Enabled = false
+celebrateGui.Parent = gui.Parent
+
+local flash = Instance.new("Frame")
+flash.Name = "Flash"
+flash.Size = UDim2.fromScale(1, 1)
+flash.BackgroundColor3 = Color3.new(1, 1, 1)
+flash.BackgroundTransparency = 1
+flash.BorderSizePixel = 0
+flash.Interactable = false
+flash.Parent = celebrateGui
+local flashGradient = Instance.new("UIGradient")
+flashGradient.Color = RAINBOW
+flashGradient.Rotation = 45
+flashGradient.Parent = flash
+
+local thanks = Instance.new("TextLabel")
+thanks.Name = "Thanks"
+thanks.AnchorPoint = Vector2.new(0.5, 0.5)
+thanks.Position = UDim2.fromScale(0.5, 0.4)
+thanks.Size = UDim2.fromScale(0.6, 0.14)
+thanks.BackgroundTransparency = 1
+thanks.FontFace = Font.fromEnum(Enum.Font.SourceSansBold)
+thanks.Text = CELEBRATE_TEXT
+thanks.TextColor3 = Color3.new(1, 1, 1)
+thanks.TextScaled = true
+thanks.TextTransparency = 1
+thanks.Interactable = false
+thanks.Parent = celebrateGui
+local thanksStroke = Instance.new("UIStroke")
+thanksStroke.Color = Color3.new(0, 0, 0)
+thanksStroke.Thickness = 4
+thanksStroke.Transparency = 1
+thanksStroke.Parent = thanks
+local thanksScale = Instance.new("UIScale")
+thanksScale.Parent = thanks
+
+local uiSounds = soundService:FindFirstChild("UISounds")
+local cashSound = if uiSounds then uiSounds:FindFirstChild("Cash") else nil
+
 --// State
 local active = false
+local celebrateId = 0
 local playId = 0
 local baseFov = 70
 local spinConnection: RBXScriptConnection? = nil
@@ -133,16 +190,66 @@ function PurchaseEffect.play()
 	tweenFov(baseFov - FOV_ZOOM, FADE_IN)
 end
 
-marketplaceService.PromptProductPurchaseFinished:Connect(function(userId: number)
+-- A short burst once a purchase goes through: a bright rainbow flash, a cash sound and a big "THANK YOU!" pop.
+function PurchaseEffect.celebrate()
+	celebrateGui.Enabled = true
+	celebrateId += 1
+	local id = celebrateId
+
+	flash.BackgroundTransparency = CELEBRATE_FLASH_TRANSPARENCY
+	tweenService:Create(flash, CELEBRATE_FADE, { BackgroundTransparency = 1 }):Play()
+
+	thanks.TextTransparency = 0
+	thanksStroke.Transparency = 0
+	thanksScale.Scale = 0.3
+	thanks.Rotation = -8
+	tweenService:Create(thanksScale, CELEBRATE_POP, { Scale = 1 }):Play()
+	tweenService:Create(thanks, CELEBRATE_POP, { Rotation = 0 }):Play()
+	if cashSound and cashSound:IsA("Sound") then
+		cashSound:Play()
+	end
+
+	task.delay(CELEBRATE_HOLD, function()
+		if celebrateId ~= id then
+			return
+		end
+		tweenService:Create(thanks, CELEBRATE_FADE, { TextTransparency = 1 }):Play()
+		local fade = tweenService:Create(thanksStroke, CELEBRATE_FADE, { Transparency = 1 })
+		fade.Completed:Once(function()
+			if celebrateId == id then
+				celebrateGui.Enabled = false
+			end
+		end)
+		fade:Play()
+	end)
+end
+
+marketplaceService.PromptProductPurchaseFinished:Connect(function(userId: number, _productId: number, purchased: boolean)
 	if userId == player.UserId then
 		PurchaseEffect.stop()
+		if purchased then
+			PurchaseEffect.celebrate()
+		end
 	end
 end)
 
-marketplaceService.PromptGamePassPurchaseFinished:Connect(function(purchaser: Player)
+marketplaceService.PromptGamePassPurchaseFinished:Connect(function(purchaser: Player, _gamePassId: number, purchased: boolean)
 	if purchaser == player then
 		PurchaseEffect.stop()
+		if purchased then
+			PurchaseEffect.celebrate()
+		end
 	end
+end)
+
+-- The server refusing a product prompt (e.g. Skip Rebirth at max) sends an error alert and no prompt opens, so the effect ends there.
+task.spawn(function()
+	network.waitUntilReadyAsync()
+	network.connectEvent(network.RemoteEvents.ShowAlert, function(_text: string, kind: string?)
+		if kind == "error" then
+			PurchaseEffect.stop()
+		end
+	end)
 end)
 
 return PurchaseEffect

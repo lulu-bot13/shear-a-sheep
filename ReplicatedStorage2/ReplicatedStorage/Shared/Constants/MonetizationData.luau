@@ -14,7 +14,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local MonetizationConfig = require(replicatedStorage.Shared.Utils.MonetizationConfig)
 
 export type Kind = MonetizationConfig.Kind
-export type Item = MonetizationConfig.Item -- id 0 = not set up yet; perks: multiplier, durationMinutes, gems; rewardText for passes
+export type Item = MonetizationConfig.Item -- id 0 = not set up yet (hidden everywhere); perks: multiplier, durationMinutes, gems; rewardText and icon for passes
 
 return MonetizationConfig.create({
 	--// Game passes
@@ -25,6 +25,7 @@ return MonetizationConfig.create({
 		giftProductId = 3726902421,
 		displayName = "2x WOOL",
 		rewardText = "2x wool every shear",
+		icon = "rbxassetid://136230905804958",
 		multiplier = 2,
 	},
 	DoubleLuck = {
@@ -34,6 +35,7 @@ return MonetizationConfig.create({
 		giftProductId = 3726902227,
 		displayName = "2x LUCK",
 		rewardText = "Higher chance for rare sheep to spawn!",
+		icon = "rbxassetid://77360653541449",
 		multiplier = 2,
 	},
 	AutoShears = {
@@ -43,6 +45,20 @@ return MonetizationConfig.create({
 		giftProductId = 3726902027,
 		displayName = "AUTO SHEARS",
 		rewardText = "No more need for clicking!",
+		icon = "rbxassetid://136356308886914",
+	},
+
+	--// Bundles (developer products)
+	StarterPack = {
+		kind = "DevProduct",
+		id = 0, -- PUT ID HERE (hidden on the board, in offers and the shop while 0)
+		giftable = false,
+		giftProductId = 0,
+		displayName = "STARTER PACK",
+		rewardText = "+100 Gems and 15 min of 3x Luck!",
+		gems = 100,
+		boostKey = "LuckBoost", -- the boost it adds, for boostMinutes
+		boostMinutes = 15,
 	},
 
 	--// Boosts (developer products)

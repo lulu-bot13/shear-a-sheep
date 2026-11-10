@@ -93,6 +93,8 @@ local RANGE_CHECK_SECONDS = 0.1
 local RANGE_HIGHLIGHT_COLOR = Color3.fromRGB(255, 230, 90)
 local RANGE_FILL_TRANSPARENCY = 0.85
 local MAX_RANGE_HIGHLIGHTS = 20 -- Roblox only draws ~31 highlights at once; the rest are left for hit flashes
+local WORLD_BOSS_TAG = "WorldBoss" -- WorldBossData.Tag on the server
+local WORLD_BOSS_HEIGHT = 10 -- WorldBossData.HitHeight
 
 --// Auto shear
 local AUTO_ACTION = "ToggleAutoShear"
@@ -297,6 +299,22 @@ local function updateRangeHighlights(center: Vector3)
 		end
 	end
 
+	-- The King Sheep world boss belongs to everyone; its HitRadius widens the reach for its big body (as on the server).
+	for _, boss in collectionService:GetTagged(WORLD_BOSS_TAG) do
+		local root = boss:FindFirstChild("HumanoidRootPart")
+		local hitRadius = boss:GetAttribute("HitRadius")
+		local health = boss:GetAttribute("Health")
+		if not boss:IsA("Model") or not root or not root:IsA("BasePart") or type(health) ~= "number" or health <= 0 then
+			continue
+		end
+		local offset = root.Position - center
+		local reach = range + (if type(hitRadius) == "number" then hitRadius else 0)
+		if math.abs(offset.Y) <= WORLD_BOSS_HEIGHT and Vector3.new(offset.X, 0, offset.Z).Magnitude <= reach then
+			inRange[boss] = true
+			showRangeHighlight(boss)
+		end
+	end
+
 	for sheep in rangeHighlights do
 		if not inRange[sheep] then
 			hideRangeHighlight(sheep)
@@ -377,7 +395,7 @@ local function updateRing()
 		updateRangeHighlights(root.Position)
 	end
 
-	if autoShear and isHudEnabled() and now >= nextSwingAt and hasSheepInRange() and not windowsManager.anyOpen() then
+	if autoShear and player:GetAttribute(AUTO_PASS_ATTRIBUTE) == true and isHudEnabled() and now >= nextSwingAt and hasSheepInRange() and not windowsManager.anyOpen() then
 		swing()
 	end
 end

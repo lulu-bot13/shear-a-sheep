@@ -21,14 +21,15 @@ local PODIUM_NAME = "Podium"
 local ACTIVE_ATTRIBUTE = "ActiveAbility" -- set by AbilityHandler while an ability runs
 local WINDOW_NAME = "AbilityShack"
 local ROLL_TIMEOUT = 5 -- seconds without a reply before rolling unlocks again
-local PIECE_TIMEOUT = 5 -- seconds to wait for a window piece before warning it's missing
+local CLOSE_DISTANCE = 28 -- studs from the podium before the window closes itself (AbilityShackHandler rolls within 30)
+local DISTANCE_CHECK_SECONDS = 0.25
 local BLACK = Color3.fromRGB(0, 0, 0)
 local HALLOWEEN_ONLY_TEXT = "Halloween only" -- a Halloween ability's chance outside Halloween
 local OWNED_TEXT = "OWNED" -- the roll chance card's Equipped badge, shown on abilities already owned
 local UNAVAILABLE_DARKEN = 0.5 -- how much darker a roll chance card is while it can't be rolled
 local UNAFFORDABLE_DARKEN = 0.45 -- how much darker a roll button is while the player can't pay for it
 
--- Each roll button (art baked in) and how many rolls it buys; Price shows the cost of one roll.
+-- Each roll button (art baked in) and how many rolls it buys; Price shows the Gems for one roll.
 local ROLL_BUTTONS = {
 	{ buttonName = "RollButton1", amount = 1 },
 	{ buttonName = "RollButton", amount = 5 },
@@ -70,33 +71,16 @@ local abilitiesGui = playerGui:WaitForChild("Abilities") :: ScreenGui
 local main = abilitiesGui:WaitForChild("Main") :: Frame
 local inventoryList = main:WaitForChild("Inventory") :: ScrollingFrame
 local inventoryTemplate = inventoryList:WaitForChild("Template") :: ImageButton
+local rollChances = main:WaitForChild("RollChances") :: Frame
+local rollChancesTemplate = rollChances:WaitForChild("Template") :: ImageButton
+local priceLabel = main:WaitForChild("Price") :: TextLabel
 local exitButton = main:WaitForChild("ExitButton") :: ImageButton
-
--- A window piece that may sit inside Main or beside it in the ScreenGui; warns and returns nil if it never shows up.
-local function findWindowPiece(name: string, className: string): Instance?
-	local deadline = os.clock() + PIECE_TIMEOUT
-	repeat
-		local piece = main:FindFirstChild(name) or abilitiesGui:FindFirstChild(name)
-		if piece and piece:IsA(className) then
-			return piece
-		end
-		task.wait(0.1)
-	until os.clock() >= deadline
-	warn(`AbilityShackClient: {abilitiesGui:GetFullName()} has no {name} ({className}) in Main or the ScreenGui.`)
-	return nil
-end
-
-local rollChances = findWindowPiece("RollChances", "GuiObject") :: GuiObject?
-local rollChancesTemplate = if rollChances then rollChances:FindFirstChild("Template") :: GuiObject? else nil
-local priceLabel = findWindowPiece("Price", "TextLabel") :: TextLabel?
 
 -- Each roll button with its Studio ImageColor3 (before dimming) and the rolls it buys.
 local rollButtons: { { button: ImageButton, baseColor: Color3, amount: number } } = {}
 for _, config in ROLL_BUTTONS do
-	local button = findWindowPiece(config.buttonName, "ImageButton") :: ImageButton?
-	if button then
-		table.insert(rollButtons, { button = button, baseColor = button.ImageColor3, amount = config.amount })
-	end
+	local button = main:WaitForChild(config.buttonName) :: ImageButton
+	table.insert(rollButtons, { button = button, baseColor = button.ImageColor3, amount = config.amount })
 end
 
 --// State
@@ -107,6 +91,8 @@ local revealing = false
 local rollToken = 0
 local pendingEquip: string? = nil
 local podiumConnections: { RBXScriptConnection } = {}
+local podiumPart: BasePart? = nil
+local openToken = 0
 
 --// Helpers ---------------------------------------------------------------------
 
@@ -231,31 +217,46 @@ local function getPodiumPart(podium: Instance): BasePart?
 	return nil
 end
 
+-- True while the character is within `range` studs of the podium (and alive).
+local function isNearPodium(range: number): boolean
+	local character = player.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local part = podiumPart
+	if not rootPart or not humanoid or humanoid.Health <= 0 or not part or not part:IsDescendantOf(workspace) then
+		return false
+	end
+	return (rootPart.Position - part.Position).Magnitude <= range
+end
+
 --// Abilities window --------------------------------------------------------------
 
 local refreshWindow: () -> ()
+local window: windowsManager.Window
 
--- Pieces beside Main (not inside it) pop in and out with it.
-local extraFrames: { GuiObject } = {}
-for _, piece in { rollChances, priceLabel } :: { GuiObject? } do
-	if piece and not piece:IsDescendantOf(main) then
-		table.insert(extraFrames, piece)
+-- Walk away from the podium and the window closes itself, before a roll could be refused as too far.
+local function watchDistance(token: number)
+	while token == openToken and window.isOpen() do
+		if not isNearPodium(CLOSE_DISTANCE) then
+			window.close()
+			return
+		end
+		task.wait(DISTANCE_CHECK_SECONDS)
 	end
 end
-for _, roll in rollButtons do
-	if not roll.button:IsDescendantOf(main) then
-		table.insert(extraFrames, roll.button)
-	end
-end
 
-local window = windowsManager.register(WINDOW_NAME, {
+window = windowsManager.register(WINDOW_NAME, {
 	gui = abilitiesGui,
 	frame = main,
-	extraFrames = extraFrames,
 	closeButton = exitButton,
 	onOpen = function()
+		openToken += 1
 		refreshWindow()
 		network.fireServer(network.RemoteEvents.RequestAbilityState)
+		task.spawn(watchDistance, openToken)
+	end,
+	onClose = function()
+		openToken += 1
 	end,
 })
 
@@ -299,19 +300,14 @@ end
 
 -- Every ability a roll can land on, with its chance; Halloween abilities stay listed (dimmed) outside Halloween.
 local function refreshRollChances(current: State)
-	local list, template = rollChances, rollChancesTemplate
-	if not list or not template then
-		return
-	end
-
-	clearClones(list)
+	clearClones(rollChances)
 	for index, entry in current.abilities do
 		local halloweenOnly = entry.halloween and entry.chance <= 0
 		if entry.chance <= 0 and not halloweenOnly then
 			continue
 		end
 
-		local card = template:Clone()
+		local card = rollChancesTemplate:Clone()
 		card.LayoutOrder = index
 		fillCard(
 			card,
@@ -320,19 +316,18 @@ local function refreshRollChances(current: State)
 			if halloweenOnly then entry.color:Lerp(BLACK, UNAVAILABLE_DARKEN) else entry.color
 		)
 		setBadge(card, entry.owned, OWNED_TEXT)
-		card.Parent = list
+		card.Interactable = false -- only shows the odds
+		card.Parent = rollChances
 	end
 end
 
--- The price of one roll, with each roll button dimmed while the player's Gems can't cover it.
+-- "Roll for <Gem> 4 each" (the gem icon and "Roll for" are Studio art), with each roll button dimmed while the player's Gems can't cover it.
 local function refreshPrices()
 	local current = state
 	if not current then
 		return
 	end
-	if priceLabel then
-		priceLabel.Text = formatWithCommas(current.cost)
-	end
+	priceLabel.Text = `{formatWithCommas(current.cost)} each`
 	local gems = getGems()
 	for _, roll in rollButtons do
 		local cost = current.cost * roll.amount
@@ -419,6 +414,10 @@ local function playRoll(result: any)
 	end
 
 	finishRoll()
+	-- Still at the podium: back to the window to equip it or roll again.
+	if isNearPodium(CLOSE_DISTANCE) and not windowsManager.anyOpen() then
+		window.open()
+	end
 end
 
 local function onRollResult(result: any)
@@ -509,10 +508,12 @@ local function watchPodium()
 			continue
 		end
 
+		podiumPart = part
 		table.insert(podiumConnections, part.Touched:Connect(onPodiumTouched))
 		while podium.Parent == shack and part:IsDescendantOf(shack) do
 			part.AncestryChanged:Wait()
 		end
+		podiumPart = nil
 		unbindPodium()
 	end
 end

@@ -18,6 +18,16 @@ farmData.MaxSheepCap = 40 -- hard limit, however many capacity upgrades are boug
 farmData.SpawnInterval = 1.5 -- seconds between new sheep while the farm is below capacity
 farmData.SpawnDropHeight = 3 -- studs above the ground a sheep appears at
 
+-- Refills ride the plot's Conveyor.Belt (SheepBeltHandler); its Speed attribute (studs/s) is set in Studio.
+farmData.Belt = {
+	QueueSize = 3, -- sheep shown riding or waiting on the belt
+	QueueGap = 1.5, -- studs between queued sheep
+	FeedSpacing = 6, -- studs a new sheep needs at Feed; the belt speeds up past Speed if refills need it
+	HopDistance = 5.5, -- studs sideways from PenDrop into the pen, clearing the rail
+	HopHeight = 2.5,
+	HopSeconds = 0.45,
+}
+
 --// Wandering -----------------------------------------------------------------------------
 
 farmData.Wander = {

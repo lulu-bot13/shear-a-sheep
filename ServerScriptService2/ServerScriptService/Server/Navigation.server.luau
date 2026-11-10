@@ -1,37 +1,32 @@
-local players = game:GetService("Players")
+--[[
+	Handles the Main HUD's travel buttons: "plot" sends the player to their plot's SpawnArea, "plaza" to the shear shop's ShearSpawn.
+	Location: ServerScriptService.Server.Navigation
+]]--
 
-local base = workspace:FindFirstChild("Base")
+--// Services
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local serverScriptService = game:GetService("ServerScriptService")
 
 --// Modules
-local network = require(game.ReplicatedStorage.Shared:FindFirstChild("Utils"):FindFirstChild("Network"))
-local moduleLoader = require(game.ReplicatedStorage:FindFirstChild("Source"):FindFirstChild("ModuleLoader"))
+local network = require(replicatedStorage.Shared:WaitForChild("Utils"):WaitForChild("Network"))
+local PlotHandler = require(serverScriptService:WaitForChild("Modules"):WaitForChild("Controllers"):WaitForChild("PlotHandler"))
+
+--// Configs
+local TELEPORT_COOLDOWN = 1 -- seconds between requests per player
 
 network.waitUntilReadyAsync()
 
-network.connectEvent(network.RemoteEvents.Teleport, function(player: Player, destination: string)
-    if not player or not destination then return end
+network.connectEvent(network.RemoteEvents.Teleport, function(player: Player, destination: unknown)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not character or not humanoid or humanoid.Health <= 0 then
+		return
+	end
 
-    local plotName = player:GetAttribute("PlotName")
-    local plot = workspace.Base.Plots:FindFirstChild(plotName)
-    if not plot then return end
-
-    local character = player.Character or player.CharacterAdded:Wait()
-
-    local humanoid = character:FindFirstChild("Humanoid")
-    if not humanoid or humanoid.Health <= 0 then return end
-
-    -- Teleporting
-    local spawnArea = if destination == "plot" then plot:FindFirstChild("SpawnArea") else base:FindFirstChild("CenterPlaza"):FindFirstChild("SpawnArea")
-    if not spawnArea then
-        warn(`Spawn area not found: {destination}`)
-        return
-    end
-
-    character:PivotTo(spawnArea.CFrame * CFrame.new(0,2,0))
-end)
-
-players.PlayerAdded:Connect(function(player: Player)
-    
-    
-
-end)
+	local target = if destination == "plot" then PlotHandler.getRespawnCFrame(player)
+		elseif destination == "plaza" then PlotHandler.getShopCFrame()
+		else nil
+	if target then
+		character:PivotTo(target)
+	end
+end, { network.Middleware.RateLimit(TELEPORT_COOLDOWN) })

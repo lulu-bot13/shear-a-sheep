@@ -275,6 +275,39 @@ function Analytics.podiumPlaced(player: Player, sheepType: any)
 	logCustom(player, "Placed Podium Sheep", 1, fields(sheepType))
 end
 
+-- The King Sheep arrived while this player was in the server; `source` is "Roll" or "Admin".
+function Analytics.worldBossSpawned(player: Player, source: string, weather: string)
+	logCustom(player, "World Boss Spawned", 1, fields(source, weather))
+end
+
+-- One contributor's share of a defeated King Sheep (1 = top contributor).
+function Analytics.worldBossDefeated(player: Player, rank: number, damageShare: number)
+	logCustom(player, "World Boss Defeated", rank, fields(math.floor(damageShare * 100)))
+end
+
+function Analytics.worldBossEscaped(player: Player, damageShare: number)
+	logCustom(player, "World Boss Escaped", 1, fields(math.floor(damageShare * 100)))
+end
+
+function Analytics.worldBossReward(player: Player, wool: number, luck: number, gems: number, mutation: string?)
+	local gameplay = Enum.AnalyticsEconomyTransactionType.Gameplay
+	logEconomy(player, Enum.AnalyticsEconomyFlowType.Source, "Wool", wool, gameplay, "WorldBoss")
+	logEconomy(player, Enum.AnalyticsEconomyFlowType.Source, "Luck", luck, gameplay, "WorldBoss")
+	logEconomy(player, Enum.AnalyticsEconomyFlowType.Source, "Gems", gems, gameplay, "WorldBoss")
+	logCustom(player, "World Boss Reward", 1, fields(mutation or "None"))
+end
+
+-- A GoalTracker milestone completed live (1 = the first); one funnel per player, so their session id is their UserId.
+function Analytics.goalStep(player: Player, stepIndex: number, stepId: string)
+	safeCall("LogFunnelStepEvent", player, "Goal Chain", tostring(player.UserId), stepIndex, stepId)
+end
+
+-- A GoalTracker session quest finished and paid out.
+function Analytics.goalQuestCompleted(player: Player, questId: string, gems: number)
+	logEconomy(player, Enum.AnalyticsEconomyFlowType.Source, "Gems", gems, Enum.AnalyticsEconomyTransactionType.Gameplay, `Quest_{questId}`)
+	logCustom(player, "Completed Quest", 1, fields(questId))
+end
+
 --// Client events ---------------------------------------------------------------------
 
 -- True while the player is under CLIENT_EVENT_BUDGET reports per CLIENT_EVENT_WINDOW seconds; bursts (two steps at once) still get through.

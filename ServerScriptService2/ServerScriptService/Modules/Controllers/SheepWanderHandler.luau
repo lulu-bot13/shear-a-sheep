@@ -20,6 +20,7 @@ local WANDER = FarmData.Wander
 local RAYCAST_HEIGHT = 50 -- how far above/below the area the ground is searched for
 local GRAZING_ATTRIBUTE = "Grazing"
 local GRAZE_MAX_SPEED = 0.5 -- studs/s; a sheep still sliding to a stop waits before grazing
+local FALL_LIMIT = 15 -- studs below its SheepArea a sheep counts as fallen off the island
 
 --// State
 local nextMoveAt: { [Model]: number } = setmetatable({}, { __mode = "k" }) :: any
@@ -55,7 +56,7 @@ local function getPlot(sheep: Model): Instance?
 	return if folder then folder.Parent else nil
 end
 
--- Pulls a sheep that got pushed or slid out of its SheepArea back inside it.
+-- Pulls a sheep that got pushed or slid out of its SheepArea back inside it; one that fell well below it goes back to the pen.
 local function keepInArea(sheep: Model, root: BasePart)
 	local plot = getPlot(sheep)
 	local boxCFrame, size
@@ -63,6 +64,11 @@ local function keepInArea(sheep: Model, root: BasePart)
 		boxCFrame, size = getAreaBox(plot)
 	end
 	if not boxCFrame or not size then
+		return
+	end
+
+	if root.Position.Y < boxCFrame.Position.Y - FALL_LIMIT then
+		SheepWanderHandler.returnToPen(sheep)
 		return
 	end
 
@@ -113,6 +119,17 @@ function SheepWanderHandler.getSpawnPosition(plot: Instance): Vector3?
 	return ground + Vector3.new(0, FarmData.SpawnDropHeight, 0)
 end
 
+-- The ground inside the plot's SheepArea closest to `near` (where a conveyor sheep lands), or nil without a SheepArea.
+function SheepWanderHandler.getGroundNear(plot: Instance, near: Vector3): Vector3?
+	local boxCFrame, size = getAreaBox(plot)
+	if not boxCFrame or not size then
+		return nil
+	end
+	local localPoint = clampToArea(boxCFrame:PointToObjectSpace(near) * Vector3.new(1, 0, 1), size)
+	local point = boxCFrame:PointToWorldSpace(localPoint)
+	return findGround(plot, point) or point
+end
+
 --// Grazing ---------------------------------------------------------------------------
 
 -- Only writes on a change, so the attribute replicates once per graze rather than every tick.
@@ -126,6 +143,23 @@ local function cancelGraze(sheep: Model)
 	grazeStart[sheep] = nil
 	grazeEnd[sheep] = nil
 	setGrazing(sheep, false)
+end
+
+-- Puts a sheep that left the island (fell, or touched the sea) back at a random spot in its pen.
+function SheepWanderHandler.returnToPen(sheep: Model)
+	local plot = getPlot(sheep)
+	local root = sheep:FindFirstChild("HumanoidRootPart")
+	local position = plot and SheepWanderHandler.getSpawnPosition(plot)
+	if not position or not root or not root:IsA("BasePart") then
+		return
+	end
+
+	local _, yaw = sheep:GetPivot():ToOrientation()
+	sheep:PivotTo(CFrame.new(position) * CFrame.Angles(0, yaw, 0))
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	nextMoveAt[sheep] = nil
+	cancelGraze(sheep)
 end
 
 --// Walking ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 --[[
 	Connects the rebirth screen to RebirthHandler: answers state and rebirth requests,
-	and pushes fresh state on its own whenever the player's wool, luck, rebirths or Prestiges change.
+	and pushes fresh state on its own whenever the player's wool, luck, rebirths, Prestiges or rebirth sheep (found / pity) change.
 
 	Location: ServerScriptService.Server.RebirthServer
 ]]--
@@ -34,7 +34,7 @@ local selectedAmount: { [Player]: RebirthHandler.Amount } = {} -- the amount the
 
 -- A short fingerprint of the state, so an unchanged state is never sent twice.
 local function getSignature(state: RebirthHandler.State): string
-	return `{state.rebirths}|{state.prestiges}|{state.wool}|{state.canRebirth}|{state.luck}|{state.amount}`
+	return `{state.rebirths}|{state.prestiges}|{state.wool}|{state.canRebirth}|{state.luck}|{state.amount}|{state.requiredFound}|{state.pityLeft}`
 end
 
 local function pushState(player: Player, force: boolean)

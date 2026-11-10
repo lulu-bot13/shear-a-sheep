@@ -1,6 +1,6 @@
 --[[
-	Starts the client network and keeps the Main HUD's wool, luck, Gems, sheep sheared and pen count labels updated.
-	Wool, luck and Gems pop with a light green tint when they go up; the sheep sheared count pops a "+N".
+	Starts the client network and keeps the Main HUD's wool, luck (with its effective "x1.9" multiplier), Gems, sheep sheared, pen count
+	and friend boost labels updated. Wool, luck and Gems pop with a light green tint when they go up; the sheep sheared count pops a "+N".
 ]]--
 
 --// Services
@@ -13,6 +13,7 @@ local debris = game:GetService("Debris")
 local moduleLoader = require(replicatedStorage:WaitForChild("Source"):WaitForChild("ModuleLoader"))
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
+local spawnOdds = require(replicatedStorage.Shared.Utils.SpawnOdds)
 local backgroundMusic = require(script.Parent.Modules.BackgroundMusic)
 require(script.Parent.Modules.Settings) -- first, so the music waits for the saved Music setting
 
@@ -56,6 +57,9 @@ local PULSE_COLOR = Color3.fromRGB(85, 255, 85)
 local PULSE_TINT = 0.3 -- how far the text leans towards PULSE_COLOR at the peak
 local PULSE_GROW_SECONDS = 0.05
 local PULSE_SETTLE_SECONDS = 0.1 -- grow + settle stays under 0.15s, since drops land in quick succession
+local LUCK_FACTOR_ATTRIBUTE = "LuckFactor" -- SheepSpawnHandler: the spawn roll's luck factor, boosts included
+local FRIEND_BOOST_ATTRIBUTE = "FriendBoost" -- FriendBoostHandler: wool multiplier from friends in the server
+local FRIEND_LABEL_NAME = "FriendBoost"
 
 -- A HUD counter, the colour it settles back to and the last amount it showed.
 type Counter = {
@@ -155,8 +159,8 @@ local function getShown(value: IntValue, holdAttribute: string): number
 	return math.max(value.Value - (if type(held) == "number" then held else 0), 0)
 end
 
-local function showCount(counter: Counter, prefix: string, shown: number)
-	counter.label.Text = `{prefix}: {numberFormatter:Format(shown, 1)}`
+local function showCount(counter: Counter, prefix: string, shown: number, suffix: string?)
+	counter.label.Text = `{prefix}: {numberFormatter:Format(shown, 1)}{suffix or ""}`
 
 	-- Skips the first value so loading a save doesn't pulse.
 	if counter.lastShown and shown > counter.lastShown then
@@ -165,8 +169,8 @@ local function showCount(counter: Counter, prefix: string, shown: number)
 	counter.lastShown = shown
 end
 
-local function updateCounter(counter: Counter, prefix: string, value: IntValue, holdAttribute: string)
-	showCount(counter, prefix, getShown(value, holdAttribute))
+local function updateCounter(counter: Counter, prefix: string, value: IntValue, holdAttribute: string, suffix: string?)
+	showCount(counter, prefix, getShown(value, holdAttribute), suffix)
 end
 
 -- Gems are a player attribute (not in Inventory) and never fly to the counter, so there is nothing to hold back.
@@ -179,8 +183,45 @@ local function updateWoolAmountLabel()
 	updateCounter(woolCounter, "Wool", woolAmountValue, "WoolLabelHold")
 end
 
+-- "Luck: 1.2k (x1.9)": the multiplier is the luck factor the server's spawn roll uses right now (SpawnOdds formula).
 local function updateLuckAmountLabel()
-	updateCounter(luckCounter, "Luck", luckAmountValue, "LuckLabelHold")
+	local factor = player:GetAttribute(LUCK_FACTOR_ATTRIBUTE)
+	local suffix = if type(factor) == "number" then ` ({spawnOdds.formatMultiplier(factor)})` else nil
+	updateCounter(luckCounter, "Luck", luckAmountValue, "LuckLabelHold", suffix)
+end
+
+-- A small label created beside the wool counter (there's no Studio slot for it): "+20% Friends" while friends boost wool.
+local function createFriendLabel(): TextLabel
+	local label = Instance.new("TextLabel")
+	label.Name = FRIEND_LABEL_NAME
+	label.BackgroundTransparency = 1
+	label.AnchorPoint = Vector2.new(0, 0.5)
+	label.Position = UDim2.fromScale(woolAmountLabel.Position.X.Scale + woolAmountLabel.Size.X.Scale + 0.02,
+		woolAmountLabel.Position.Y.Scale + woolAmountLabel.Size.Y.Scale / 2)
+	label.Size = UDim2.fromScale(0.45, woolAmountLabel.Size.Y.Scale * 0.6)
+	label.Font = woolAmountLabel.Font
+	label.TextScaled = true
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.Visible = false
+	label.ZIndex = woolAmountLabel.ZIndex
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.new(0, 0, 0)
+	stroke.Thickness = 2
+	stroke.Parent = label
+
+	label.Parent = currencyFrame
+	return label
+end
+
+local friendLabel = createFriendLabel()
+
+local function updateFriendLabel()
+	local boost = player:GetAttribute(FRIEND_BOOST_ATTRIBUTE)
+	local percent = if type(boost) == "number" then math.floor((boost - 1) * 100 + 0.5) else 0
+	friendLabel.Visible = percent > 0
+	friendLabel.Text = `+{percent}% Friends`
 end
 
 local function formatWithCommas(value: number): string
@@ -262,7 +303,10 @@ updateLuckAmountLabel()
 updateGemAmountLabel()
 updateSheepCountLabel()
 updateSheepPenCountLabel()
+updateFriendLabel()
 
+player:GetAttributeChangedSignal(LUCK_FACTOR_ATTRIBUTE):Connect(updateLuckAmountLabel)
+player:GetAttributeChangedSignal(FRIEND_BOOST_ATTRIBUTE):Connect(updateFriendLabel)
 woolAmountValue.Changed:Connect(updateWoolAmountLabel)
 luckAmountValue.Changed:Connect(updateLuckAmountLabel)
 player:GetAttributeChangedSignal("Gems"):Connect(updateGemAmountLabel)
