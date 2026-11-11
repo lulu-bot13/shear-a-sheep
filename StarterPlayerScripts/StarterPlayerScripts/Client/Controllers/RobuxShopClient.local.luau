@@ -1,5 +1,5 @@
 --[[
-	The Robux shop window (StarterGui.RobuxShop): opens from Main.Buttons.Shop, fills and binds every card from MonetizationData,
+	The Robux shop window (StarterGui.RobuxShop): opens from Main.Shop, fills and binds every card from MonetizationData,
 	sweeps the card shines while open (ShineRotate spins them), and swaps in the gift window while gifting. The server (MonetizationHandler, GiftService) grants everything.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.RobuxShopClient
@@ -324,14 +324,13 @@ giftFrame:GetPropertyChangedSignal("Visible"):Connect(function()
 	end
 end)
 
--- Main.Buttons.Shop toggles the shop; bound again whenever Main is recreated on respawn.
+-- Main.Shop toggles the shop; bound again whenever Main is recreated on respawn.
 local boundButtons: { [Instance]: boolean } = {}
 local function bindShopButton(hud: Instance)
 	if hud.Name ~= "Main" or not hud:IsA("ScreenGui") then
 		return
 	end
-	local buttons = hud:WaitForChild("Buttons", 10)
-	local shopButton = buttons and buttons:WaitForChild("Shop", 10)
+	local shopButton = hud:WaitForChild("Shop", 10)
 	if shopButton and shopButton:IsA("GuiButton") then
 		if boundButtons[shopButton] then
 			return
@@ -342,7 +341,7 @@ local function bindShopButton(hud: Instance)
 		end)
 		shopButton.Activated:Connect(window.toggle)
 	else
-		warn("[RobuxShopClient] no Main.Buttons.Shop button to open the Robux shop")
+		warn("[RobuxShopClient] no Main.Shop button to open the Robux shop")
 	end
 end
 

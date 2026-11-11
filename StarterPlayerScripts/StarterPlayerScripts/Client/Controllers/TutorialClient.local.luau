@@ -112,8 +112,8 @@ local BAR_BACK_COLOR = Color3.fromRGB(40, 35, 30)
 local BAR_FILL_COLOR = Color3.fromRGB(255, 215, 80)
 local BAR_MILESTONES = { { ratio = 0.5, text = "Halfway there!" }, { ratio = 0.8, text = "Almost there!" } }
 
-local SPOTLIGHT_Z_INDEX = 20 -- a spotlit button and its text label are lifted to this while the spotlight is on them
-local SPOTLIGHT_TEXT_NAMES = { Rebirth = "Title" } -- spotlit button name -> its text label that is lifted with it
+-- While spotlit, a button's ScreenGui draws just under the tutorial's, so HUD guis with the same DisplayOrder (the Ability button) can't cover it.
+local SPOTLIT_DISPLAY_ORDER = DISPLAY_ORDER - 1
 
 local HIGHLIGHT_COLOR = Color3.fromRGB(255, 230, 90)
 -- Both beam ends face along the beam's flat heading, then get this extra roll so the ribbon lies face-up.
@@ -188,7 +188,8 @@ local beamConnection: RBXScriptConnection? = nil
 local inputConnection: RBXScriptConnection? = nil
 local focused: GuiObject? = nil -- what the spotlight was last tweened over, and where it was
 local focusedPosition, focusedSize = Vector2.zero, Vector2.zero
-local raisedZIndex: { [GuiObject]: number } = {} -- original ZIndex of what raiseWhileSpotlit lifted
+local raisedGui: ScreenGui? = nil -- the spotlit button's ScreenGui while raiseWhileSpotlit has lifted it, and its own DisplayOrder
+local raisedGuiOrder = 0
 local hintTarget: GuiObject? = nil -- what the tapping hand points at
 local hintRipplePoint = Vector2.zero -- where the hand's taps ripple (the target's centre), in tutorialGui pixels
 local lastClickAt = 0
@@ -839,25 +840,22 @@ end
 
 --// Spotlight ---------------------------------------------------------------------------
 
--- Puts back the ZIndex of everything raiseWhileSpotlit lifted.
+-- Puts the ScreenGui raiseWhileSpotlit lifted back at its own DisplayOrder.
 local function restoreRaised()
-	for guiObject, zIndex in raisedZIndex do
-		guiObject.ZIndex = zIndex
+	if raisedGui then
+		raisedGui.DisplayOrder = raisedGuiOrder
+		raisedGui = nil
 	end
-	table.clear(raisedZIndex)
 end
 
--- A spotlit button in SPOTLIGHT_TEXT_NAMES (the HUD's Rebirth) and its text label draw over everything around them.
+-- ZIndex only sorts within one ScreenGui, so the spotlit button's whole gui (e.g. RebirthScreen) is drawn over the others instead.
 local function raiseWhileSpotlit(target: GuiObject)
-	local textName = SPOTLIGHT_TEXT_NAMES[target.Name]
-	local text = textName and target:FindFirstChild(textName)
-	if not text or not text:IsA("GuiObject") then
+	local gui = target:FindFirstAncestorOfClass("ScreenGui")
+	if not gui or gui == tutorialGui or gui.DisplayOrder >= SPOTLIT_DISPLAY_ORDER then
 		return
 	end
-	for _, guiObject in { target, text } do
-		raisedZIndex[guiObject] = guiObject.ZIndex
-		guiObject.ZIndex = SPOTLIGHT_Z_INDEX
-	end
+	raisedGui, raisedGuiOrder = gui, gui.DisplayOrder
+	gui.DisplayOrder = SPOTLIT_DISPLAY_ORDER
 end
 
 -- Spotlights the GuiObject; nil clears it.
@@ -1357,11 +1355,16 @@ local function updateIndex()
 		setHint(indexHudButton)
 	elseif unclaimed == 0 then
 		setStage("CloseIndex")
-	elseif unclaimed and unclaimed > 1 then
+	elseif unclaimed and unclaimed > 1 and isShown(indexClaimAllButton) then
 		-- Claim only takes the selected Sheep, so with several waiting the player is sent to Claim All.
 		setText(`Press CLAIM ALL! You found {unclaimed} new Sheep, and each one gives you Luck`)
 		point(indexClaimAllButton)
 		setHint(indexClaimAllButton)
+	elseif unclaimed and unclaimed > 1 then
+		-- Claim All is hidden in Studio; IndexClient selects the next unclaimed Sheep after each Claim.
+		setText(`Press Claim! {unclaimed} new Sheep are waiting, and each one gives you Luck`)
+		point(indexClaimButton)
+		setHint(indexClaimButton)
 	else
 		setText("Press Claim! Every new Sheep you find gives you Luck")
 		point(indexClaimButton)

@@ -1,18 +1,15 @@
 --[[
-	Main.Bonuses: the 2x Luck / 2x Wool pass badges (GamePassService's Pass<key> attributes) and the Roblox Premium +10% Luck badge,
-	bright while active and dimmed otherwise. Clicking an inactive badge prompts that game pass or Premium.
+	Main.Bonuses: the 2x Luck / 2x Wool pass badges and the Premium +10% Luck badge, each shown only while the player has it.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.BonusesClient
 ]]--
 
 --// Services
-local marketplaceService = game:GetService("MarketplaceService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
 local MonetizationData = require(replicatedStorage.Shared.Constants.MonetizationData)
 local alerts = require(script.Parent.Parent.Modules.Alerts)
-local purchaseEffect = require(script.Parent.Parent.Modules.PurchaseEffect)
 
 --// Instances
 local player = players.LocalPlayer
@@ -30,22 +27,8 @@ local ACTIVE_TEXT = {
 	Premium = "Premium: +10% Luck is active!",
 }
 
-local ACTIVE_BACKGROUND = Color3.fromRGB(45, 160, 75)
-local INACTIVE_BACKGROUND = Color3.fromRGB(20, 24, 34)
-local ACTIVE_TINT = Color3.new(1, 1, 1)
-local INACTIVE_TINT = Color3.fromRGB(110, 110, 120)
-local INACTIVE_TEXT_COLOR = Color3.fromRGB(165, 165, 175)
-local INACTIVE_ICON_TRANSPARENCY = 0.3
-
-type Badge = {
-	button: GuiButton,
-	icon: ImageLabel?,
-	caption: TextLabel?,
-	plus: GuiObject?, -- the green "+" corner, shown while the badge can be bought
-}
-
 --// State
-local badges: { [string]: Badge } = {}
+local badges: { [string]: GuiButton } = {}
 local boundMain: Instance? = nil
 
 local function isActive(name: string): boolean
@@ -55,39 +38,10 @@ local function isActive(name: string): boolean
 	return player:GetAttribute(PASS_ATTRIBUTE_PREFIX .. name) == true
 end
 
-local function paint(name: string)
-	local badge = badges[name]
-	if not badge then
-		return
-	end
-	local active = isActive(name)
-	badge.button.BackgroundColor3 = if active then ACTIVE_BACKGROUND else INACTIVE_BACKGROUND
-	if badge.icon then
-		badge.icon.ImageColor3 = if active then ACTIVE_TINT else INACTIVE_TINT
-		badge.icon.ImageTransparency = if active then 0 else INACTIVE_ICON_TRANSPARENCY
-	end
-	if badge.caption then
-		badge.caption.TextColor3 = if active then ACTIVE_TINT else INACTIVE_TEXT_COLOR
-	end
-	if badge.plus then
-		badge.plus.Visible = not active
-	end
-end
-
-local function onBadgeClicked(name: string)
-	if isActive(name) then
-		alerts.show(ACTIVE_TEXT[name], "success")
-		return
-	end
-	if name == PREMIUM_BADGE then
-		marketplaceService:PromptPremiumPurchase(player)
-		return
-	end
-
-	local item = MonetizationData.get(name)
-	if item and item.kind == "GamePass" and item.id ~= 0 then
-		purchaseEffect.play()
-		marketplaceService:PromptGamePassPurchase(player, item.id)
+local function refresh(name: string)
+	local button = badges[name]
+	if button then
+		button.Visible = isActive(name)
 	end
 end
 
@@ -99,23 +53,16 @@ local function bindBadge(frame: Instance, name: string)
 	end
 
 	local icon = button:FindFirstChild("Icon")
-	local caption = button:FindFirstChild("Caption")
-	local plus = button:FindFirstChild("Plus")
 	local item = MonetizationData.get(name)
 	if item and item.icon and icon and icon:IsA("ImageLabel") then
 		icon.Image = item.icon
 	end
 
-	badges[name] = {
-		button = button,
-		icon = if icon and icon:IsA("ImageLabel") then icon else nil,
-		caption = if caption and caption:IsA("TextLabel") then caption else nil,
-		plus = if plus and plus:IsA("GuiObject") then plus else nil,
-	}
+	badges[name] = button
 	button.Activated:Connect(function()
-		onBadgeClicked(name)
+		alerts.show(ACTIVE_TEXT[name], "success")
 	end)
-	paint(name)
+	refresh(name)
 end
 
 -- Main resets on spawn, so the badges are found again in each new copy.
@@ -139,12 +86,12 @@ end
 
 for _, name in PASS_BADGES do
 	player:GetAttributeChangedSignal(PASS_ATTRIBUTE_PREFIX .. name):Connect(function()
-		paint(name)
+		refresh(name)
 	end)
 end
 players.PlayerMembershipChanged:Connect(function(changed: Player)
 	if changed == player then
-		paint(PREMIUM_BADGE)
+		refresh(PREMIUM_BADGE)
 	end
 end)
 

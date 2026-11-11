@@ -1,5 +1,5 @@
 --[[
-	The Ability Shack at workspace.Base.CenterPlaza.AbilityShack.Podium: the Abilities window (inventory, roll chances, roll buttons) and the roll carousel.
+	The Ability Shack at workspace.Base.CenterPlaza.AbilityShack.AbilityShopHitbox: the Abilities window (inventory, roll chances, roll buttons) and the roll carousel.
 	Only requests and displays; AbilityShackHandler rolls, spends Gems and equips.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AbilityShackClient
 ]]--
@@ -17,7 +17,7 @@ local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Configs
 local SHACK_NAME = "AbilityShack"
-local PODIUM_NAME = "Podium"
+local PODIUM_NAME = "AbilityShopHitbox" -- the part the roll and Abilities prompts sit on
 local ACTIVE_ATTRIBUTE = "ActiveAbility" -- set by AbilityHandler while an ability runs
 local WINDOW_NAME = "AbilityShack"
 local ROLL_TIMEOUT = 5 -- seconds without a reply before rolling unlocks again

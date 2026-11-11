@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	The Ability Shack: rolls a weighted ability for RollCost Gems at workspace.Base.CenterPlaza.AbilityShack.Podium
+	The Ability Shack: rolls a weighted ability for RollCost Gems at workspace.Base.CenterPlaza.AbilityShack.AbilityShopHitbox
 	(with pity and duplicate refunds) and equips owned ones; the client only requests and displays.
 	Location: ServerScriptService.Modules.Controllers.AbilityShackHandler
 ]]--
@@ -21,7 +21,7 @@ local WeatherHandler = require(script.Parent.WeatherHandler)
 
 --// Configs
 local SHACK_NAME = "AbilityShack"
-local PODIUM_NAME = "Podium"
+local PODIUM_NAME = "AbilityShopHitbox" -- the part the roll and Abilities prompts sit on
 local MISSING_WARN_SECONDS = 15
 local ROLL_RANGE = 30 -- studs from the podium the server accepts a roll
 local SPECTATOR_RANGE = 90 -- other players this close see a light version of the roll

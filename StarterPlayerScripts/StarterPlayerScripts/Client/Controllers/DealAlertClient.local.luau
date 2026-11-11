@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Rocks Main.Buttons.Shop.NewDealAlert side to side and cycles its text through the rainbow, so players notice the shop.
+	Rocks Main.Shop.NewDealAlert side to side and cycles its text through the rainbow, so players notice the shop.
 	Both come from the clock in one PreRender connection, and nothing runs while the label or Main is hidden.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.DealAlertClient
@@ -78,7 +78,7 @@ local function attach(gui: Instance)
 	mainGui = gui :: ScreenGui
 	alertLabel = nil
 
-	local label = gui:WaitForChild("Buttons"):WaitForChild("Shop"):WaitForChild("NewDealAlert")
+	local label = gui:WaitForChild("Shop"):WaitForChild("NewDealAlert")
 	if mainGui ~= gui or not (label:IsA("TextLabel") or label:IsA("TextButton")) then
 		return
 	end

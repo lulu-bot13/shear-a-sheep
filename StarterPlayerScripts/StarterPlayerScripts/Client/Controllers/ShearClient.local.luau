@@ -479,13 +479,27 @@ local function toggleAutoShear()
 	updateAutoButton()
 end
 
+-- Main has two "AutoShear" children: this TextButton toggle and AutoShearOfferClient's ImageButton purchase button.
+local function findAutoToggle(hud: Instance): TextButton?
+	local deadline = os.clock() + 10
+	repeat
+		for _, child in hud:GetChildren() do
+			if child.Name == AUTO_BUTTON_NAME and child:IsA("TextButton") then
+				return child
+			end
+		end
+		task.wait(0.2)
+	until os.clock() > deadline or not hud.Parent
+	return nil
+end
+
 -- Main.AutoShear is bound again whenever Main is recreated on respawn; its text goes on a TextLabel inside it if it has one.
 local function bindAutoButton(hud: Instance)
 	if hud.Name ~= "Main" or not hud:IsA("ScreenGui") then
 		return
 	end
-	local button = hud:WaitForChild(AUTO_BUTTON_NAME, 10)
-	if not button or not button:IsA("GuiButton") then
+	local button = findAutoToggle(hud)
+	if not button then
 		warn(`[ShearClient] no Main.{AUTO_BUTTON_NAME} button to toggle Auto Shear`)
 		return
 	end
@@ -509,6 +523,17 @@ player:GetAttributeChangedSignal(AUTO_PASS_ATTRIBUTE):Connect(function()
 		autoShear = true
 	end
 	updateAutoButton()
+end)
+-- Buying the pass from any prompt (the toggle, the HUD offer or the shop) turns Auto Shear on.
+marketplaceService.PromptGamePassPurchaseFinished:Connect(function(buyer: Player, passId: number, purchased: boolean)
+	if buyer ~= player or passId ~= AUTO_PASS_ID or not purchased then
+		return
+	end
+	autoPassPrompted = true
+	if ownsAutoPass() then
+		autoShear = true
+		updateAutoButton()
+	end
 end)
 
 contextActionService:BindAction(AUTO_ACTION, function(_, inputState: Enum.UserInputState)

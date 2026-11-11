@@ -18,7 +18,7 @@ local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local hudButtons = playerGui:WaitForChild("Main"):WaitForChild("Buttons")
 local openButton = hudButtons:WaitForChild("Rebirth") :: GuiButton
-local hudProgress = openButton:WaitForChild("Progress") :: TextLabel
+local hudProgress = openButton:FindFirstChild("Progress") :: TextLabel? -- optional wool % label on the HUD button
 
 local rebirthGui = playerGui:WaitForChild("RebirthScreen") :: ScreenGui
 local mainFrame = rebirthGui:WaitForChild("Main") :: Frame -- not the "Main" ImageLabel (panel art) inside it
@@ -308,7 +308,7 @@ end
 
 -- The HUD button's Progress shows the wool percentage.
 local function updateHud()
-	if state then
+	if state and hudProgress then
 		-- Rounded down, so 100% only shows once the rebirth is actually affordable.
 		hudProgress.Text = if state.maxed then "MAX" else `{math.floor(getProgress() * 100)}%`
 	end
@@ -360,7 +360,6 @@ end
 requirementText.RichText = true
 keepNote.RichText = true
 collectionService:AddTag(rebirthButton, SHINE_TAG)
-hudProgress.Text = "0%"
 updateHud()
 
 task.spawn(function()
