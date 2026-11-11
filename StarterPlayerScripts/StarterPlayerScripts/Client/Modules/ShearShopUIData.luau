@@ -22,7 +22,7 @@ local shearShopUIData = {}
 -- In progression order (the card order in the shop, cheapest first).
 shearShopUIData.Shears = {
 	{ id = "DefaultShear",   displayName = "Basic Shear",     sheepRequired = 0,    damage = 20, range = 6 },
-	{ id = "SteelShears",    displayName = "Steel Shears",    sheepRequired = 50,   damage = 26, range = 7.5 },
+	{ id = "SteelShears",    displayName = "Steel Shears",    sheepRequired = 3,    damage = 26, range = 7.5 },
 	{ id = "LargeShears",    displayName = "Large Shears",    sheepRequired = 300,  damage = 34, range = 9 },
 	{ id = "ElectricShears", displayName = "Electric Shears", sheepRequired = 1500, damage = 45, range = 11 },
 	{ id = "MasterShears",   displayName = "Master Shears",   sheepRequired = 4500, damage = 60, range = 13 },

@@ -19,7 +19,6 @@ local AnnouncementHandler = require(script.Parent.AnnouncementHandler)
 local GamePassService = require(script.Parent.GamePassService)
 local GemHandler = require(script.Parent.GemHandler)
 local GiftService = require(script.Parent.GiftService)
-local OfferHandler = require(script.Parent.OfferHandler)
 local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local RebirthHandler = require(script.Parent.RebirthHandler)
@@ -203,7 +202,6 @@ local GRANTS: { [string]: (Player, MonetizationData.Item) -> (boolean, string?) 
 	LuckBoost = addBoost,
 	ServerLuck = activateServerLuck,
 	SkipRebirth = skipRebirth,
-	StarterPack = grantStarterPack,
 	GemsSmall = giveGems,
 	GemsMedium = giveGems,
 	GemsBig = giveGems,
@@ -310,10 +308,6 @@ local function onPromptRequest(player: Player, key: any)
 		showAlert(player, `Find the {getRebirthSheepName(player)} first!`, "error")
 		return
 	end
-	if item.key == "StarterPack" and not OfferHandler.canBuyStarterPack(player) then
-		showAlert(player, "The Starter Pack is only for new farmers!", "error")
-		return
-	end
 	-- Bought from the shop, so it's for the buyer even if a gift of it was picked earlier.
 	GiftService.clearPendingGift(player, item.key)
 	marketplaceService:PromptProductPurchase(player, item.id)
@@ -333,7 +327,7 @@ function MonetizationHandler.Setup()
 	end)
 
 	for key, item in Items do
-		if item.kind == "GamePass" then
+		if item.kind == "GamePass" and key ~= "StarterPack" then
 			GamePassService.onPassOwned(key, function(player: Player, source: GamePassService.Source)
 				if source == "Purchased" then
 					showAlert(player, `You now own {item.displayName}!`)
@@ -344,6 +338,17 @@ function MonetizationHandler.Setup()
 
 	GamePassService.onPassOwned("AutoShears", function(player: Player, _source: GamePassService.Source)
 		player:SetAttribute(AUTO_SHEAR_ATTRIBUTE, true)
+	end)
+
+	-- The Starter Pack is a game pass: its gems and boost are handed out once, however it was bought (in game, on the website, or later).
+	GamePassService.onPassOwned("StarterPack", function(player: Player, _source: GamePassService.Source)
+		if PlayerDataHandler.get(player, "StarterPackBought") == 1 then
+			return
+		end
+		local granted, text = grantStarterPack(player, Items.StarterPack)
+		if granted and text then
+			showAlert(player, text)
+		end
 	end)
 end
 

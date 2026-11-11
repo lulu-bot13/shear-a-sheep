@@ -28,6 +28,7 @@ local PodiumBonusHandler = require(script.Parent.PodiumBonusHandler)
 local SheepHandler = require(script.Parent.SheepHandler)
 local ShearShopHandler = require(script.Parent.ShearShopHandler)
 local SheepWanderHandler = require(script.Parent.SheepWanderHandler)
+local TutorialHandler = require(script.Parent.TutorialHandler)
 local WorldBossHandler = require(script.Parent.WorldBossHandler)
 
 --// Configs
@@ -203,6 +204,7 @@ function ShearHandler.shearSheep(
 )
 	local hits: { Hit } = {}
 	local drops: { Drop } = {}
+	local tutorialSheep = TutorialHandler.getSheep(player) -- while it's out, it's the only sheep that can be sheared
 
 	for _, sheep in targets do
 		-- The King Sheep world boss belongs to no plot: its shared health lives in WorldBossHandler (a flat hit, never a % of it).
@@ -213,13 +215,16 @@ function ShearHandler.shearSheep(
 			end
 			continue
 		end
+		if tutorialSheep and sheep ~= tutorialSheep then
+			continue
+		end
 
 		local sheepId = sheep:GetAttribute("id")
 		local health = sheep:GetAttribute("ShearHealth")
 		local maxHealth = sheep:GetAttribute("MaxShearHealth")
 		local root = getRootPart(sheep)
 		if type(sheepId) ~= "number" or type(health) ~= "number" or health <= 0 or not root or not SheepHandler.getSheep(sheepId)
-			or sheep:GetAttribute("Rising")
+			or sheep:GetAttribute("Rising") or sheep:GetAttribute("Bolting")
 		then
 			continue
 		end

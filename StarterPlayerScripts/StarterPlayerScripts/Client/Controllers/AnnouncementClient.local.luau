@@ -1,5 +1,5 @@
 --[[
-	Server-wide announcements from AnnouncementHandler: a coloured chat line for rare best finds, Legendary+ ability rolls, rebirths, Prestiges, gifts, Server Luck, Reapers and the King Sheep.
+	Server-wide announcements from AnnouncementHandler: a coloured chat line for rare best finds, Legendary+ ability rolls, rebirths, pen unlocks, Prestiges, gifts, Server Luck, Reapers and the King Sheep.
 	Rare best finds also pop up a metal plaque at the top of the screen, one at a time.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.AnnouncementClient
@@ -31,6 +31,7 @@ local SOFT_WHITE = "#E6E6E6" -- the plain words between the highlighted ones
 local NAME_COLOR = "#FFFFFF"
 local REBIRTH_FROM_COLOR = "#8FD3FF"
 local REBIRTH_TO_COLOR = "#B79CFF"
+local PEN_COLOR = "#FFC46B"
 local PRESTIGE_NAME_COLOR = "#FFD54A"
 local PRESTIGE_NUMBER_COLOR = "#FFB300"
 local GIFT_NAME_COLOR = "#FF8AD8"
@@ -80,6 +81,10 @@ type Announcement = {
 	userName: string,
 	previous: number,
 	new: number,
+} | {
+	kind: "PenUnlocked",
+	userName: string,
+	penName: string,
 } | {
 	kind: "Gift",
 	userName: string,
@@ -203,6 +208,8 @@ local function getChatLine(announcement: Announcement): string
 		return `{paint(userName, NAME_COLOR, true)} {paint("has rebirthed", SOFT_WHITE)} `
 			.. `{paint(`[{formatWithCommas(announcement.previous)}]`, REBIRTH_FROM_COLOR, true)} {paint(ARROW, SOFT_WHITE)} `
 			.. paint(`[{formatWithCommas(announcement.new)}]`, REBIRTH_TO_COLOR, true)
+	elseif announcement.kind == "PenUnlocked" then
+		return `{paint(userName, NAME_COLOR, true)} {paint("unlocked the", SOFT_WHITE)} {paint(`{escape(announcement.penName)}!`, PEN_COLOR, true)}`
 	elseif announcement.kind == "ServerLuck" then
 		return `{paint(userName, NAME_COLOR, true)} {paint("activated", SOFT_WHITE)} `
 			.. `{paint(`{announcement.multiplier}x SERVER LUCK`, SERVER_LUCK_COLOR, true)} `

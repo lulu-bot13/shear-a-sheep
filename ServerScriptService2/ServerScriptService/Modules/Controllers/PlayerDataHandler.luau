@@ -18,10 +18,11 @@ local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
 local AbilityData = require(script.Parent.Parent.Constants.AbilityData)
 local FarmData = require(script.Parent.Parent.Constants.FarmData)
 local ShearData = require(script.Parent.Parent.Constants.ShearData)
+local UpgradeData = require(script.Parent.Parent.Constants.UpgradeData)
 
 --// Configs
 local PROFILE_STORE_NAME = "PlayerData1"
-local STUDIO_PROFILE_STORE_NAME = "PlayerDataTest1"
+local STUDIO_PROFILE_STORE_NAME = "PlayerDataTest2"
 local KEY_PREFIX = "Player_"
 local INVENTORY_NAME = "Inventory"
 local INVENTORY_KEYS = { Wool = true, Luck = true } -- the rest of the numbers become player attributes
@@ -38,11 +39,9 @@ export type Data = {
 	MaxSheep: number,
 	SheepCount: number?, -- sheep on the farm when the player left; nil = start with a full farm
 	MoreWoolLevel: number,
-	SpeedLevel: number, -- Faster Speed upgrade levels
 	DamageLevel: number, -- Shear Damage upgrade levels
 	RespawnLevel: number, -- Faster Respawn upgrade levels
 	SpawnLuckLevel: number,
-	SizeLevel: number,
 	Rebirths: number,
 	Prestiges: number,
 	RebirthPitySpawns: number,
@@ -85,11 +84,9 @@ local DataTemplate = {
 
 	-- Upgrades
 	MoreWoolLevel = 0,
-	SpeedLevel = 0,
 	DamageLevel = 0,
 	RespawnLevel = 0,
 	SpawnLuckLevel = 0, -- Spawn Luck upgrade levels (capped per rebirth, see SpawnOdds)
-	SizeLevel = 0, -- Sheep Size upgrade levels
 
 	-- Progression
 	Rebirths = 0,
@@ -211,6 +208,14 @@ local function reconcile(profile: any)
 		end
 	end
 	for key in REMOVED_KEYS do
+		data[key] = nil
+	end
+	-- Wool spent on upgrades taken out of the shop comes back once.
+	for key in UpgradeData.Retired do
+		local levels = data[key]
+		if type(levels) == "number" and type(data.Wool) == "number" then
+			data.Wool += UpgradeData.getRetiredRefund(key, levels)
+		end
 		data[key] = nil
 	end
 

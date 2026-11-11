@@ -46,12 +46,11 @@ local rewardsFrame = mainFrame:WaitForChild("RewardFrame") :: GuiObject
 local rewardAmount = rewardsFrame:WaitForChild("ClaimAmount") :: TextLabel
 local claimButton = rewardsFrame:WaitForChild("BuyButton") :: ImageButton
 
--- Claim All under RewardFrame: a BuyButton copy drawn with the CLAIM art (Left/Middle/Right ImageLabels) and a red Count badge.
+-- Claim All under RewardFrame: an ImageButton with a Label and an Amount count of claimable entries.
 local claimAllFrame = rewardsFrame:WaitForChild("ClaimAll") :: GuiObject -- popped/shaken instead of its button, which ButtonClient tweens
 local claimAllButton = claimAllFrame:WaitForChild("ClaimAllButton") :: ImageButton
 local claimAllLabel = claimAllButton:WaitForChild("Label") :: TextLabel
-local claimAllCount = claimAllButton:WaitForChild("Count") :: GuiObject
-local claimAllCountLabel = claimAllCount:WaitForChild("Amount") :: TextLabel
+local claimAllCountLabel = claimAllButton:WaitForChild("Amount") :: TextLabel
 
 -- How many sheep types have been unlocked out of all of them.
 local unlockBar = mainFrame:WaitForChild("ProgressFrame") :: GuiObject
@@ -135,13 +134,7 @@ local spinAngle = 0
 local rewardAmountColor = rewardAmount.TextColor3
 local claimButtonImageColor = claimButton.ImageColor3
 local claimAllLabelColor = claimAllLabel.TextColor3
-local claimAllArt: { ImageLabel } = {}
-for _, child in claimAllButton:GetChildren() do
-	if child:IsA("ImageLabel") then
-		table.insert(claimAllArt, child)
-	end
-end
-local claimAllArtColor = if claimAllArt[1] then claimAllArt[1].ImageColor3 else WHITE
+local claimAllButtonColor = claimAllButton.ImageColor3
 
 
 --// Helpers ---------------------------------------------------------------------
@@ -476,14 +469,12 @@ end
 local function renderClaimAll()
 	local count = countClaimable()
 	local canClaim = count > 0
-	claimAllCount.Visible = canClaim
+	claimAllCountLabel.Visible = canClaim
 	claimAllCountLabel.Text = tostring(count)
 	claimAllButton.AutoButtonColor = canClaim
 	claimAllButton.Active = canClaim
+	claimAllButton.ImageColor3 = if canClaim then claimAllButtonColor else CLAIMED_COLOR
 	claimAllLabel.TextColor3 = if canClaim then claimAllLabelColor else claimAllLabelColor:Lerp(CLAIMED_COLOR, 0.5)
-	for _, art in claimAllArt do
-		art.ImageColor3 = if canClaim then claimAllArtColor else CLAIMED_COLOR
-	end
 end
 
 -- Fills ProgressFrame's ProgressBar with the share of the current page's entries that aren't Locked any more.

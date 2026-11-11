@@ -52,11 +52,9 @@ local function resetProgress(player: Player)
 	PlayerDataHandler.set(player, "Luck", IndexHandler.getClaimedLuck(player))
 	PlayerDataHandler.set(player, "MaxSheep", FarmData.StartingMaxSheep)
 	PlayerDataHandler.set(player, "MoreWoolLevel", 0)
-	PlayerDataHandler.set(player, "SpeedLevel", 0)
 	PlayerDataHandler.set(player, "DamageLevel", 0)
 	PlayerDataHandler.set(player, "RespawnLevel", 0)
 	PlayerDataHandler.set(player, "SpawnLuckLevel", 0)
-	PlayerDataHandler.set(player, "SizeLevel", 0)
 	PlayerDataHandler.set(player, "RebirthPitySpawns", 0)
 end
 

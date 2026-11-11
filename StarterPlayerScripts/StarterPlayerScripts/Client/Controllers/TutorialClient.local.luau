@@ -1,6 +1,6 @@
 --[[
-	First-play tutorial: shear a Huge sheep and 2 more, buy More Wool twice and Capacity, shear for the rebirth, rebirth, then claim in the Index.
-	A tapping hand points at buttons, a side "Click!" cue covers shearing, and the steps are worked out from progress so they resume after a rejoin; confetti at the end.
+	First-play tutorial: shear the Huge Fluffy and 2 more, buy the Steel Shears, buy upgrades, shear for the rebirth, rebirth, then claim in the Index.
+	Steps are worked out from progress so they resume after a rejoin; a tapping hand, beams and highlights point the way.
 ]]--
 
 --// Services
@@ -34,12 +34,18 @@ local tip = tutorialGui:WaitForChild("Tip") :: GuiObject
 playerGui:WaitForChild("Main"):WaitForChild("Buttons"):WaitForChild("Index") -- the HUD buttons are looked up each time (Main is rebuilt on respawn)
 local indexFrame = playerGui:WaitForChild("Index"):WaitForChild("IndexFrame")
 local indexMain = indexFrame:WaitForChild("Main")
-local indexClaimButton = indexMain:WaitForChild("RewardFrame"):WaitForChild("BuyButton") :: GuiButton
+local indexRewardFrame = indexMain:WaitForChild("RewardFrame")
+local indexClaimButton = indexRewardFrame:WaitForChild("BuyButton") :: GuiButton
+local indexClaimAllButton = indexRewardFrame:WaitForChild("ClaimAll"):WaitForChild("ClaimAllButton") :: GuiButton
 local indexExit = indexFrame:WaitForChild("ExitButton") :: GuiObject
 local upgradeShopMain = playerGui:WaitForChild("UpgradeShop"):WaitForChild("Main")
 local upgradeCards = upgradeShopMain:WaitForChild("ScrollingFrame")
 local upgradeShopExit = upgradeShopMain:FindFirstChild("Exit", true) :: GuiObject? -- found the same way WindowsManager wires it
 local rebirthButton = playerGui:WaitForChild("RebirthScreen"):WaitForChild("Main"):WaitForChild("RebirthButton") :: GuiButton
+local shopScroll = playerGui:WaitForChild("Shop"):WaitForChild("Main"):WaitForChild("ScrollingFrame") :: ScrollingFrame
+local shopHitbox = workspace:WaitForChild("Base"):WaitForChild("CenterPlaza"):WaitForChild("ShearShop")
+	:WaitForChild("Shack"):WaitForChild("ShearShopHitbox") :: BasePart
+local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
 local beamTemplate = replicatedStorage:WaitForChild("Assets"):WaitForChild("VFX"):WaitForChild("TutorialBeam") :: Beam
 local uiSounds = soundService:FindFirstChild("UISounds")
@@ -51,13 +57,21 @@ local OWNER_ATTRIBUTE = "OwnerId"
 local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- only shear Tools have it
 local NEAR_DISTANCE = 8 -- studs (flat) from a sheep that count as "at" it
 local LEAVE_DISTANCE = 12 -- studs (flat) the first sheep is walked away from before the beam leads back to a sheep
-local ALWAYS_IN_STUDIO = false -- runs the tutorial in Studio even on a save that has rebirthed
+local ALWAYS_IN_STUDIO = true -- runs the tutorial in Studio even on a save that has rebirthed
 local TICK_SECONDS = 0.1
 local DISPLAY_ORDER = 90 -- the text and spotlight draw over every window (Alerts are 100)
 local STATE_REQUEST_SECONDS = 2 -- re-asks the server for upgrade / rebirth state until it arrives
 local COMPLETED_SECONDS = 3 -- how long the completed label stays up
 local SHEEP_TO_SHEAR = 3 -- counting the first sheep
 local IDLE_HINT_SECONDS = 2.5 -- after the first sheep, the tapping hand comes back once the player stops clicking this long
+local TUTORIAL_SHEEP_WAIT_SECONDS = 10 -- if the Fluffy hasn't landed by then (e.g. the server skipped it), any sheep will do
+local SHEARS_ID = "SteelShears" -- the shear bought in the tutorial (unlocks at 3 sheep, ShearData)
+local SHEARS_NAME = "Steel Shears"
+local SHOP_WINDOW = "ShearShop"
+local SHOP_NEAR_DISTANCE = 60 -- studs from the shop hitbox; further away, the ToShop button is pointed at too
+local FARM_FAR_DISTANCE = 120 -- studs from the plot's Center; further away, shearing steps point at the ToPlot button
+local SHOP_SCROLL_DELAY = 0.25 -- after the shop opens, so its pop-in has finished before the card is measured
+local SHOP_SCROLL_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 -- The upgrades bought in order in one shop visit, each with why it helps; 45 + 76 + 40 wool, which the starter wool and the first 3 sheep cover.
 local TUTORIAL_UPGRADES = {
 	{ id = "MoreWool", text = "Upgrade your wool multiplier. Every Sheep gives you more Wool!" },
@@ -70,15 +84,16 @@ local KEEP_GUIS = { TouchGui = true } -- the PlayerModule's thumbstick and jump 
 local POP_IN = TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local POP_OUT = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In)
 
--- Every stage in order; TutorialProgression shows the current one as "3/8". The cheer plays on reaching a stage.
-local STAGES = { "GoToSheep", "FirstShear", "Shear", "Upgrades", "CloseUpgrades", "Rebirth", "Index", "CloseIndex" }
+-- Every stage in order; TutorialProgression shows the current one as "3/10". The cheer plays on reaching a stage.
+local STAGES = { "GoToSheep", "FirstShear", "Shear", "GoToShop", "BuyShears", "Upgrades", "CloseUpgrades", "Rebirth", "Index", "CloseIndex" }
 local STAGE_ORDER: { [string]: number } = {}
 for index, name in STAGES do
 	STAGE_ORDER[name] = index
 end
 local STAGE_CHEERS = {
-	Shear = "First Sheep sheared!",
-	Upgrades = "Wool collected!",
+	Shear = "Fluffy Sheep sheared!",
+	GoToShop = "Wool collected!",
+	Upgrades = `{SHEARS_NAME} bought!`,
 	CloseUpgrades = "Upgrades bought!",
 	Index = "Rebirthed!",
 	CloseIndex = "Luck claimed!",
@@ -96,6 +111,9 @@ local BAR_TWEEN = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirectio
 local BAR_BACK_COLOR = Color3.fromRGB(40, 35, 30)
 local BAR_FILL_COLOR = Color3.fromRGB(255, 215, 80)
 local BAR_MILESTONES = { { ratio = 0.5, text = "Halfway there!" }, { ratio = 0.8, text = "Almost there!" } }
+
+local SPOTLIGHT_Z_INDEX = 20 -- a spotlit button and its text label are lifted to this while the spotlight is on them
+local SPOTLIGHT_TEXT_NAMES = { Rebirth = "Title" } -- spotlit button name -> its text label that is lifted with it
 
 local HIGHLIGHT_COLOR = Color3.fromRGB(255, 230, 90)
 -- Both beam ends face along the beam's flat heading, then get this extra roll so the ribbon lies face-up.
@@ -147,7 +165,7 @@ local CHEER_POP_OVERSHOOT = 1.12 -- the Back-eased pop in grows it to about 1.1x
 local CHEER_TWEEN = TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local CHEER_COLOR = Color3.fromRGB(120, 255, 120)
 
-type Stage = "GoToSheep" | "FirstShear" | "Shear" | "Upgrades" | "CloseUpgrades" | "Rebirth" | "Index" | "CloseIndex" | "Done"
+type Stage = "GoToSheep" | "FirstShear" | "Shear" | "GoToShop" | "BuyShears" | "Upgrades" | "CloseUpgrades" | "Rebirth" | "Index" | "CloseIndex" | "Done"
 type InputMode = "Mouse" | "Touch" | "Gamepad"
 
 --// State
@@ -161,11 +179,16 @@ local rebirthCost: number? = nil
 local nextStateRequest = 0
 local highlights: { [Model]: Highlight } = {}
 local beamSheep: Model? = nil -- the sheep the beam leads to
+local beamPart: BasePart? = nil -- or the part it leads to (the shear shop's hitbox) when there's no sheep
+local stageStartedAt = 0
+local shopOpenedAt: number? = nil
+local shopScrollTween: Tween? = nil
 local firstSheep: Model? = nil -- the sheep "Click To Shear" shows the health of
 local beamConnection: RBXScriptConnection? = nil
 local inputConnection: RBXScriptConnection? = nil
 local focused: GuiObject? = nil -- what the spotlight was last tweened over, and where it was
 local focusedPosition, focusedSize = Vector2.zero, Vector2.zero
+local raisedZIndex: { [GuiObject]: number } = {} -- original ZIndex of what raiseWhileSpotlit lifted
 local hintTarget: GuiObject? = nil -- what the tapping hand points at
 local hintRipplePoint = Vector2.zero -- where the hand's taps ripple (the target's centre), in tutorialGui pixels
 local lastClickAt = 0
@@ -176,7 +199,7 @@ local barFloor = 0 -- the highest pixel the bar's outline may sit at while a che
 local barFloorUntil = 0
 local barLayoutConnections: { RBXScriptConnection } = {}
 local viewportConnection: RBXScriptConnection? = nil
-local indexHasUnclaimed: boolean? = nil -- from IndexState; nil until it arrives
+local indexUnclaimed: number? = nil -- Index entries waiting to be claimed, from IndexState; nil until it arrives
 
 -- One beam cloned once and reused. Its ends stay in Terrain and are moved each frame,
 -- so a respawned character or a replaced sheep can't destroy them.
@@ -363,6 +386,30 @@ local function isHoldingShear(): boolean
 	local character = player.Character
 	local tool = character and character:FindFirstChildOfClass("Tool")
 	return tool ~= nil and tool:GetAttribute(SHEAR_RANGE_ATTRIBUTE) ~= nil
+end
+
+-- The "OwnedShears" attribute is "DefaultShear,SteelShears" (set by ShearShopHandler).
+local function ownsShears(): boolean
+	local owned = player:GetAttribute("OwnedShears")
+	return type(owned) == "string" and table.find(string.split(owned, ","), SHEARS_ID) ~= nil
+end
+
+-- Main.ToShop / Main.ToPlot, looked up each time since Main is rebuilt on respawn.
+local function getMainButton(name: string): GuiObject?
+	local main = playerGui:FindFirstChild("Main")
+	local button = main and main:FindFirstChild(name)
+	return if button and button:IsA("GuiObject") then button else nil
+end
+
+-- The middle of the player's plot, for telling whether they've wandered off it (e.g. to the shear shop).
+local function getFarmCenter(): Vector3?
+	local plotName = player:GetAttribute("PlotName")
+	local plot = if type(plotName) == "string" then plotsFolder:FindFirstChild(plotName) else nil
+	local center = plot and plot:FindFirstChild("Center")
+	if center and center:IsA("BasePart") then
+		return center.Position
+	end
+	return if plot and plot:IsA("Model") then plot:GetPivot().Position else nil
 end
 
 -- Holds the shears out for the player (the tutorial needs them in hand), once they've landed in the Backpack.
@@ -740,19 +787,19 @@ local function setHighlights(sheepList: { Model })
 	end
 end
 
--- Runs every frame: draws the beam from the character to beamSheep (hidden when either is missing) and moves the hand.
+-- Runs every frame: draws the beam from the character to beamSheep or beamPart (hidden when there's neither) and moves the hand.
 local function updateBeam()
 	updateHint()
 
 	local playerRoot = getRoot(player.Character)
-	local sheepRoot = getRoot(beamSheep)
-	if not playerRoot or not sheepRoot then
+	local targetPart = getRoot(beamSheep) or (if beamPart and beamPart.Parent then beamPart else nil)
+	if not playerRoot or not targetPart then
 		beam.Enabled = false
 		return
 	end
 
 	-- The ends turn with the beam's heading, so it looks the same from every side instead of twisting.
-	local startPosition, endPosition = playerRoot.Position, sheepRoot.Position
+	local startPosition, endPosition = playerRoot.Position, targetPart.Position
 	local flat = Vector3.new(endPosition.X - startPosition.X, 0, endPosition.Z - startPosition.Z)
 	if flat.Magnitude > 1e-3 then
 		beamHeading = flat.Unit
@@ -792,16 +839,42 @@ end
 
 --// Spotlight ---------------------------------------------------------------------------
 
+-- Puts back the ZIndex of everything raiseWhileSpotlit lifted.
+local function restoreRaised()
+	for guiObject, zIndex in raisedZIndex do
+		guiObject.ZIndex = zIndex
+	end
+	table.clear(raisedZIndex)
+end
+
+-- A spotlit button in SPOTLIGHT_TEXT_NAMES (the HUD's Rebirth) and its text label draw over everything around them.
+local function raiseWhileSpotlit(target: GuiObject)
+	local textName = SPOTLIGHT_TEXT_NAMES[target.Name]
+	local text = textName and target:FindFirstChild(textName)
+	if not text or not text:IsA("GuiObject") then
+		return
+	end
+	for _, guiObject in { target, text } do
+		raisedZIndex[guiObject] = guiObject.ZIndex
+		guiObject.ZIndex = SPOTLIGHT_Z_INDEX
+	end
+end
+
 -- Spotlights the GuiObject; nil clears it.
 -- FocusUI only measures the target once, so it is called again whenever the target moves (e.g. a window popping in).
 local function point(target: GuiObject?)
 	if target and isShown(target) then
+		if target ~= focused then
+			restoreRaised()
+			raiseWhileSpotlit(target)
+		end
 		if target ~= focused or target.AbsolutePosition ~= focusedPosition or target.AbsoluteSize ~= focusedSize then
 			focused, focusedPosition, focusedSize = target, target.AbsolutePosition, target.AbsoluteSize
 			spotlightUI:FocusUI(target)
 		end
 	elseif focused then
 		focused = nil
+		restoreRaised()
 		spotlightUI:Cleanup()
 	end
 end
@@ -829,13 +902,16 @@ end
 local function setStage(newStage: Stage, quiet: boolean?)
 	local advanced = (STAGE_ORDER[newStage] or 0) > (STAGE_ORDER[stage] or 0)
 	stage = newStage
+	stageStartedAt = os.clock()
 	barMilestone = 0
 	if newStage == "Index" then
-		indexHasUnclaimed = nil -- asked again, since sheep found since the last IndexState make it stale
+		indexUnclaimed = nil -- asked again, since sheep found since the last IndexState make it stale
 	end
 	setHighlights({})
 	beamSheep = nil
+	beamPart = nil
 	firstSheep = nil
+	shopOpenedAt, shopScrollTween = nil, nil
 	setHint(nil)
 	setSideClick(false)
 	point(nil)
@@ -864,14 +940,31 @@ local function requestState(eventName: any)
 	end
 end
 
--- Shearing for wool after the first sheep: the beam leads to the closest sheep, and once there the side "CLICK!" comes back if the player stops clicking.
+--[[
+	Shearing for wool after the first sheep: the beam leads to the closest sheep, and once there the side "CLICK!" comes back if the player stops clicking.
+	Away from the farm (after the shear shop) the ToPlot button is pointed at; with the pen empty, the player is told why and what fixes it.
+]]
 local function guideShearing(nearText: string, farText: string)
 	equipShears()
 	point(nil)
 	setHint(nil)
 
-	local _, near = guideToSheep()
-	if near then
+	local playerRoot = getRoot(player.Character)
+	local farmCenter = getFarmCenter()
+	if playerRoot and farmCenter and getFlatDistance(playerRoot.Position, farmCenter) > FARM_FAR_DISTANCE then
+		setHighlights({})
+		beamSheep = nil
+		local toPlot = getMainButton("ToPlot")
+		setText("Press the button to go back to your farm")
+		point(toPlot)
+		setHint(toPlot)
+		return
+	end
+
+	local nearest, near = guideToSheep()
+	if not nearest then
+		setText("Out of Sheep! New ones ride in on the conveyor. Buy Faster Respawn in Upgrades to get them quicker!")
+	elseif near then
 		setText(nearText)
 		setSideClick(os.clock() - lastClickAt >= IDLE_HINT_SECONDS)
 	else
@@ -879,20 +972,25 @@ local function guideShearing(nearText: string, farText: string)
 	end
 end
 
--- "Go to a Sheep": the beam leads to the Huge tutorial sheep, or to the closest sheep before it lands (or once it's gone).
+-- "Go to the Fluffy Sheep": the beam leads to the Huge Fluffy the server drops (the only sheep that can be sheared until it's bare).
+-- If it never lands, the closest sheep is used instead.
 local function updateGoToSheep()
 	equipShears()
 
 	local bigSheep = getTutorialSheep()
 	local playerRoot = getRoot(player.Character)
 	if bigSheep then
-		setText("Walk to the HUGE glowing Sheep. Follow the arrow!")
+		setText("A HUGE Fluffy Sheep appeared! Follow the arrow to it")
 		setHighlights({ bigSheep })
 		beamSheep = bigSheep
 		if playerRoot and getFlatDistance(playerRoot.Position, (getRoot(bigSheep) :: BasePart).Position) <= NEAR_DISTANCE then
 			setStage("FirstShear")
 			firstSheep = bigSheep
 		end
+		return
+	end
+	if os.clock() - stageStartedAt < TUTORIAL_SHEEP_WAIT_SECONDS then
+		setText("A Fluffy Sheep is on its way...")
 		return
 	end
 
@@ -934,7 +1032,7 @@ local function updateFirstShear()
 	end
 end
 
--- "Shear 2 more Sheep ... 0/2": sheep shorn bare after the first one.
+-- "Shear 2 Sheep (0/2)": sheep shorn bare after the first one (TutorialHandler drops them into the pen); the beam still leads to the closest.
 local function updateShear()
 	local count = getNumberAttribute("SheepShearedCount")
 	if count < shearedBaseline then
@@ -942,16 +1040,93 @@ local function updateShear()
 	end
 	local sheared = count - shearedBaseline
 	if sheared >= SHEEP_TO_SHEAR then
-		setStage("Upgrades")
+		setStage(if ownsShears() then "Upgrades" else "GoToShop")
 		return
 	end
 
 	local remaining = SHEEP_TO_SHEAR - 1 -- the first sheep was the "Click to Shear" stage
-	local progress = `({math.max(sheared - 1, 0)}/{remaining})`
-	guideShearing(
-		`Nice! {getShearAction()} to shear {remaining} more Sheep {progress}`,
-		`Nice! Follow the arrow to the next Sheep {progress}`
-	)
+	local text = `Shear {remaining} Sheep ({math.max(sheared - 1, 0)}/{remaining})`
+	guideShearing(text, text)
+end
+
+-- Studs from the position to the shop hitbox's surface (0 inside it).
+local function getShopDistance(position: Vector3): number
+	local offset = shopHitbox.CFrame:PointToObjectSpace(position)
+	local half = shopHitbox.Size / 2
+	local clamped = Vector3.new(math.clamp(offset.X, -half.X, half.X), math.clamp(offset.Y, -half.Y, half.Y), math.clamp(offset.Z, -half.Z, half.Z))
+	return (offset - clamped).Magnitude
+end
+
+-- "Go to the Shear Shop": the beam leads to the shop's hitbox (walking in opens the shop); far away, the ToShop button is pointed at too.
+local function updateGoToShop()
+	if ownsShears() then
+		setStage("Upgrades")
+		return
+	elseif isWindowOpen(SHOP_WINDOW) then
+		setStage("BuyShears")
+		return
+	end
+
+	beamPart = shopHitbox
+	local playerRoot = getRoot(player.Character)
+	local toShop = getMainButton("ToShop")
+	if playerRoot and getShopDistance(playerRoot.Position) > SHOP_NEAR_DISTANCE and toShop and isShown(toShop) then
+		setText(`You unlocked the {SHEARS_NAME}! Press the button to go to the Shear Shop`)
+		point(toShop)
+		setHint(toShop)
+	else
+		setText(`You unlocked the {SHEARS_NAME}! Follow the arrow into the Shear Shop`)
+		point(nil)
+		setHint(nil)
+	end
+end
+
+-- Tweens the shop's list so the card's centre lines up with the visible area's centre (the same way ShearTutorialClient does).
+local function scrollShopToCard(card: GuiObject): Tween
+	local factor = math.max(windowsManager.getScaleFactor(shopScroll), 0.01)
+	local windowSize = shopScroll.AbsoluteWindowSize
+	local offset = (card.AbsolutePosition + card.AbsoluteSize / 2 - (shopScroll.AbsolutePosition + windowSize / 2)) / factor
+	local target = shopScroll.CanvasPosition + offset
+	local maxPosition = (shopScroll.AbsoluteCanvasSize - windowSize) / factor
+	local goal = Vector2.new(math.clamp(target.X, 0, math.max(maxPosition.X, 0)), math.clamp(target.Y, 0, math.max(maxPosition.Y, 0)))
+	local tween = tweenService:Create(shopScroll, SHOP_SCROLL_TWEEN, { CanvasPosition = goal })
+	tween:Play()
+	return tween
+end
+
+-- "Press UNLOCK": the shop scrolls to the Steel Shears' card and its button is spotlit; walking out goes back a step.
+local function updateBuyShears()
+	if ownsShears() then
+		setStage("Upgrades")
+		return
+	elseif not isWindowOpen(SHOP_WINDOW) then
+		setStage("GoToShop")
+		return
+	end
+
+	local card = shopScroll:FindFirstChild(SHEARS_ID)
+	local purchase = card and card:FindFirstChild("Purchase")
+	if not card or not card:IsA("GuiObject") or not purchase or not purchase:IsA("GuiObject") then
+		setText(`Unlock the {SHEARS_NAME}!`)
+		return
+	end
+
+	local now = os.clock()
+	shopOpenedAt = shopOpenedAt or now
+	if not shopScrollTween then
+		if now - (shopOpenedAt :: number) >= SHOP_SCROLL_DELAY then
+			shopScrollTween = scrollShopToCard(card)
+		end
+		setText(`Here are the {SHEARS_NAME}!`)
+		return
+	end
+	if shopScrollTween.PlaybackState ~= Enum.PlaybackState.Completed then
+		return
+	end
+
+	setText(`Press UNLOCK to get the {SHEARS_NAME}. They shear faster and reach further!`)
+	point(purchase)
+	setHint(purchase)
 end
 
 -- The TUTORIAL_UPGRADES step still to buy and its card, or nil once every step's level is owned (or maxed).
@@ -1164,12 +1339,13 @@ local function updateIndex()
 	if indexHudButton then
 		showHudButton(indexHudButton)
 	end
-	if indexHasUnclaimed == nil then
+	local unclaimed = indexUnclaimed
+	if unclaimed == nil then
 		requestState(network.RemoteEvents.RequestIndexState)
 	end
 
 	if not isWindowOpen("Index") then
-		if indexHasUnclaimed == false then
+		if unclaimed == 0 then
 			stage = "Done" -- nothing to claim (e.g. resumed after claiming)
 			return
 		end
@@ -1179,8 +1355,13 @@ local function updateIndex()
 		setText("Open the Index to see every Sheep you've found!")
 		point(indexHudButton)
 		setHint(indexHudButton)
-	elseif indexHasUnclaimed == false then
+	elseif unclaimed == 0 then
 		setStage("CloseIndex")
+	elseif unclaimed and unclaimed > 1 then
+		-- Claim only takes the selected Sheep, so with several waiting the player is sent to Claim All.
+		setText(`Press CLAIM ALL! You found {unclaimed} new Sheep, and each one gives you Luck`)
+		point(indexClaimAllButton)
+		setHint(indexClaimAllButton)
 	else
 		setText("Press Claim! Every new Sheep you find gives you Luck")
 		point(indexClaimButton)
@@ -1203,6 +1384,8 @@ local UPDATERS: { [Stage]: () -> () } = {
 	GoToSheep = updateGoToSheep,
 	FirstShear = updateFirstShear,
 	Shear = updateShear,
+	GoToShop = updateGoToShop,
+	BuyShears = updateBuyShears,
 	Upgrades = updateUpgrades,
 	CloseUpgrades = updateCloseUpgrades,
 	Rebirth = updateRebirth,
@@ -1376,13 +1559,13 @@ network.connectEvent(network.RemoteEvents.RebirthState, function(state: any)
 end)
 
 network.connectEvent(network.RemoteEvents.IndexState, function(entries: { any })
-	local unclaimed = false
+	local unclaimed = 0
 	for _, entry in entries do
 		if entry.status == "Found" then
-			unclaimed = true
+			unclaimed += 1
 		end
 	end
-	indexHasUnclaimed = unclaimed
+	indexUnclaimed = unclaimed
 end)
 
 -- The save has loaded once its numbers are mirrored onto the player.
@@ -1399,6 +1582,7 @@ elseif getNumberAttribute("Rebirths") >= 1 or getNumberAttribute("Prestiges") >=
 	stop()
 else
 	local sheared = getNumberAttribute("SheepShearedCount")
-	start(if sheared >= SHEEP_TO_SHEAR then "Upgrades" elseif sheared >= 1 then "Shear" else "GoToSheep")
+	local afterShearing: Stage = if ownsShears() then "Upgrades" else "GoToShop"
+	start(if sheared >= SHEEP_TO_SHEAR then afterShearing elseif sheared >= 1 then "Shear" else "GoToSheep")
 end
 tutorialGui:SetAttribute(MAIN_DONE_ATTRIBUTE, true)

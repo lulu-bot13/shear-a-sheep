@@ -15,6 +15,7 @@ local replicatedStorage = game:GetService("ReplicatedStorage")
 local network = require(replicatedStorage.Shared.Utils.Network)
 local Signal = require(replicatedStorage.Source.ModuleLoader.Signal)
 local SpawnOdds = require(replicatedStorage.Shared.Utils.SpawnOdds)
+local PenStyleData = require(script.Parent.Parent.Constants.PenStyleData)
 local RebirthData = require(script.Parent.Parent.Constants.RebirthData)
 local SheepData = require(script.Parent.Parent.Constants.SheepData)
 local SheepPools = require(script.Parent.Parent.Constants.SheepPools)
@@ -259,6 +260,11 @@ function RebirthHandler.rebirth(player: Player, amount: Amount?, free: boolean?)
 
 	rebirthing[player] = nil
 	AnnouncementHandler.rebirth(player, state.rebirths, state.rebirths + state.amountCount)
+	local penBefore = PenStyleData.getTier(state.rebirths, state.prestiges)
+	local penAfter = PenStyleData.getTier(state.rebirths + state.amountCount, state.prestiges)
+	if penAfter > penBefore then
+		AnnouncementHandler.penUnlocked(player, PenStyleData.Tiers[penAfter].name)
+	end
 	Analytics.rebirthed(player, state.rebirths + state.amountCount, state.amountCount, cost)
 	RebirthHandler.Rebirthed:Fire(player, state.rebirths, state.rebirths + state.amountCount)
 	return true, nil, state.amountCount

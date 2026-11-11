@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Wool upgrades: capacity, More Wool, Faster Speed, Shear Damage, Faster Respawn, Spawn Luck (capped per rebirth) and Sheep Size. Bought from the
+	Wool upgrades: More Wool, capacity, Shear Damage, Faster Respawn and Spawn Luck (capped per rebirth). Bought from the
 	UpgradeShop UI (opened at the plot's UpgradePlotShack or the HUD button) through the PurchaseUpgrade remote; each card's state is pushed with UpgradeState.
 
 	Location: ServerScriptService.Modules.Controllers.UpgradeHandler
@@ -31,12 +31,11 @@ local plotsFolder = workspace:WaitForChild("Base"):WaitForChild("Plots")
 --// Configs
 local PURCHASE_COOLDOWN = 0.25
 local STATE_REQUEST_COOLDOWN = 0.5
-local STATE_KEYS = { MaxSheep = true, MoreWoolLevel = true, SpeedLevel = true, DamageLevel = true, RespawnLevel = true, ShearId = true,
-	SpawnLuckLevel = true, SizeLevel = true, Rebirths = true, Prestiges = true, SheepIndex = true } -- data the cards show
-local LEVEL_KEYS = { MoreWool = "MoreWoolLevel", FasterSpeed = "SpeedLevel", ShearDamage = "DamageLevel", FasterRespawn = "RespawnLevel",
-	SpawnLuck = "SpawnLuckLevel", SheepSize = "SizeLevel" } -- data key of each upgrade's level (Capacity counts MaxSheep instead)
-local GIANT_VARIANT = "Giant"
-local MAX_LEVELS_PER_PURCHASE = 100 -- caps MAX on upgrades with no limit; costs grow x1.55+ a level, so 100 is past any wool total
+local STATE_KEYS = { MaxSheep = true, MoreWoolLevel = true, DamageLevel = true, RespawnLevel = true, ShearId = true,
+	SpawnLuckLevel = true, Rebirths = true, Prestiges = true, SheepIndex = true } -- data the cards show
+local LEVEL_KEYS = { MoreWool = "MoreWoolLevel", ShearDamage = "DamageLevel", FasterRespawn = "RespawnLevel",
+	SpawnLuck = "SpawnLuckLevel" } -- data key of each upgrade's level (Capacity counts MaxSheep instead)
+local MAX_LEVELS_PER_PURCHASE = 100 -- caps MAX on upgrades with no limit; costs grow x1.4+ a level, so 100 is past any wool total
 
 -- One more level of an upgrade: its price and the value once it's bought.
 export type Step = {
@@ -118,7 +117,6 @@ local function getRollContext(player: Player, spawnLuck: number): SheepData.Roll
 		rebirths = rebirths,
 		prestiges = prestiges,
 		spawnLuck = spawnLuck,
-		sizeLevel = getNumber(player, "SizeLevel"),
 		pool = SheepPools.getPool(rebirths, prestiges),
 		scales = SheepPools.getScales(rebirths),
 	}
@@ -160,12 +158,12 @@ local function getShearBaseDamage(player: Player): number
 	return shear.damage
 end
 
--- Sets the character's walk speed from the player's Faster Speed level, times any active ability's boost.
+-- Sets the character's walk speed: the base speed times any active ability's boost.
 function UpgradeHandler.applyWalkSpeed(player: Player)
 	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
 		local boost = player:GetAttribute("AbilitySpeedMultiplier")
-		humanoid.WalkSpeed = UpgradeData.getWalkSpeed(getNumber(player, "SpeedLevel")) * (if type(boost) == "number" then boost else 1)
+		humanoid.WalkSpeed = UpgradeData.BaseWalkSpeed * (if type(boost) == "number" then boost else 1)
 	end
 end
 
@@ -181,8 +179,9 @@ end
 
 --// Card state ----------------------------------------------------------------------------
 
+-- 1.35 -> "1.35s", 0.6 -> "0.6s"
 local function formatSeconds(value: number): string
-	return string.format("%.1fs", value)
+	return (string.format("%.2f", value):gsub("%.?0+$", "")) .. "s"
 end
 
 local function formatMultiplier(value: number): string
@@ -205,18 +204,8 @@ local function getValue(player: Player, id: string, extra: number): string
 		local odds = if target then SheepData.getTypeOddsWith(target, getRollContext(player, getNumber(player, "SpawnLuckLevel") + extra)) else nil
 		local oddsText = if odds then SpawnOdds.formatOdds(odds) else SpawnOdds.formatMultiplier(SpawnOdds.getSpawnLuckMultiplier(getNumber(player, "SpawnLuckLevel") + extra))
 		return if extra == 0 and target then `{SheepData.Sheep[target].name}: {oddsText}` else oddsText
-	elseif id == "SheepSize" then
-		local share = 0
-		for _, variant in SheepData.Variants do
-			if variant.id == GIANT_VARIANT then
-				share = SpawnOdds.getVariantShare(variant.id, variant.share, getNumber(player, "SizeLevel") + extra)
-			end
-		end
-		local percent = `{math.floor(share * 100 + 0.5)}%`
-		return if extra == 0 then `Giant chance: {percent}` else percent
-	else
-		return tostring(UpgradeData.getWalkSpeed(getNumber(player, "SpeedLevel") + extra))
 	end
+	return ""
 end
 
 -- The price and resulting value of each level still to buy, in order, up to MAX_LEVELS_PER_PURCHASE.
@@ -417,9 +406,6 @@ function UpgradeHandler.Start()
 		pushState(player)
 	end)
 	PlayerDataHandler.Changed:Connect(function(player: Player, key: string)
-		if key == "SpeedLevel" then
-			applyWalkSpeed(player)
-		end
 		if STATE_KEYS[key] then
 			pushState(player)
 		end

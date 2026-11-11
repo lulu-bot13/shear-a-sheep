@@ -253,8 +253,8 @@ end
 for key, item in MonetizationData.Items do
 	local card = itemsFrame:FindFirstChild(key, true)
 	if not card or not card:IsA("GuiObject") then
-		-- Items still at id 0 (e.g. the Starter Pack) are hidden everywhere, so they need no card yet.
-		if item.id ~= 0 then
+		-- Items still at id 0 (e.g. the Starter Pack) are hidden everywhere, and inShop = false ones are sold elsewhere, so they need no card.
+		if item.id ~= 0 and item.inShop ~= false then
 			warn(`[RobuxShopClient] no {key} card in RobuxShop.Main.Items; build it in Studio`)
 		end
 		continue

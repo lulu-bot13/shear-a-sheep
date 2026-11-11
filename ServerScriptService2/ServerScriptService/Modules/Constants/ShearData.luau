@@ -21,13 +21,12 @@ local shearData = {}
 shearData.DefaultShearId = "DefaultShear"
 
 --[[
-	sheepRequired is lifetime (rebirths and Prestiges keep it). A player shears ~15-30 sheep/min at first, ~50 by
-	minute 5 and hits the farm's spawn cap (40-86/min) by about minute 15. Minutes of active / casual play to unlock:
-	Steel ~2 / 4    Large ~6 / 11    Electric ~22 / 35 (before the first Prestige)    Master ~60 / 70
+	sheepRequired is lifetime (rebirths and Prestiges keep it). Steel unlocks after the tutorial's first 3 sheep and buying it
+	is a tutorial step. Past that the farm's refill (10 sheep/min at first, ~94/min at Faster Respawn 10) paces the unlocks.
 ]]
 shearData.Shears = {
 	{ id = "DefaultShear",   sheepRequired = 0,    damage = 20, range = 6 },
-	{ id = "SteelShears",    sheepRequired = 50,   damage = 26, range = 7.5 },
+	{ id = "SteelShears",    sheepRequired = 3,    damage = 26, range = 7.5 },
 	{ id = "LargeShears",    sheepRequired = 300,  damage = 34, range = 9 },
 	{ id = "ElectricShears", sheepRequired = 1500, damage = 45, range = 11 },
 	{ id = "MasterShears",   sheepRequired = 4500, damage = 60, range = 13 },

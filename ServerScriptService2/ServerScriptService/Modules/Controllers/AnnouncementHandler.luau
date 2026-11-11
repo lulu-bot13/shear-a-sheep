@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	Server-wide announcements: best finds, Legendary+ ability rolls, rebirths, Prestiges, gifts, Server Luck, Reapers and the King Sheep.
+	Server-wide announcements: best finds, Legendary+ ability rolls, rebirths, pen unlocks, Prestiges, gifts, Server Luck, Reapers and the King Sheep.
 	Only names and numbers are sent; AnnouncementClient builds the chat lines and the best-find panel.
 
 	Location: ServerScriptService.Modules.Controllers.AnnouncementHandler
@@ -37,6 +37,10 @@ export type Announcement = {
 	userName: string,
 	previous: number,
 	new: number,
+} | {
+	kind: "PenUnlocked",
+	userName: string,
+	penName: string,
 } | {
 	kind: "Gift",
 	userName: string,
@@ -112,6 +116,12 @@ function AnnouncementHandler.rebirth(player: Player, previous: number, new: numb
 	if new > previous then
 		announce({ kind = "Rebirth", userName = player.Name, previous = previous, new = new })
 	end
+end
+
+-- A rebirth reached a new pen style tier (PenStyleData): a chat line for the server and a toast for them.
+function AnnouncementHandler.penUnlocked(player: Player, penName: string)
+	announce({ kind = "PenUnlocked", userName = player.Name, penName = penName })
+	network.fireClient(network.RemoteEvents.ShowAlert, player, `You unlocked the {penName}!`, "success")
 end
 
 function AnnouncementHandler.prestige(player: Player, previous: number, new: number)

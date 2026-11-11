@@ -1,6 +1,6 @@
 --[[
-	New-shear tutorial: once a shear unlocks, a tapping hand points at the HUD ToShop button, then the shop scrolls to that shear's card
-	and the spotlight sits on its UNLOCK button. Ends on that press or when the shop closes; waits for the main and Crook tutorials.
+	First-shear tutorial for players who skipped it in the main tutorial: ToShop button, then the shear's UNLOCK button in the shop.
+	Only the first shear unlocked gets it; later unlocks (once any shear past the default is owned) don't.
 
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.ShearTutorialClient
 ]]--
@@ -76,6 +76,20 @@ local function isOwned(id: string): boolean
 	end
 	for ownedId in string.gmatch(owned, "[^,]+") do
 		if ownedId == id then
+			return true
+		end
+	end
+	return false
+end
+
+-- True once any shear besides the default is owned: the player has already been through a shear unlock.
+local function ownsBetterShear(): boolean
+	local owned = player:GetAttribute("OwnedShears")
+	if type(owned) ~= "string" then
+		return false
+	end
+	for ownedId in string.gmatch(owned, "[^,]+") do
+		if ownedId ~= DEFAULT_SHEAR_ID then
 			return true
 		end
 	end
@@ -379,7 +393,7 @@ while true do
 		local info = getShearInfo(id)
 		local card = scrollFrame:FindFirstChild(id)
 		local purchase = card and card:FindFirstChild("Purchase")
-		if info and not isOwned(id) and card and card:IsA("GuiObject") and purchase and purchase:IsA("GuiButton") then
+		if info and not isOwned(id) and not ownsBetterShear() and card and card:IsA("GuiObject") and purchase and purchase:IsA("GuiButton") then
 			run(info, card, purchase)
 		end
 	end

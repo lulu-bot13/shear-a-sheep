@@ -47,11 +47,22 @@ return MonetizationConfig.create({
 		rewardText = "No more need for clicking!",
 		icon = "rbxassetid://136356308886914",
 	},
+	RobuxConveyor = {
+		kind = "GamePass",
+		id = 2079194287,
+		giftable = false,
+		giftProductId = 0,
+		displayName = "2ND CONVEYOR",
+		rewardText = "A 2nd conveyor that brings 3x the sheep!",
+		multiplier = 2, -- its refills per main-belt refill (SheepSpawnHandler), so 3x sheep in all
+		inShop = false, -- bought from the plot's RobuxConveyor prompt; no Robux shop card yet
+	},
 
-	--// Bundles (developer products)
+	--// Bundles
 	StarterPack = {
-		kind = "DevProduct",
-		id = 0, -- PUT ID HERE (hidden on the board, in offers and the shop while 0)
+		kind = "GamePass", -- granted once by MonetizationHandler (StarterPackBought), sold through OfferHandler's popup
+		id = 2079758258,
+		inShop = false,
 		giftable = false,
 		giftProductId = 0,
 		displayName = "STARTER PACK",

@@ -1,6 +1,6 @@
 --[[
-	The Shepherd's Crook: a "HOLD" tag with its wool multiplier over the hovered sheep, clicks to pick it up or let it go in the pen, a hint of what to do next
-	and a beam to an open podium. The rest of the UI hides while the crook is out or a sheep is carried.
+	The Shepherd's Crook: a "HOLD" tag over the hovered sheep, click to pick it up or let it go, a hint and a beam to an open podium.
+	The rest of the UI hides while it's out; with it put away, each of the player's podiums says to equip it.
 	Location: StarterPlayer.StarterPlayerScripts.Client.Controllers.CrookClient
 ]]--
 
@@ -45,6 +45,13 @@ local TEXT_OR_RELEASE = ", or %s to let it go" -- added to the podium text while
 local TEXT_GO_TO_PEN = "Take it back to your pen to shear it"
 local TEXT_RELEASE = "%s to let it go in your pen"
 
+--// Podium sign: shown on each of the player's podiums while the crook is put away
+local SIGN_TITLE = "Equip your Shepherd's Crook"
+local SIGN_SUBTITLE = "to place a sheep here"
+local SIGN_SIZE = UDim2.fromScale(9, 2.2) -- studs
+local SIGN_OFFSET = Vector3.new(0, -3, 0) -- from the podium's top part down onto its base, clear of a sheep standing on top
+local SIGN_MAX_DISTANCE = 45
+
 -- Stay up while the rest of the UI is hidden: short-lived popups, the tutorial, and TouchGui (the touch thumbstick).
 local KEEP_GUIS = {
 	TouchGui = true,
@@ -60,6 +67,7 @@ local hovered: Model? = nil
 local boundCrooks: { [Instance]: boolean } = {}
 local uiHidden = false
 local hiddenGuis: { ScreenGui } = {} -- turned off by this script, so only these are turned back on
+local podiumSigns: { [ProximityPrompt]: BillboardGui } = {}
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -303,6 +311,62 @@ local function getSheepUnderMouse(): Model?
 	return nil
 end
 
+--// Podium signs -----------------------------------------------------------------------
+
+local function createSignLabel(name: string, text: string, position: UDim2, size: UDim2, color: Color3, parent: Instance)
+	local label = Instance.new("TextLabel")
+	label.Name = name
+	label.BackgroundTransparency = 1
+	label.Position = position
+	label.Size = size
+	label.Font = Enum.Font.GothamBlack
+	label.TextScaled = true
+	label.TextColor3 = color
+	label.Text = text
+	label.Parent = parent
+	local stroke = Instance.new("UIStroke")
+	stroke.Thickness = 2
+	stroke.Parent = label
+end
+
+local function createSign(prompt: ProximityPrompt): BillboardGui?
+	local top = prompt.Parent
+	if not top or not top:IsA("BasePart") then
+		return nil
+	end
+	local sign = Instance.new("BillboardGui")
+	sign.Name = "CrookPodiumSign"
+	sign.Adornee = top
+	sign.Size = SIGN_SIZE
+	sign.StudsOffsetWorldSpace = SIGN_OFFSET
+	sign.MaxDistance = SIGN_MAX_DISTANCE
+	sign.AlwaysOnTop = true -- drawn over the base it sits on
+	sign.LightInfluence = 0
+	createSignLabel("Title", SIGN_TITLE, UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.6), HOLD_COLOR, sign)
+	createSignLabel("Subtitle", SIGN_SUBTITLE, UDim2.fromScale(0, 0.6), UDim2.fromScale(1, 0.4), Color3.new(1, 1, 1), sign)
+	sign.Parent = top
+	return sign
+end
+
+-- Shows the sign on every podium of the player's plot (and removes the ones on podiums that aren't theirs any more).
+local function setPodiumSigns(shown: boolean)
+	local own: { [ProximityPrompt]: boolean } = {}
+	for _, prompt in getOwnPodiums() do
+		own[prompt] = true
+		local sign = podiumSigns[prompt] or createSign(prompt)
+		podiumSigns[prompt] = sign
+		if sign then
+			sign.Enabled = shown
+		end
+	end
+	for prompt, sign in podiumSigns do
+		if not own[prompt] then
+			sign:Destroy()
+			podiumSigns[prompt] = nil
+		end
+	end
+end
+
 --// Updating ---------------------------------------------------------------------------
 
 local function setHovered(sheep: Model?)
@@ -363,6 +427,7 @@ local function update()
 			prompt.Enabled = carrying
 		end
 	end
+	setPodiumSigns(not active)
 	setUiHidden(active)
 
 	setHovered(if isHoldingCrook() and not carrying then getSheepUnderMouse() else nil)

@@ -101,14 +101,13 @@ function IndexHandler.getState(player: Player): { EntryState }
 	local luck, rebirths, prestiges = getNumber(player, "Luck"), getNumber(player, "Rebirths"), getNumber(player, "Prestiges")
 	local halloween = WeatherHandler.isHalloween()
 
-	-- The player's real odds (their SheepPools pool, Spawn Luck and Sheep Size); types outside the pool keep their all-sheep odds.
+	-- The player's real odds (their SheepPools pool and Spawn Luck); types outside the pool keep their all-sheep odds.
 	local context: SheepData.RollContext = {
 		luck = luck,
 		rebirths = rebirths,
 		prestiges = prestiges,
 		halloween = halloween,
 		spawnLuck = getNumber(player, "SpawnLuckLevel"),
-		sizeLevel = getNumber(player, "SizeLevel"),
 		pool = SheepPools.getPool(rebirths, prestiges),
 		scales = SheepPools.getScales(rebirths),
 	}
@@ -247,7 +246,7 @@ function IndexHandler.Start()
 	PlayerDataHandler.Loaded:Connect(pushState)
 	PlayerDataHandler.Changed:Connect(function(player: Player, key: string)
 		-- Luck changes every hit, so its odds refresh when the Index is opened instead.
-		if key == "SheepIndex" or key == "Rebirths" or key == "Prestiges" or key == "SpawnLuckLevel" or key == "SizeLevel" then
+		if key == "SheepIndex" or key == "Rebirths" or key == "Prestiges" or key == "SpawnLuckLevel" then
 			pushState(player)
 		end
 	end)

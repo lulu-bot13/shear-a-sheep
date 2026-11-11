@@ -542,6 +542,7 @@ local function resetSheepForPool(sheep: Instance)
 	sheep:SetAttribute("Grazing", nil)
 	sheep:SetAttribute(RISING, nil)
 	sheep:SetAttribute(ON_BELT, nil)
+	sheep:SetAttribute("Bolting", nil) -- SheepWanderHandler's conveyor bolt
 	sheep:SetAttribute("TutorialSheep", nil) -- TutorialHandler's override must not follow the pooled model to a normal spawn
 
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
@@ -877,6 +878,7 @@ local function buildSheep(player: Player, context: SheepData.RollContext, forced
 	sheepModel:SetAttribute("SheepType", sheepType)
 	sheepModel:SetAttribute("SheepName", getPlainName(info, size, mutation))
 	sheepModel:SetAttribute(MutationData.Attribute, if mutation then mutation.id else nil)
+	sheepModel:SetAttribute("TutorialSheep", nil) -- a pooled model may still carry TutorialHandler's mark
 	sheepModel:SetAttribute("Rarity", info.rarity)
 	sheepModel:SetAttribute("RarityColor", info.color)
 	sheepModel:SetAttribute("Odds", oddsText)

@@ -4,6 +4,7 @@
 	Walks every sheep to random spots inside its plot's SheepArea, pausing between walks (tuned in FarmData.Wander).
 	Some pauses are spent grazing: the sheep's "Grazing" attribute is true while it should have its head down,
 	and SheepGrazeClient animates it. Sheep being sheared stand still (head up) until ShearHoldSeconds pass without a snip.
+	Sheep landing off the conveyor bolt far across the pen first, unshearable ("Bolting") until they arrive.
 
 	Location: ServerScriptService.Modules.Controllers.SheepWanderHandler
 ]]--
@@ -19,6 +20,9 @@ local SheepHandler = require(script.Parent.SheepHandler)
 local WANDER = FarmData.Wander
 local RAYCAST_HEIGHT = 50 -- how far above/below the area the ground is searched for
 local GRAZING_ATTRIBUTE = "Grazing"
+local BOLTING_ATTRIBUTE = "Bolting" -- ShearHandler and SheepCarryHandler skip sheep with this set
+local BOLT_ARRIVE_GRACE = 0.3 -- seconds past the planned travel time before the bolt ends
+local BOLT_FAR_SHARE = 0.6 -- in a small pen, "far" is this share of the distance to the farthest corner
 local GRAZE_MAX_SPEED = 0.5 -- studs/s; a sheep still sliding to a stop waits before grazing
 local FALL_LIMIT = 15 -- studs below its SheepArea a sheep counts as fallen off the island
 
@@ -26,6 +30,7 @@ local FALL_LIMIT = 15 -- studs below its SheepArea a sheep counts as fallen off 
 local nextMoveAt: { [Model]: number } = setmetatable({}, { __mode = "k" }) :: any
 local grazeStart: { [Model]: number } = setmetatable({}, { __mode = "k" }) :: any
 local grazeEnd: { [Model]: number } = setmetatable({}, { __mode = "k" }) :: any
+local boltEnd: { [Model]: number } = setmetatable({}, { __mode = "k" }) :: any
 local random = Random.new()
 
 local SheepWanderHandler = {}
@@ -145,6 +150,16 @@ local function cancelGraze(sheep: Model)
 	setGrazing(sheep, false)
 end
 
+-- The sheep can be sheared again; it slows back to a wander pace if it hasn't reached its spot yet.
+local function endBolt(sheep: Model)
+	boltEnd[sheep] = nil
+	sheep:SetAttribute(BOLTING_ATTRIBUTE, nil)
+	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.WalkSpeed = WANDER.MaxWalkSpeed
+	end
+end
+
 -- Puts a sheep that left the island (fell, or touched the sea) back at a random spot in its pen.
 function SheepWanderHandler.returnToPen(sheep: Model)
 	local plot = getPlot(sheep)
@@ -160,12 +175,15 @@ function SheepWanderHandler.returnToPen(sheep: Model)
 	root.AssemblyAngularVelocity = Vector3.zero
 	nextMoveAt[sheep] = nil
 	cancelGraze(sheep)
+	if boltEnd[sheep] then
+		endBolt(sheep)
+	end
 end
 
 --// Walking ---------------------------------------------------------------------------
 
--- Walks a random way (or `heading`, radians in the SheepArea's space, for `walkDistance` studs) and plans what comes after.
-local function startWalk(sheep: Model, humanoid: Humanoid, root: BasePart, now: number, heading: number?, walkDistance: number?)
+-- Walks a random way and plans what comes after.
+local function startWalk(sheep: Model, humanoid: Humanoid, root: BasePart, now: number)
 	local plot = getPlot(sheep)
 	local boxCFrame, size
 	if plot then
@@ -176,8 +194,8 @@ local function startWalk(sheep: Model, humanoid: Humanoid, root: BasePart, now: 
 		return
 	end
 
-	local angle = heading or random:NextNumber(0, math.pi * 2)
-	local distance = walkDistance or random:NextNumber(WANDER.MinDistance, WANDER.MaxDistance)
+	local angle = random:NextNumber(0, math.pi * 2)
+	local distance = random:NextNumber(WANDER.MinDistance, WANDER.MaxDistance)
 	local localStart = boxCFrame:PointToObjectSpace(root.Position)
 	local localTarget = clampToArea(localStart + Vector3.new(math.cos(angle), 0, math.sin(angle)) * distance, size)
 	local target = boxCFrame:PointToWorldSpace(localTarget)
@@ -221,6 +239,14 @@ local function updateSheep(sheep: Model, now: number)
 	end
 	keepInArea(sheep, root)
 
+	local boltUntil = boltEnd[sheep]
+	if boltUntil then
+		if now >= boltUntil then
+			endBolt(sheep)
+		end
+		return
+	end
+
 	-- A new sheep waits a moment before its first walk.
 	local due = nextMoveAt[sheep]
 	if not due then
@@ -233,11 +259,11 @@ local function updateSheep(sheep: Model, now: number)
 	end
 end
 
--- Stops the sheep where it stands; each call pushes its next walk back by ShearHoldSeconds.
+-- Stops the sheep where it stands; each call pushes its next walk back by ShearHoldSeconds. A bolting sheep keeps running.
 function SheepWanderHandler.holdSheep(sheep: Model)
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
 	local root = sheep:FindFirstChild("HumanoidRootPart")
-	if not humanoid or not root or not root:IsA("BasePart") then
+	if not humanoid or not root or not root:IsA("BasePart") or boltEnd[sheep] then
 		return
 	end
 
@@ -246,22 +272,50 @@ function SheepWanderHandler.holdSheep(sheep: Model)
 	nextMoveAt[sheep] = os.clock() + WANDER.ShearHoldSeconds
 end
 
--- Sends a sheep that just landed off the conveyor at `from` walking straight away from it, towards the pen's middle.
-function SheepWanderHandler.walkAwayFrom(sheep: Model, from: Vector3)
+-- A random spot in the area (its local space) at least BoltMinDistance from `localFrom`, else the farthest one tried.
+local function getFarPoint(localFrom: Vector3, size: Vector3): Vector3
+	local halfX = math.max(size.X / 2 - WANDER.EdgePadding, 0)
+	local halfZ = math.max(size.Z / 2 - WANDER.EdgePadding, 0)
+	local farthestCorner = Vector3.new(halfX + math.abs(localFrom.X), 0, halfZ + math.abs(localFrom.Z)).Magnitude
+	local minDistance = math.min(WANDER.BoltMinDistance, farthestCorner * BOLT_FAR_SHARE)
+
+	local best, bestDistance = localFrom, -1
+	for _ = 1, WANDER.BoltTries do
+		local point = Vector3.new(random:NextNumber(-halfX, halfX), localFrom.Y, random:NextNumber(-halfZ, halfZ))
+		local distance = (point - localFrom).Magnitude
+		if distance >= minDistance then
+			return point
+		elseif distance > bestDistance then
+			best, bestDistance = point, distance
+		end
+	end
+	return best
+end
+
+-- Sends a sheep that just landed off the conveyor at `from` running to a far spot in the pen; it can't be sheared until it gets there.
+function SheepWanderHandler.boltFrom(sheep: Model, from: Vector3)
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
 	local root = sheep:FindFirstChild("HumanoidRootPart")
 	local plot = getPlot(sheep)
-	local boxCFrame = if plot then getAreaBox(plot) else nil
-	if not humanoid or not root or not root:IsA("BasePart") or not boxCFrame then
+	local boxCFrame, size
+	if plot then
+		boxCFrame, size = getAreaBox(plot)
+	end
+	if not humanoid or not root or not root:IsA("BasePart") or not boxCFrame or not size then
 		return
 	end
 
-	local inward = -boxCFrame:PointToObjectSpace(from) * Vector3.new(1, 0, 1)
-	local heading = if inward.Magnitude > 0.01 then math.atan2(inward.Z, inward.X) else random:NextNumber(0, math.pi * 2)
-	local spread = math.rad(WANDER.DropWalkSpreadDegrees)
+	local target = boxCFrame:PointToWorldSpace(getFarPoint(boxCFrame:PointToObjectSpace(from), size))
+	local travelSeconds = Vector3.new(target.X - root.Position.X, 0, target.Z - root.Position.Z).Magnitude / WANDER.BoltSpeed
+	local finish = os.clock() + math.min(travelSeconds + BOLT_ARRIVE_GRACE, WANDER.BoltMaxSeconds)
+
+	cancelGraze(sheep)
 	root.AssemblyLinearVelocity = Vector3.zero
-	startWalk(sheep, humanoid, root, os.clock(), heading + random:NextNumber(-spread, spread),
-		random:NextNumber(WANDER.DropWalkMinDistance, WANDER.DropWalkMaxDistance))
+	humanoid.WalkSpeed = WANDER.BoltSpeed
+	humanoid:MoveTo(target)
+	sheep:SetAttribute(BOLTING_ATTRIBUTE, true)
+	boltEnd[sheep] = finish
+	nextMoveAt[sheep] = finish + random:NextNumber(WANDER.MinIdleSeconds, WANDER.MaxIdleSeconds)
 end
 
 function SheepWanderHandler.Start()

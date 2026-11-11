@@ -39,12 +39,7 @@ local HIGHLIGHT_COLOR = Color3.fromRGB(255, 230, 90)
 local STEP_COUNT = 3
 
 --// State
-local podiumHighlight = Instance.new("Highlight")
-podiumHighlight.Name = "CrookTutorialPodium"
-podiumHighlight.FillColor = HIGHLIGHT_COLOR
-podiumHighlight.OutlineColor = HIGHLIGHT_COLOR
-podiumHighlight.FillTransparency = 0.7
-podiumHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+local podiumHighlights: { [Instance]: Highlight } = {}
 
 --// Helpers ---------------------------------------------------------------------------
 
@@ -88,19 +83,18 @@ local function countOccupied(): number
 	return count
 end
 
--- The whole podium (the prompt sits on its top part, inside the podium model) of the first open one, or the first at all.
-local function getPodiumToShow(): Instance?
-	local podiums = getOwnPodiums()
-	local chosen = podiums[1]
-	for _, prompt in podiums do
-		if prompt:GetAttribute(OCCUPIED_ATTRIBUTE) ~= true then
-			chosen = prompt
-			break
+-- Every podium on the player's plot as a whole (the prompt sits on its top part, inside the podium model).
+local function getPodiumsToShow(): { Instance }
+	local found: { Instance } = {}
+	for _, prompt in getOwnPodiums() do
+		local top = prompt.Parent
+		local podium = top and top.Parent
+		local target = if podium and podium:IsA("Model") then podium else top
+		if target then
+			table.insert(found, target)
 		end
 	end
-	local top = chosen and chosen.Parent
-	local podium = top and top.Parent
-	return if podium and podium:IsA("Model") then podium else top
+	return found
 end
 
 local function setShown(shown: boolean)
@@ -114,9 +108,31 @@ local function setStep(step: number, text: string)
 	setShown(true)
 end
 
-local function setPodiumHighlight(target: Instance?)
-	podiumHighlight.Adornee = target
-	podiumHighlight.Parent = if target then workspace else nil
+-- Outlines every podium (shown = true) or none.
+local function setPodiumHighlights(shown: boolean)
+	local keep: { [Instance]: boolean } = {}
+	if shown then
+		for _, podium in getPodiumsToShow() do
+			keep[podium] = true
+			if not podiumHighlights[podium] then
+				local highlight = Instance.new("Highlight")
+				highlight.Name = "CrookTutorialPodium"
+				highlight.FillColor = HIGHLIGHT_COLOR
+				highlight.OutlineColor = HIGHLIGHT_COLOR
+				highlight.FillTransparency = 0.7
+				highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+				highlight.Adornee = podium
+				highlight.Parent = workspace
+				podiumHighlights[podium] = highlight
+			end
+		end
+	end
+	for podium, highlight in podiumHighlights do
+		if not keep[podium] then
+			highlight:Destroy()
+			podiumHighlights[podium] = nil
+		end
+	end
 end
 
 --// Steps -------------------------------------------------------------------------------
@@ -149,12 +165,12 @@ local function runPlacing()
 				carryEndedAt = carryEndedAt or os.clock()
 				if os.clock() - (carryEndedAt :: number) >= PLACE_GRACE_SECONDS then
 					carrying = false
-					setPodiumHighlight(nil)
+					setPodiumHighlights(false)
 					continue
 				end
 			else
-				setStep(2, "Place the sheep on a podium")
-				setPodiumHighlight(getPodiumToShow())
+				setStep(2, "Place the sheep on one of the glowing podiums")
+				setPodiumHighlights(true)
 			end
 		end
 		task.wait(TICK_SECONDS)
@@ -163,7 +179,7 @@ end
 
 -- Step 3: why podiums matter; closes after EXPLAIN_SECONDS or on a click.
 local function runExplain()
-	setPodiumHighlight(nil)
+	setPodiumHighlights(true)
 	setStep(3, "Placing a sheep on a podium gives you higher base stats!")
 
 	local shownAt = os.clock()
@@ -207,5 +223,5 @@ runPlacing()
 runExplain()
 setShown(false)
 tutorialGui:SetAttribute(ACTIVE_ATTRIBUTE, false)
-podiumHighlight:Destroy()
+setPodiumHighlights(false)
 network.fireServer(network.RemoteEvents.CrookTutorialDone)

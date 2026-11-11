@@ -72,7 +72,7 @@ goalData.Quests = {
 goalData.QUESTS_PER_SESSION = 3
 
 -- Data keys of every upgrade's level ("Upgrades" kinds add these; Capacity counts MaxSheep above FarmData.StartingMaxSheep).
-goalData.UpgradeLevelKeys = { "MoreWoolLevel", "SpeedLevel", "DamageLevel", "RespawnLevel", "SpawnLuckLevel", "SizeLevel" }
+goalData.UpgradeLevelKeys = { "MoreWoolLevel", "DamageLevel", "RespawnLevel", "SpawnLuckLevel" }
 
 function goalData.getQuest(id: any): Quest?
 	for _, quest in goalData.Quests do

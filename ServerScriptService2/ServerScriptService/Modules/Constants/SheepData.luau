@@ -463,7 +463,6 @@ export type RollContext = {
 	boost: number?,
 	halloween: boolean?,
 	spawnLuck: number?,
-	sizeLevel: number?,
 	pool: { [string]: boolean }?,
 	scales: { [string]: number }?,
 }
@@ -502,25 +501,24 @@ local function getTotalWeight(luckFactor: number, context: RollContext, hallowee
 end
 
 -- The share of an adult type's spawns that are this sheep (its variant's share, or what's left for the adult).
-local function getVariantShare(name: string, sizeLevel: number?): number
+local function getVariantShare(name: string): number
 	local info = sheepData.Sheep[name]
 	local adultShare = 1
 	for _, variant in sheepData.Variants do
-		local share = SpawnOdds.getVariantShare(variant.id, variant.share, sizeLevel)
 		if info.variant == variant.id then
-			return share
+			return variant.share
 		end
-		adultShare -= share
+		adultShare -= variant.share
 	end
 	return math.max(adultShare, 0)
 end
 
--- Picks the Baby, adult or Giant of an adult type by the Sheep Size level; returns its type key.
-function sheepData.rollVariant(adultKey: string, sizeLevel: number?, random: Random?): string
+-- Picks the Baby, adult or Giant of an adult type by the Variants' shares; returns its type key.
+function sheepData.rollVariant(adultKey: string, random: Random?): string
 	local roll = (random or Random.new()):NextNumber()
 	local cumulative = 0
 	for _, variant in sheepData.Variants do
-		cumulative += SpawnOdds.getVariantShare(variant.id, variant.share, sizeLevel)
+		cumulative += variant.share
 		if roll < cumulative then
 			return `{variant.id}{adultKey}`
 		end
@@ -539,7 +537,7 @@ function sheepData.rollWith(context: RollContext, random: Random?): string?
 		local weight = getTypeWeight(key, luckFactor, context, context.halloween)
 		cumulative += weight
 		if weight > 0 and roll < cumulative then
-			return sheepData.rollVariant(key, context.sizeLevel, rng)
+			return sheepData.rollVariant(key, rng)
 		end
 	end
 	return nil
@@ -557,7 +555,7 @@ function sheepData.getOddsWith(name: string, context: RollContext, anyVariant: b
 
 	local includeHalloween = context.halloween or info.halloween
 	local luckFactor = getContextLuckFactor(context)
-	local share = if anyVariant then 1 else getVariantShare(name, context.sizeLevel)
+	local share = if anyVariant then 1 else getVariantShare(name)
 	local weight = getTypeWeight(info.adult or name, luckFactor, context, includeHalloween) * share
 	if weight <= 0 then
 		return nil
