@@ -37,7 +37,7 @@ local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- set on every shear Tool by ShearSh
 local CARRY_ATTRIBUTE = "CarryingSheep" -- set by SheepCarryHandler while a sheep is carried
 local CROOK_NAME = "ShepherdsCrook"
 local TUTORIAL_DONE_ATTRIBUTE = "MainTutorialDone" -- set on the Tutorial gui by TutorialClient once it's finished
-local USED_COLOR = Color3.fromRGB(120, 120, 120) -- while active and cooling down
+local USED_COLOR = Color3.fromRGB(120, 120, 120) -- tints the button's image and text while active and cooling down
 local READY_TEXT = "[E] Ability"
 local TOUCH_AIM_DISTANCE = 40 -- studs ahead of the character an ability is aimed without a mouse
 local AIM_RAY_LENGTH = 500
@@ -61,7 +61,8 @@ local abilityTrack: AnimationTrack? = nil
 local stopEffect: (() -> ())? = nil
 local cooldownConnection: RBXScriptConnection? = nil
 local loadedModules: { [string]: AbilityModule | false } = {}
-local normalColors: { [GuiObject]: Color3 } = setmetatable({}, { __mode = "k" }) :: any -- each Ability ui's Studio color
+-- Each tinted image's / label's Studio color. Not weak-keyed: Instance keys can drop out of weak tables, and the grey would be saved instead.
+local normalColors: { [GuiObject]: Color3 } = {}
 local usingTouch = userInputService.TouchEnabled
 	and (not userInputService.KeyboardEnabled or userInputService:GetLastInputType() == Enum.UserInputType.Touch)
 
@@ -131,14 +132,27 @@ local function getSecondsLeft(): number
 	return if type(readyAt) == "number" then math.max(readyAt - workspace:GetServerTimeNow(), 0) else 0
 end
 
+-- Greys an ability button's image and text (and every image / label inside it) while it can't be used.
+local function setUsedLook(button: GuiObject, used: boolean)
+	for _, object in { button, table.unpack(button:GetDescendants()) } do
+		local property = if object:IsA("ImageLabel") or object:IsA("ImageButton") then "ImageColor3"
+			elseif object:IsA("TextLabel") or object:IsA("TextButton") then "TextColor3"
+			else nil
+		if property then
+			local guiObject = object :: any
+			local normalColor = normalColors[object :: GuiObject] or guiObject[property]
+			normalColors[object :: GuiObject] = normalColor
+			guiObject[property] = if used then normalColor:Lerp(USED_COLOR, 0.85) else normalColor
+		end
+	end
+end
+
 local function updateCooldownLabel()
 	local secondsLeft = getSecondsLeft()
 	local isActive = player:GetAttribute(ACTIVE_ATTRIBUTE) ~= nil
 	local abilityUi = getAbilityUi()
 	if abilityUi then
-		local normalColor = normalColors[abilityUi] or abilityUi.BackgroundColor3
-		normalColors[abilityUi] = normalColor
-		abilityUi.BackgroundColor3 = if isActive or secondsLeft > 0 then USED_COLOR else normalColor
+		setUsedLook(abilityUi, isActive or secondsLeft > 0)
 	end
 
 	local label = getAbilityLabel("Cooldown")

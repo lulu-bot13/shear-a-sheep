@@ -38,7 +38,7 @@ upgradeData.Upgrades = {
 	SpawnLuck = { id = "SpawnLuck", displayName = "Spawn Luck", icon = "", baseCost = 120, costGrowth = 1.25, maxLevel = SpawnOdds.SPAWN_LUCK_MAX_LEVEL },
 } :: { [string]: UpgradeInfo }
 
-upgradeData.Order = { "MoreWool", "Capacity", "ShearDamage", "FasterRespawn", "SpawnLuck" } -- top to bottom in the UpgradeShop
+upgradeData.Order = { "MoreWool", "SpawnLuck", "Capacity", "ShearDamage", "FasterRespawn" } -- top to bottom in the UpgradeShop
 
 --[[
 	Upgrades taken out of the shop, by their save key: PlayerDataHandler refunds the wool spent on them once and drops the key.

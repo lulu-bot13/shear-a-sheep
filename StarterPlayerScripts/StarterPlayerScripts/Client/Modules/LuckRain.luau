@@ -10,6 +10,7 @@ local tweenService = game:GetService("TweenService")
 
 --// Modules
 local settings = require(script.Parent.Settings)
+local screenScale = require(script.Parent.ScreenScale)
 local iconIds = require(replicatedStorage.Shared.Constants.IconIds)
 
 --// Configs
@@ -61,7 +62,7 @@ function LuckRain.play(aboveGui: ScreenGui)
 
 	for _ = 1, settings.effectCount(FALL_ICON_COUNT) do
 		task.delay(math.random() * FALL_SPAWN_SECONDS, function()
-			local icon = makeLuckIcon(math.random(FALL_MIN_SIZE, FALL_MAX_SIZE))
+			local icon = makeLuckIcon(math.random(FALL_MIN_SIZE, FALL_MAX_SIZE) * screenScale.get())
 			local x = math.random()
 			local drift = (math.random() - 0.5) * 0.12
 			local fallSeconds = FALL_MIN_SECONDS + math.random() * (FALL_MAX_SECONDS - FALL_MIN_SECONDS)

@@ -1,8 +1,8 @@
 --!strict
 
 --[[
-	Fills each player's SheepArea up to their saved capacity on join, then refills it from the plot's conveyor (SheepBeltHandler), plus the
-	RobuxConveyor for owners of that pass, with rolls from their SheepPools pool and the rebirth sheep's pity; clears the pen with a poof on rebirth.
+	Fills each player's SheepArea up to their saved capacity on join, then drops refills into it with a poof (faster for owners of the
+	RobuxConveyor pass), rolled from their SheepPools pool with the rebirth sheep's pity; clears the pen with a poof on rebirth.
 
 	Location: ServerScriptService.Modules.Controllers.SheepSpawnHandler
 ]]--
@@ -25,23 +25,23 @@ local PlayerDataHandler = require(script.Parent.PlayerDataHandler)
 local PlotHandler = require(script.Parent.PlotHandler)
 local PodiumBonusHandler = require(script.Parent.PodiumBonusHandler)
 local RebirthHandler = require(script.Parent.RebirthHandler)
-local SheepBeltHandler = require(script.Parent.SheepBeltHandler)
+
 local SheepHandler = require(script.Parent.SheepHandler)
 local SheepWanderHandler = require(script.Parent.SheepWanderHandler)
 local WeatherHandler = require(script.Parent.WeatherHandler)
 
 --// Configs
-local SHEEPS_FOLDER_NAME = "Sheeps" -- SheepHandler's folder in each plot (pen and belt sheep)
+local SHEEPS_FOLDER_NAME = "Sheeps" -- SheepHandler's folder in each plot
 local LUCK_FACTOR_ATTRIBUTE = "LuckFactor" -- the effective spawn luck factor, for the HUD's "Luck x1.9"
 local LUCK_FACTOR_KEYS = { Luck = true, Rebirths = true, Prestiges = true, SpawnLuckLevel = true }
 local PREMIUM_LUCK_MULTIPLIER = 1.1 -- Roblox Premium members' +10% luck (shown by BonusesClient's HUD badge)
 local REFILL_AFTER_POOF_SECONDS = 0.5 -- the rebirth poof plays on an empty pen before it refills
-local ROBUX_LINE = "RobuxConveyor" -- the plot's belt model, unlocked by the game pass with the same key
-local ROBUX_RATE_MULTIPLIER = MonetizationData.Items.RobuxConveyor.multiplier or 2 -- its refills per main-belt refill
+local FAST_REFILL_PASS = "RobuxConveyor" -- the old 2nd-conveyor pass; its owners keep their extra sheep as faster refills
+local FAST_REFILL_MULTIPLIER = MonetizationData.Items.RobuxConveyor.multiplier or 3
+local REVEAL_MIN_SHEARED = 3 -- the tutorial's shearing steps; the rebirth sheep's cutscene waits until they're done
 
 --// State
 local activePlots: { [Player]: Folder } = {} -- the plot each running farm belongs to
-local robuxBeltRunning: { [Player]: boolean } = {}
 
 local SheepSpawnHandler = {}
 
@@ -70,7 +70,6 @@ local function updateCapacityLabel(player: Player)
 		setCapacityText(plot, count, maxSheep)
 		player:SetAttribute("PenCount", count)
 		player:SetAttribute("PenMax", maxSheep)
-		SheepBeltHandler.setFreeSlots(player, math.min(maxSheep, FarmData.MaxSheepCap) - count)
 	end
 end
 
@@ -85,10 +84,11 @@ local function getMaxSheep(player: Player): number
 	return math.min(getNumber(player, "MaxSheep"), FarmData.MaxSheepCap)
 end
 
--- Seconds between refills, shortened by the player's Faster Respawn level, the weather and their podium sheep.
+-- Seconds between refills, shortened by the player's Faster Respawn level, the weather, their podium sheep and the fast refill pass.
 local function getSpawnInterval(player: Player): number
 	local interval = UpgradeData.getSpawnInterval(FarmData.SpawnInterval, getNumber(player, "RespawnLevel"))
-	return interval * WeatherHandler.getRespawnMultiplier() * PodiumBonusHandler.getRespawnMultiplier(player)
+	local passMultiplier = if GamePassService.ownsPass(player, FAST_REFILL_PASS) then 1 / FAST_REFILL_MULTIPLIER else 1
+	return interval * WeatherHandler.getRespawnMultiplier() * PodiumBonusHandler.getRespawnMultiplier(player) * passMultiplier
 end
 
 local function getPremiumLuckMultiplier(player: Player): number
@@ -147,19 +147,27 @@ local function getPityForce(player: Player): SheepHandler.ForcedSpawn?
 	return if forcedType then { sheepType = SheepData.rollVariant(forcedType) } else nil
 end
 
--- After a normal roll: resets the pity if the rebirth sheep turned up.
-local function afterRoll(player: Player, sheep: Model)
-	local sheepType = sheep:GetAttribute("SheepType")
-	if type(sheepType) == "string" then
-		RebirthHandler.noteSpawn(player, sheepType)
+--[[
+	The rebirth sheep the player still needs just landed (rolled or forced): its pity starts over and, when `reveal` is set, the owner's
+	RebirthSheepClient flies the camera to it. Not before REVEAL_MIN_SHEARED, so the tutorial's first shears aren't interrupted.
+]]
+local function onRebirthSheepCheck(player: Player, sheep: Model, reveal: boolean)
+	local adultType = sheep:GetAttribute("AdultType")
+	local required, found = RebirthHandler.getRequirement(player)
+	if type(adultType) ~= "string" or adultType ~= required or found then
+		return
+	end
+	RebirthHandler.noteSpawn(player, adultType)
+	if reveal and getNumber(player, "SheepShearedCount") >= REVEAL_MIN_SHEARED then
+		network.fireClient(network.RemoteEvents.RebirthSheepSpawned, player, sheep:GetAttribute("id"), sheep:GetPivot().Position)
 	end
 end
 
 --[[
 	Straight into the pen (join fill, resets and forced spawns like the Reaper raid); Halloween spawns rise from a pit.
-	`forced` spawns skip the pity and charge.
+	`forced` spawns skip the pity and charge. `reveal` plays the rebirth sheep's cutscene if that's what landed (not for the join / rebirth fills).
 ]]
-local function spawnSheep(player: Player, forced: SheepHandler.ForcedSpawn?): Model?
+local function spawnSheep(player: Player, forced: SheepHandler.ForcedSpawn?, reveal: boolean): Model?
 	local plot = activePlots[player]
 	local position = plot and SheepWanderHandler.getSpawnPosition(plot)
 	if not position then
@@ -169,25 +177,25 @@ local function spawnSheep(player: Player, forced: SheepHandler.ForcedSpawn?): Mo
 	local context = SheepSpawnHandler.getRollContext(player)
 	local roll = forced or getPityForce(player)
 	local sheep = SheepHandler.spawnSheep(player, position, context, roll)
-	if sheep and not forced then
-		applyCharge(sheep)
-		afterRoll(player, sheep)
-	end
-	return sheep
-end
-
--- A refill rolled now (with today's luck) that rides the conveyor before it joins the pen; players see a rare one coming.
-local function spawnBeltSheep(player: Player, at: CFrame): Model?
-	local sheep = SheepHandler.spawnBeltSheep(player, at, SheepSpawnHandler.getRollContext(player), getPityForce(player))
 	if sheep then
-		applyCharge(sheep)
-		afterRoll(player, sheep)
+		if not forced then
+			applyCharge(sheep)
+		end
+		onRebirthSheepCheck(player, sheep, reveal)
 	end
 	return sheep
 end
 
 local function spawnOne(player: Player): boolean
-	return spawnSheep(player, nil) ~= nil
+	return spawnSheep(player, nil, false) ~= nil
+end
+
+-- A refill pops into the pen with a poof so the player sees it arrive.
+local function spawnRefill(player: Player)
+	local sheep = spawnSheep(player, nil, true)
+	if sheep then
+		network.fireAllClients(network.RemoteEvents.SheepPoof, { sheep:GetPivot().Position })
+	end
 end
 
 -- Spawns sheep until the farm holds `target` (capped at the player's capacity).
@@ -200,31 +208,6 @@ local function spawnUpTo(player: Player, target: number)
 	end
 end
 
--- The RobuxConveyor refills ROBUX_RATE_MULTIPLIER times as often as the main belt, alongside it, until the farm stops.
-local function runRobuxBelt(player: Player, plot: Folder)
-	while activePlots[player] == plot do
-		local interval = getSpawnInterval(player) / ROBUX_RATE_MULTIPLIER
-		task.wait(interval)
-		if activePlots[player] ~= plot then
-			break
-		end
-		SheepBeltHandler.step(player, interval, ROBUX_LINE)
-	end
-	robuxBeltRunning[player] = nil
-end
-
--- Unlocks the player's RobuxConveyor once their farm runs and they own the pass (whichever comes last calls this).
-local function tryStartRobuxBelt(player: Player)
-	local plot = activePlots[player]
-	if not plot or robuxBeltRunning[player] or not GamePassService.ownsPass(player, ROBUX_LINE) then
-		return
-	end
-	if SheepBeltHandler.setLineEnabled(player, ROBUX_LINE, true) then
-		robuxBeltRunning[player] = true
-		task.spawn(runRobuxBelt, player, plot)
-	end
-end
-
 local function runFarm(player: Player)
 	local data = PlayerDataHandler.waitForData(player)
 	local plot = PlotHandler.waitForPlot(player)
@@ -233,14 +216,6 @@ local function runFarm(player: Player)
 	end
 
 	activePlots[player] = plot
-	local hasBelt = SheepBeltHandler.start(player, plot, function(at: CFrame, lineName: string): Model?
-		local sheep = spawnBeltSheep(player, at)
-		if sheep and lineName == ROBUX_LINE then
-			network.fireAllClients(network.RemoteEvents.SheepPoof, { at.Position }) -- that belt has no hatch, so its sheep pop in
-		end
-		return sheep
-	end)
-	tryStartRobuxBelt(player)
 	spawnUpTo(player, data.SheepCount or data.MaxSheep)
 	updateCapacityLabel(player)
 	updateLuckFactor(player)
@@ -252,10 +227,8 @@ local function runFarm(player: Player)
 			break
 		end
 		updateLuckFactor(player) -- weather, podium and Robux boosts change without a data change
-		if hasBelt then
-			SheepBeltHandler.step(player, interval)
-		elseif SheepHandler.getSheepCount(player) < getMaxSheep(player) then
-			spawnOne(player)
+		if SheepHandler.getSheepCount(player) < getMaxSheep(player) then
+			spawnRefill(player)
 		end
 	end
 end
@@ -263,14 +236,13 @@ end
 local function stopFarm(player: Player)
 	local plot = activePlots[player]
 	activePlots[player] = nil
-	SheepBeltHandler.stop(player)
 	SheepHandler.clearSheep(player)
 	if plot then
 		setCapacityText(plot, 0, 0)
 	end
 end
 
--- Rebirth: every sheep in the pen and on the belt goes up in a poof (PoofAttachment, played by RebirthClient), then the pen refills from the new pool.
+-- Rebirth: every sheep in the pen goes up in a poof (PoofAttachment, played by RebirthClient), then the pen refills from the new pool.
 local function onRebirthed(player: Player)
 	local plot = activePlots[player]
 	if not plot then
@@ -285,7 +257,6 @@ local function onRebirthed(player: Player)
 		end
 	end
 
-	SheepBeltHandler.clear(player)
 	SheepHandler.clearSheep(player)
 	updateCapacityLabel(player)
 	if #positions > 0 then
@@ -304,12 +275,11 @@ end
 
 -- Drops one extra sheep with the given type / size on the player's farm, even past capacity; nil until their farm is running.
 function SheepSpawnHandler.spawnForced(player: Player, forced: SheepHandler.ForcedSpawn): Model?
-	return spawnSheep(player, forced)
+	return spawnSheep(player, forced, true)
 end
 
 -- Clears the player's sheep and fills the farm back to full capacity (used after a Prestige).
 function SheepSpawnHandler.resetFarm(player: Player)
-	SheepBeltHandler.clear(player)
 	SheepHandler.clearSheep(player)
 	spawnUpTo(player, getMaxSheep(player))
 	updateCapacityLabel(player)
@@ -339,9 +309,6 @@ function SheepSpawnHandler.Start()
 	players.PlayerMembershipChanged:Connect(updateLuckFactor)
 	GamePassService.onChanged(function(player: Player)
 		updateLuckFactor(player)
-	end)
-	GamePassService.onPassOwned(ROBUX_LINE, function(player: Player, _source: GamePassService.Source)
-		tryStartRobuxBelt(player)
 	end)
 	players.PlayerRemoving:Connect(stopFarm)
 	players.PlayerAdded:Connect(runFarm)

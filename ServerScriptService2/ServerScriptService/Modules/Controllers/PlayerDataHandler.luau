@@ -30,7 +30,7 @@ local RENAMED_KEYS = { WoolGainLevel = "MoreWoolLevel" } -- old save key -> curr
 local REMOVED_KEYS = { LuckLevel = true } -- dropped from older saves
 -- Preferences and anything bought with Robux, not progress.
 local KEPT_ON_RESET = { Settings = true, GiftedPasses = true, Boosts = true, FreeRebirths = true, PendingGifts = true, GiftOutbox = true,
-	FirstJoinAt = true, SessionCount = true, StarterPackBought = true, AutoShearTrialUsed = true }
+	FirstJoinAt = true, SessionCount = true, StarterPackBought = true, AutoShearTrialUsed = true, LastOnline = true }
 
 export type Data = {
 	Wool: number,
@@ -70,6 +70,8 @@ export type Data = {
 	SessionCount: number,
 	StarterPackBought: number,
 	AutoShearTrialUsed: number,
+	LastOnline: number, -- os.time() the player was last seen in game; 0 = never (OfflineIncomeHandler)
+	OfflineWool: number, -- offline earnings waiting to be claimed
 }
 
 local DataTemplate = {
@@ -135,6 +137,10 @@ local DataTemplate = {
 	SessionCount = 0, -- loads since FirstJoinAt was set
 	StarterPackBought = 0, -- 1 once the Starter Pack was bought
 	AutoShearTrialUsed = 0, -- 1 once the free Auto Shears trial was used
+
+	-- Offline earnings (OfflineIncomeHandler)
+	LastOnline = 0,
+	OfflineWool = 0,
 }
 
 -- Creating a profile store (Studio saves go to a separate test store)
@@ -278,6 +284,7 @@ end
 local function onPlayerRemoving(player: Player)
 	local profile = profiles[player]
 	if profile then
+		profile.Data.LastOnline = os.time() -- offline earnings count from here
 		profile:Release()
 	end
 end

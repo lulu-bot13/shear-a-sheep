@@ -15,18 +15,27 @@ export type ShearUI = {
 	sheepRequired: number, -- lifetime sheep sheared to unlock it
 	damage: number, -- matches ShearData
 	range: number,
+	tier: string, -- key in TierColors: the card Background's ImageColor3
 }
 
 local shearShopUIData = {}
 
--- In progression order (the card order in the shop, cheapest first).
+-- In card order (matches ShearData). Royal sits right after the basic shears even though it costs more than Large.
 shearShopUIData.Shears = {
-	{ id = "DefaultShear",   displayName = "Basic Shear",     sheepRequired = 0,    damage = 20, range = 6 },
-	{ id = "SteelShears",    displayName = "Steel Shears",    sheepRequired = 3,    damage = 26, range = 7.5 },
-	{ id = "LargeShears",    displayName = "Large Shears",    sheepRequired = 300,  damage = 34, range = 9 },
-	{ id = "ElectricShears", displayName = "Electric Shears", sheepRequired = 1500, damage = 45, range = 11 },
-	{ id = "MasterShears",   displayName = "Master Shears",   sheepRequired = 4500, damage = 60, range = 13 },
+	{ id = "DefaultShear",   displayName = "Basic Shear",     sheepRequired = 0,    damage = 20, range = 6,   tier = "basic" },
+	{ id = "SteelShears",    displayName = "Steel Shears",    sheepRequired = 3,    damage = 26, range = 7.5, tier = "basic" },
+	{ id = "RoyalShear",     displayName = "Royal Shears",    sheepRequired = 750,  damage = 40, range = 10,  tier = "royal" },
+	{ id = "LargeShears",    displayName = "Large Shears",    sheepRequired = 300,  damage = 34, range = 9,   tier = "rare" },
+	{ id = "ElectricShears", displayName = "Electric Shears", sheepRequired = 1500, damage = 45, range = 11,  tier = "rare" },
+	{ id = "MasterShears",   displayName = "Master Shears",   sheepRequired = 4500, damage = 60, range = 13,  tier = "rare" },
+	{ id = "ShadowShear",    displayName = "Shadow Shears",   sheepRequired = 9000, damage = 75, range = 14,  tier = "rare" },
 } :: { ShearUI }
+
+--// Card Background ImageColor3 by tier (basic keeps the Template's own color)
+shearShopUIData.TierColors = {
+	rare = Color3.fromRGB(85, 170, 255),
+	royal = Color3.fromRGB(255, 200, 90),
+} :: { [string]: Color3 }
 
 --// Preview (the spinning 3D shear on each card)
 shearShopUIData.SpinSpeed = 1.2 -- radians per second (about 5 seconds per full turn)
@@ -37,9 +46,9 @@ shearShopUIData.PreviewFieldOfView = 35
 shearShopUIData.ButtonStyles = {
 	locked = { text = "Locked", color = Color3.fromRGB(95, 95, 105) },
 	ready = { text = "Unlock", color = Color3.fromRGB(110, 220, 120) },
-	owned = { text = "Equip", color = Color3.fromRGB(80, 160, 255) },
+	owned = { text = "Equip", color = Color3.fromRGB(110, 220, 120) },
 	equipped = { text = "Unequip", color = Color3.fromRGB(235, 85, 85) },
-	equippedDefault = { text = "Equipped", color = Color3.fromRGB(255, 200, 70) }, -- the default shear can't be unequipped
+	equippedDefault = { text = "Equipped", color = Color3.fromRGB(95, 95, 105) }, -- the default shear can't be unequipped
 }
 
 local rankById: { [string]: number } = {}

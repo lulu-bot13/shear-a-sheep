@@ -41,6 +41,12 @@ settingsData.List = {
 		default = false,
 	},
 	{
+		id = "ScreenShake",
+		title = "Screen Shake",
+		description = "Shake the camera on big hits and rare sheep.",
+		default = true,
+	},
+	{
 		id = "HideOtherPlayers",
 		title = "Hide Other Players",
 		description = "Hide other players' characters and name tags.",

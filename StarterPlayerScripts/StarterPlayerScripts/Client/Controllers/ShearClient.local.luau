@@ -7,7 +7,6 @@
 --// Services
 local collectionService = game:GetService("CollectionService")
 local contextActionService = game:GetService("ContextActionService")
-local debris = game:GetService("Debris")
 local marketplaceService = game:GetService("MarketplaceService")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,7 +18,10 @@ local userInputService = game:GetService("UserInputService")
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local MonetizationData = require(replicatedStorage.Shared.Constants.MonetizationData)
+local damageCounter = require(script.Parent.Parent.Modules.DamageCounter)
+local damageNumbers = require(script.Parent.Parent.Modules.DamageNumbers)
 local purchaseEffect = require(script.Parent.Parent.Modules.PurchaseEffect)
+local screenShake = require(script.Parent.Parent.Modules.ScreenShake)
 local settings = require(script.Parent.Parent.Modules.Settings)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
@@ -35,6 +37,7 @@ local shearRigAnim = replicatedStorage.Assets.Animations.ShearRig
 local uiSounds = soundService:WaitForChild("UISounds")
 local shearSound = uiSounds:WaitForChild("Shear", 10) :: Sound?
 local shearCompleteSound = soundService:WaitForChild("Sheep"):WaitForChild("ShearComplete", 10) :: Sound?
+local zapSound = soundService:WaitForChild("SFX"):WaitForChild("Zap", 10) :: Sound?
 
 --// VFX
 local poofTemplate = replicatedStorage.Assets.VFX.PoofAttachment :: Attachment
@@ -52,12 +55,18 @@ local GROUND_RAY_LENGTH = 50
 local GROUND_RAY_PASSES = 5 -- sheep / players / walls the ground ray may pass through before giving up
 local MIN_FLOOR_NORMAL_Y = 0.6 -- steeper surfaces are walls, not floor
 local FEET_TOLERANCE = 0.5 -- studs the ring may sit above the character's feet (steps, uneven floor)
-local DAMAGE_COLOR = Color3.fromRGB(255, 150, 150)
-local DAMAGE_RISE = 2.5 -- studs the number floats up
-local DAMAGE_SECONDS = 0.7
-local DAMAGE_HEIGHT = 3 -- studs above the sheep's root the number starts
 local ELECTRIC_BURST_COUNT = 18
+local ZAP_CHANCE = 0.3 -- share of electric shear hits that also play SFX.Zap
 local POOF_DEFAULT_EMIT_COUNT = 20 -- used when an emitter in the poof has no "EmitCount" attribute
+local POOF_PREWARM = 3
+
+--// Juice: damage number size and screen shake (trauma, see ScreenShake) for each kind of blow
+local BIG_HIT_RATIO = 0.25 -- a hit taking at least this share of the sheep's health counts as big
+local BIG_HIT_SHAKE = 0.18
+local FINISH_SHAKE = 0.24
+local RARE_FINISH_SHAKE = 0.14 -- added per screen-outline pulse (Epic+, mutations, Luck sheep)
+local RANDOM_SHAKE_CHANCE = 0.12 -- now and then an ordinary hit gives a small nudge too
+local RANDOM_SHAKE = 0.1
 
 --// Wool flash
 local WOOL_PART_NAME = "Torso" -- the sheep's wool mesh, unless it has a separate Wool part
@@ -733,61 +742,72 @@ local function throwWool(position: Vector3, color: Color3, count: number)
 	end
 end
 
--- A damage number that floats up from over the sheep and fades out.
-local function showDamage(position: Vector3, damage: number)
-	local anchor = Instance.new("Attachment")
-	anchor.WorldPosition = position + Vector3.new(0, DAMAGE_HEIGHT, 0)
-	anchor.Parent = workspace.Terrain
+-- Pooled copies of the poof attachment, each with its emitters and how long their particles live.
+type Poof = { attachment: Attachment, emitters: { ParticleEmitter }, lifetime: number }
+local idlePoofs: { Poof } = {}
 
-	local billboard = Instance.new("BillboardGui")
-	billboard.Size = UDim2.fromScale(3, 1.4)
-	billboard.LightInfluence = 0
-	billboard.AlwaysOnTop = true
-	billboard.Adornee = anchor
-	billboard.Parent = anchor
-
-	local label = Instance.new("TextLabel")
-	label.BackgroundTransparency = 1
-	label.Size = UDim2.fromScale(1, 1)
-	label.Font = Enum.Font.GothamBlack
-	label.TextScaled = true
-	label.TextColor3 = DAMAGE_COLOR
-	label.Text = `-{damage}`
-	label.Parent = billboard
-	local stroke = Instance.new("UIStroke")
-	stroke.Thickness = 2
-	stroke.Parent = label
-
-	local tweenInfo = TweenInfo.new(DAMAGE_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	tweenService:Create(billboard, tweenInfo, { StudsOffsetWorldSpace = Vector3.new(0, DAMAGE_RISE, 0) }):Play()
-	tweenService:Create(label, tweenInfo, { TextTransparency = 1 }):Play()
-	tweenService:Create(stroke, tweenInfo, { Transparency = 1 }):Play()
-	debris:AddItem(anchor, DAMAGE_SECONDS + 0.1)
-end
-
--- Bursts a copy of the poof attachment's emitters where a sheep was sheared bare.
-local function playPoof(position: Vector3)
-	local poof = poofTemplate:Clone()
-	poof.Parent = workspace.Terrain
-	poof.WorldPosition = position
-
+local function createPoof(): Poof
+	local attachment = poofTemplate:Clone()
+	local emitters: { ParticleEmitter } = {}
 	local lifetime = 0
-	for _, descendant in poof:GetDescendants() do
+	for _, descendant in attachment:GetDescendants() do
 		if descendant:IsA("ParticleEmitter") then
-			local emitCount = descendant:GetAttribute("EmitCount")
-			descendant:Emit(settings.effectCount(if type(emitCount) == "number" then emitCount else POOF_DEFAULT_EMIT_COUNT))
+			descendant.Enabled = false
+			table.insert(emitters, descendant)
 			lifetime = math.max(lifetime, descendant.Lifetime.Max)
 		end
 	end
-	debris:AddItem(poof, lifetime + 0.5)
+	attachment.Parent = workspace.Terrain
+	return { attachment = attachment, emitters = emitters, lifetime = lifetime }
+end
+
+for _ = 1, POOF_PREWARM do
+	table.insert(idlePoofs, createPoof())
+end
+
+-- Bursts a pooled poof where a sheep was sheared bare; it goes back to the pool once its particles are gone.
+local function playPoof(position: Vector3)
+	local poof = table.remove(idlePoofs) or createPoof()
+	poof.attachment.WorldPosition = position
+	for _, emitter in poof.emitters do
+		local emitCount = emitter:GetAttribute("EmitCount")
+		emitter:Emit(settings.effectCount(if type(emitCount) == "number" then emitCount else POOF_DEFAULT_EMIT_COUNT))
+	end
+	task.delay(poof.lifetime + 0.2, function()
+		table.insert(idlePoofs, poof)
+	end)
 end
 
 local outlineFlashId = 0 -- a new flash cuts off the one still pulsing
+local outlineGui: ScreenGui? = nil -- a copy of Main.ScreenOutline, flashed while Main is hidden (the tutorial turns it off)
 
--- The images under Main.ScreenOutline, hidden between flashes; nil while the gui isn't there.
+-- The copy of StarterGui.Main's ScreenOutline used while Main is off, made the first time it's needed.
+local function getFallbackOutline(): Instance?
+	if outlineGui then
+		return outlineGui:FindFirstChild(OUTLINE_NAME)
+	end
+	local starterMain = game:GetService("StarterGui"):FindFirstChild("Main")
+	local source = starterMain and starterMain:FindFirstChild(OUTLINE_NAME)
+	if not source or not starterMain:IsA("ScreenGui") then
+		return nil
+	end
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "ShearOutlineFlash"
+	gui.IgnoreGuiInset = starterMain.IgnoreGuiInset
+	gui.ScreenInsets = starterMain.ScreenInsets
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = starterMain.DisplayOrder
+	gui:SetAttribute("EffectLayer", true) -- TutorialClient leaves it on
+	source:Clone().Parent = gui
+	gui.Parent = playerGui
+	outlineGui = gui
+	return gui:FindFirstChild(OUTLINE_NAME)
+end
+
+-- The images under Main.ScreenOutline (or its copy while Main is off), hidden between flashes; nil while neither is there.
 local function getOutlineImages(): { ImageLabel }?
 	local main = playerGui:FindFirstChild("Main")
-	local outline = main and main:FindFirstChild(OUTLINE_NAME)
+	local outline = if main and main:IsA("ScreenGui") and main.Enabled then main:FindFirstChild(OUTLINE_NAME) else getFallbackOutline()
 	if not outline then
 		return nil
 	end
@@ -849,27 +869,50 @@ task.spawn(function()
 	getOutlineImages()
 end)
 
-local function onShearHit(hits: { { sheep: Model?, position: Vector3, damage: number, color: Color3, flashColor: Color3?, flashPulses: number? } })
+type Hit = {
+	sheep: Model?,
+	position: Vector3,
+	damage: number,
+	color: Color3,
+	flashColor: Color3?,
+	flashPulses: number?,
+	ratio: number?, -- share of the sheep's full health this hit took
+}
+
+local function onShearHit(hits: { Hit })
 	local finishedAny = false
 	local flashColor: Color3?, flashPulses = nil, 0
+	local shake = 0
 	for _, hit in hits do
 		-- The most special sheep in the swing picks the flash.
 		if hit.flashColor and (hit.flashPulses or 1) > flashPulses then
 			flashColor, flashPulses = hit.flashColor, hit.flashPulses or 1
 		end
 
-		showDamage(hit.position, hit.damage)
-
-		-- No sheep means this blow sheared it bare (it is already gone), so it gets the bigger burst and the poof.
+		-- No sheep means this blow sheared it bare (it is already gone), so it gets the bigger burst, the poof and the shower.
 		local sheep = hit.sheep
-		if sheep and sheep:IsDescendantOf(workspace) then
+		local finished = not (sheep and sheep:IsDescendantOf(workspace))
+		local big = (hit.ratio or 0) >= BIG_HIT_RATIO
+		damageNumbers.show(hit.position, hit.damage, if finished then "Finish" elseif big then "Big" else "Normal")
+		damageCounter.add(hit.damage)
+
+		if not finished and sheep then
 			flashWool(sheep)
 			throwWool(hit.position, hit.color, settings.effectCount(WOOL_CHUNKS_PER_HIT))
+			shake = math.max(shake, if big then BIG_HIT_SHAKE else 0)
 		else
 			throwWool(hit.position, hit.color, settings.effectCount(WOOL_CHUNKS_FINISH))
 			playPoof(hit.position)
+			shake = math.max(shake, FINISH_SHAKE + (hit.flashPulses or 0) * RARE_FINISH_SHAKE)
 			finishedAny = true
 		end
+	end
+
+	if shake <= 0 and math.random() < RANDOM_SHAKE_CHANCE then
+		shake = RANDOM_SHAKE
+	end
+	if shake > 0 then
+		screenShake.add(shake)
 	end
 
 	if shearSound then
@@ -885,12 +928,17 @@ local function onShearHit(hits: { { sheep: Model?, position: Vector3, damage: nu
 		flashOutline(flashColor, flashPulses)
 	end
 
-	-- Electric shears crackle on every hit (other players see it through the tool's "Snips" attribute).
+	-- Electric shears crackle on every hit (other players see it through the tool's "Snips" attribute) and sometimes zap.
 	if heldTool then
+		local electric = false
 		for _, descendant in heldTool:GetDescendants() do
 			if descendant:IsA("ParticleEmitter") and descendant.Name == "ElectricBurst" then
 				descendant:Emit(settings.effectCount(ELECTRIC_BURST_COUNT))
+				electric = true
 			end
+		end
+		if electric and zapSound and math.random() < ZAP_CHANCE then
+			zapSound:Play()
 		end
 	end
 end

@@ -86,12 +86,31 @@ for _, instance in collectionService:GetTagged(TAG) do
 	onShineAdded(instance)
 end
 
+-- GUI children turn with their parent, so anything sitting inside a shine (art layered on top of it) is turned back the
+-- other way and stays still: only the shine itself spins.
+local childRotations: { [GuiObject]: number } = setmetatable({}, { __mode = "k" }) :: any
+
+local function holdChildrenStill(image: ImageLabel, turned: number)
+	for _, child in image:GetChildren() do
+		if child:IsA("GuiObject") and not shines[child :: any] then
+			local base = childRotations[child]
+			if base == nil then
+				base = child.Rotation
+				childRotations[child] = base
+			end
+			child.Rotation = base - turned
+		end
+	end
+end
+
 -- Rotation comes from the clock, so the spin speed doesn't depend on frame rate; hidden shines are skipped.
 runService.RenderStepped:Connect(function()
 	local now = os.clock()
 	for image, shine in shines do
 		if isShown(image) then
-			image.Rotation = (shine.startRotation + (now - shine.addedAt) * getSpeed(image)) % 360
+			local turned = ((now - shine.addedAt) * getSpeed(image)) % 360
+			image.Rotation = (shine.startRotation + turned) % 360
+			holdChildrenStill(image, turned)
 		end
 	end
 end)

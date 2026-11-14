@@ -1,7 +1,7 @@
 --!strict
 
 --[[
-	King Sheep world boss tuning: when it is rolled, how tough it is, what it does in the arena and what it pays out.
+	King Sheep world boss tuning: when it arrives, how tough it is, what it does in the arena and what it pays out.
 
 	Location: ServerScriptService.Modules.Constants.WorldBossData
 ]]--
@@ -13,15 +13,13 @@ worldBossData.SpawnTag = "WorldBossSpawn" -- the part it rises at (Base.BossAren
 worldBossData.Tag = "WorldBoss" -- on the live boss model; ShearClient outlines it and WorldBossClient draws its bars
 worldBossData.Attribute = "WorldBoss" -- true on the live boss model; ShearHandler forwards hits on it here
 
---// Rolls -----------------------------------------------------------------------------------
--- Rolled when a Clear spell starts (every ~3.5-4.5 min) and once during each Night.
+--// Schedule --------------------------------------------------------------------------------
+-- Arrives on a fixed timer, counted down on the plaza's KingSign and published as workspace "WorldBossNextAt".
 
-worldBossData.ClearChance = 0.2
-worldBossData.NightChance = 0.6
-worldBossData.NightRollDelay = 90 -- seconds into the Night; with the warning it arrives 2 min after the Night began
-worldBossData.ServerLuckChanceMultiplier = 3 -- while Server Luck is active
-worldBossData.MaxChance = 0.9
-worldBossData.CooldownSeconds = 360 -- after a boss leaves (defeated or escaped) before the next roll can hit
+worldBossData.FirstArrivalSeconds = 300 -- after the server starts
+worldBossData.IntervalSeconds = 600 -- after a boss leaves (defeated or escaped) until the next one arrives
+worldBossData.ServerLuckIntervalSeconds = 300 -- the wait is cut to at most this while Server Luck is active
+worldBossData.EmptyRetrySeconds = 60 -- pushed back this long when it's due with nobody in the server
 worldBossData.PendingSeconds = 30 -- warning before it arrives
 
 --// Fight -----------------------------------------------------------------------------------

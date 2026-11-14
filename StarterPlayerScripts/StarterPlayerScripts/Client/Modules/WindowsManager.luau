@@ -8,6 +8,9 @@
 --// Services
 local tweenService = game:GetService("TweenService")
 local lighting = game:GetService("Lighting")
+local players = game:GetService("Players")
+
+local playerGui = players.LocalPlayer:WaitForChild("PlayerGui")
 
 --// Configs
 local EXIT_BUTTON_NAME = "Exit"
@@ -130,6 +133,37 @@ local function getScaledFrame(frame: GuiObject): ScaledFrame
 	return { frame = frame, uiScale = uiScale, baseScale = uiScale.Scale }
 end
 
+--[[
+	A button in a gui that resets on spawn (Main's HUD buttons) is destroyed with its gui on every respawn, so the same button
+	in each new copy is connected too; otherwise the HUD's window buttons would stop working after the first death.
+]]
+local function followRespawnedButton(button: GuiButton, onActivated: () -> ())
+	local path: { string } = {}
+	local current: Instance? = button
+	while current and not current:IsA("LayerCollector") do
+		table.insert(path, 1, current.Name)
+		current = current.Parent
+	end
+	local gui = current
+	if not gui or not gui:IsA("ScreenGui") or not gui.ResetOnSpawn then
+		return
+	end
+
+	local guiName = gui.Name
+	playerGui.ChildAdded:Connect(function(child: Instance)
+		if child.Name ~= guiName or not child:IsA("ScreenGui") then
+			return
+		end
+		local found: Instance? = child
+		for _, childName in path do
+			found = found and found:WaitForChild(childName, 10)
+		end
+		if found and found:IsA("GuiButton") and found ~= button then
+			found.Activated:Connect(onActivated)
+		end
+	end)
+end
+
 function WindowsManager.register(name: string, options: WindowOptions): Window
 	local gui, frame = options.gui, options.frame
 
@@ -239,6 +273,7 @@ function WindowsManager.register(name: string, options: WindowOptions): Window
 
 	if options.openButton then
 		options.openButton.Activated:Connect(window.toggle)
+		task.spawn(followRespawnedButton, options.openButton, window.toggle)
 	end
 
 	return window

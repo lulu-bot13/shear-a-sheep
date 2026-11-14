@@ -71,7 +71,7 @@ local HUGE_WINDUP_SECONDS = if type(hugeWindup) == "number" then hugeWindup else
 local RISING = "Rising" -- true while a Halloween spawn climbs out of its pit; nothing shears or picks it up meanwhile
 local PIT_OPEN_SECONDS = if type(pitOpen) == "number" then pitOpen else 0.45
 local PIT_RISE_SECONDS = if type(pitRise) == "number" then pitRise else 1.3
-local ON_BELT = "OnBelt" -- true while a sheep rides its plot's conveyor; it is not registered, counted or shearable yet
+
 
 --// Object pool keys
 local SHEEP_POOL = "SheepModel" -- keyed by sheep type name, since meshes differ per type
@@ -94,7 +94,7 @@ local sheepById: { [number]: Model } = {}
 local woolConnections: { [number]: RBXScriptConnection } = {}
 local countByOwner: { [number]: number? } = {}
 local pendingSheep: { [Model]: number } = {} -- Huge windups and Halloween rises, by owner id: counted but not yet registered
-local beltSheep: { [Model]: number } = {} -- riding a conveyor, by owner id: neither counted nor registered
+
 local nextSheepId = 0
 local random = Random.new()
 
@@ -541,8 +541,6 @@ local function resetSheepForPool(sheep: Instance)
 	sheep:SetAttribute(OWNER_ATTRIBUTE, nil)
 	sheep:SetAttribute("Grazing", nil)
 	sheep:SetAttribute(RISING, nil)
-	sheep:SetAttribute(ON_BELT, nil)
-	sheep:SetAttribute("Bolting", nil) -- SheepWanderHandler's conveyor bolt
 	sheep:SetAttribute("TutorialSheep", nil) -- TutorialHandler's override must not follow the pooled model to a normal spawn
 
 	local humanoid = sheep:FindFirstChildOfClass("Humanoid")
@@ -675,12 +673,6 @@ function SheepHandler.clearSheep(player: Player)
 	for sheep, ownerId in pendingSheep do
 		if ownerId == player.UserId then
 			pendingSheep[sheep] = nil
-			poolSheep(sheep)
-		end
-	end
-	for sheep, ownerId in beltSheep do
-		if ownerId == player.UserId then
-			beltSheep[sheep] = nil
 			poolSheep(sheep)
 		end
 	end
@@ -876,6 +868,7 @@ local function buildSheep(player: Player, context: SheepData.RollContext, forced
 	sheepModel:SetAttribute("BaseWool", getBaseWool(info))
 	sheepModel:SetAttribute("LuckAmount", math.floor(info.LuckAmount * mutationLuck + 0.5))
 	sheepModel:SetAttribute("SheepType", sheepType)
+	sheepModel:SetAttribute("AdultType", info.adult or sheepType) -- the type without its Baby/Giant variant, e.g. for the rebirth sheep
 	sheepModel:SetAttribute("SheepName", getPlainName(info, size, mutation))
 	sheepModel:SetAttribute(MutationData.Attribute, if mutation then mutation.id else nil)
 	sheepModel:SetAttribute("TutorialSheep", nil) -- a pooled model may still carry TutorialHandler's mark
@@ -1000,78 +993,6 @@ function SheepHandler.spawnSheep(player: Player, position: Vector3, context: She
 	return sheepModel, id
 end
 
---// Conveyor --------------------------------------------------------------------------------
-
---[[
-	Rolls a sheep (see buildSheep) standing on the player's conveyor: feet at `at.Position`, root facing `at.LookVector`.
-	It stays anchored, unregistered and uncounted (OnBelt) until admitBeltSheep, so nothing shears, walks or carries it.
-]]
-function SheepHandler.spawnBeltSheep(player: Player, at: CFrame, context: SheepData.RollContext, forced: ForcedSpawn?): Model?
-	local sheepFolder = getSheepFolder(player)
-	if not sheepFolder then
-		return nil
-	end
-	local sheepModel = buildSheep(player, context, forced)
-	if not sheepModel then
-		return nil
-	end
-
-	local root = sheepModel:FindFirstChild("HumanoidRootPart") :: BasePart
-	root.Anchored = true
-	sheepModel:PivotTo(at * root.CFrame:ToObjectSpace(sheepModel:GetPivot()))
-	local boxCFrame, boxSize = sheepModel:GetBoundingBox()
-	sheepModel:PivotTo(sheepModel:GetPivot() + Vector3.new(0, at.Position.Y - (boxCFrame.Position.Y - boxSize.Y / 2), 0))
-
-	sheepModel:SetAttribute(ON_BELT, true)
-	beltSheep[sheepModel] = player.UserId
-	sheepModel.Parent = sheepFolder
-	updateAnimation(sheepModel, 0) -- idles while it rides
-	return sheepModel
-end
-
-function SheepHandler.isBeltSheep(sheep: Model): boolean
-	return beltSheep[sheep] ~= nil
-end
-
--- Moves a belt sheep into the pen with its feet at `position` and counts it. Returns its id, or nil if it was cleared meanwhile.
-function SheepHandler.admitBeltSheep(sheep: Model, position: Vector3): number?
-	local ownerId = beltSheep[sheep]
-	local owner = if ownerId then players:GetPlayerByUserId(ownerId) else nil
-	local sheepFolder = if owner then getSheepFolder(owner) else nil
-	local id = sheep:GetAttribute("id")
-	if not ownerId then
-		return nil -- already pooled by clearSheep
-	end
-	beltSheep[sheep] = nil
-	if not sheepFolder or type(id) ~= "number" then
-		poolSheep(sheep)
-		return nil
-	end
-
-	local boxCFrame, boxSize = sheep:GetBoundingBox()
-	local footDepth = sheep:GetPivot().Position.Y - (boxCFrame.Position.Y - boxSize.Y / 2)
-	local _, yaw = sheep:GetPivot():ToOrientation()
-	sheep:SetAttribute(ON_BELT, nil)
-	sheep:PivotTo(CFrame.new(position + Vector3.new(0, footDepth, 0)) * CFrame.Angles(0, yaw, 0))
-	registerSheep(sheep, id, sheepFolder)
-
-	-- A Huge sheep was already seen riding in, so it only gets HugeSpawnVFX's landing burst.
-	if sheep:GetAttribute(SIZE_TIER) == HUGE_TIER then
-		network.fireAllClients(network.RemoteEvents.HugeSheepSpawn, CFrame.new(position) * CFrame.Angles(0, yaw, 0), ownerId, true)
-	end
-
-	setCount(ownerId, (countByOwner[ownerId] or 0) + 1)
-	return id
-end
-
--- Pools a belt sheep that never reached the pen.
-function SheepHandler.discardBeltSheep(sheep: Model)
-	if beltSheep[sheep] then
-		beltSheep[sheep] = nil
-		poolSheep(sheep)
-	end
-end
-
 --// Saving -------------------------------------------------------------------------------
 
 -- What a sheep kept off the farm (e.g. on a podium) saves as.
@@ -1148,6 +1069,7 @@ function SheepHandler.loadSheep(player: Player, saved: any): Model?
 	sheepModel:SetAttribute("BaseWool", getBaseWool(info))
 	sheepModel:SetAttribute("LuckAmount", math.floor(info.LuckAmount * (if mutation then mutation.luck else 1) + 0.5))
 	sheepModel:SetAttribute("SheepType", saved.type)
+	sheepModel:SetAttribute("AdultType", info.adult or saved.type)
 	sheepModel:SetAttribute("SheepName", getPlainName(info, size, mutation))
 	sheepModel:SetAttribute(MutationData.Attribute, if mutation then mutation.id else nil)
 	sheepModel:SetAttribute("Rarity", info.rarity)

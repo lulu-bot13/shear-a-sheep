@@ -60,6 +60,7 @@ local KEEP_GUIS = {
 	AlertsGui = true,
 	GemPopup = true,
 	BestFindAnnouncement = true,
+	LeaveWarning = true,
 }
 
 --// State

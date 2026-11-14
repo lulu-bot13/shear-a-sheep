@@ -221,6 +221,20 @@ function shearShopHandler.getShear(player: Player): ShearData.ShearInfo
 	return ShearData.get(getShearId(player)) or ShearData.Shears[1]
 end
 
+-- Gives the player a shear outside the shop (e.g. the group reward) and equips it; false if the id is unknown.
+function shearShopHandler.grantShear(player: Player, id: string): boolean
+	if not ShearData.get(id) or not PlayerDataHandler.getData(player) then
+		return false
+	end
+	addOwned(player, id)
+	setShear(player, id)
+	return true
+end
+
+function shearShopHandler.ownsShear(player: Player, id: string): boolean
+	return isOwned(player, id)
+end
+
 -- The equipped shear's Tool if the character is holding it out, else nil.
 function shearShopHandler.getHeldTool(player: Player): Tool?
 	local character = player.Character

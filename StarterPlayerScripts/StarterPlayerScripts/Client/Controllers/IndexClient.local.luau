@@ -46,11 +46,11 @@ local rewardsFrame = mainFrame:WaitForChild("RewardFrame") :: GuiObject
 local rewardAmount = rewardsFrame:WaitForChild("ClaimAmount") :: TextLabel
 local claimButton = rewardsFrame:WaitForChild("BuyButton") :: ImageButton
 
--- Claim All under RewardFrame: an ImageButton with a Label and an Amount count of claimable entries.
-local claimAllFrame = rewardsFrame:WaitForChild("ClaimAll") :: GuiObject -- popped/shaken instead of its button, which ButtonClient tweens
+-- Claim All: shown with 2+ found sheep; ClaimAmount is their combined Luck, the button's Amount is how many.
+local claimAllFrame = mainFrame:WaitForChild("ClaimAll") :: GuiObject -- popped/shaken instead of its button, which ButtonClient tweens
 local claimAllButton = claimAllFrame:WaitForChild("ClaimAllButton") :: ImageButton
-local claimAllLabel = claimAllButton:WaitForChild("Label") :: TextLabel
 local claimAllCountLabel = claimAllButton:WaitForChild("Amount") :: TextLabel
+local claimAllLuckLabel = claimAllFrame:WaitForChild("ClaimAmount") :: TextLabel
 
 -- How many sheep types have been unlocked out of all of them.
 local unlockBar = mainFrame:WaitForChild("ProgressFrame") :: GuiObject
@@ -133,8 +133,6 @@ local spinAngle = 0
 
 local rewardAmountColor = rewardAmount.TextColor3
 local claimButtonImageColor = claimButton.ImageColor3
-local claimAllLabelColor = claimAllLabel.TextColor3
-local claimAllButtonColor = claimAllButton.ImageColor3
 
 
 --// Helpers ---------------------------------------------------------------------
@@ -314,6 +312,69 @@ local function buildPreview(viewport: ViewportFrame, entry: any)
 	end
 end
 
+--[[
+	Card previews are built lazily, a few per frame while the Index is open, so joining never clones every sheep model at once
+	(that was a big hitch on load). After joining they also trickle in slowly in the background, so a first open is quick too.
+]]
+local PREVIEWS_PER_FRAME = 3
+local BACKGROUND_DELAY = 20 -- seconds after the first IndexState before background building starts
+local BACKGROUND_INTERVAL = 0.3
+
+local previewQueue: { Card } = {}
+local queuedPreviews: { [Card]: boolean } = {}
+local previewConnection: RBXScriptConnection? = nil
+local backgroundStarted = false
+local isIndexOpen: () -> boolean = function()
+	return false
+end -- replaced once the window is registered
+
+-- Builds the next still-wanted preview in the queue; false once it's empty.
+local function buildNextPreview(): boolean
+	while #previewQueue > 0 do
+		local card = table.remove(previewQueue, 1) :: Card
+		if queuedPreviews[card] and card.viewport and cards[card.id] == card then
+			queuedPreviews[card] = nil
+			buildPreview(card.viewport, card.entry)
+			return true
+		end
+		queuedPreviews[card] = nil
+	end
+	return false
+end
+
+local function stepPreviews()
+	if isIndexOpen() then
+		for _ = 1, PREVIEWS_PER_FRAME do
+			if not buildNextPreview() then
+				break
+			end
+		end
+	end
+	if #previewQueue == 0 and previewConnection then
+		previewConnection:Disconnect()
+		previewConnection = nil
+	end
+end
+
+local function queuePreview(card: Card)
+	if not card.viewport or queuedPreviews[card] then
+		return
+	end
+	queuedPreviews[card] = true
+	table.insert(previewQueue, card)
+	if not previewConnection then
+		previewConnection = runService.Heartbeat:Connect(stepPreviews)
+	end
+	if not backgroundStarted then
+		backgroundStarted = true
+		task.delay(BACKGROUND_DELAY, function()
+			while buildNextPreview() do
+				task.wait(BACKGROUND_INTERVAL)
+			end
+		end)
+	end
+end
+
 --// Spinning the selected sheep -------------------------------------------------------
 
 local function onSpin(deltaTime: number)
@@ -455,26 +516,24 @@ local function renderAlertBadge()
 	alertBadge.Visible = findUnclaimed() ~= nil
 end
 
-local function countClaimable(): number
-	local count = 0
+-- How many entries (on every page) are waiting to be claimed, and their combined Luck.
+local function countClaimable(): (number, number)
+	local count, luck = 0, 0
 	for _, entry in entriesByKey do
 		if entry.status == "Found" then
 			count += 1
+			luck += entry.indexLuck or 0
 		end
 	end
-	return count
+	return count, luck
 end
 
--- Claim All shows how many entries (on every page) are waiting, and dims with none.
+-- Claim All only shows with more than one sheep to claim; a single one is claimed from RewardFrame.
 local function renderClaimAll()
-	local count = countClaimable()
-	local canClaim = count > 0
-	claimAllCountLabel.Visible = canClaim
+	local count, luck = countClaimable()
+	claimAllFrame.Visible = count > 1
 	claimAllCountLabel.Text = tostring(count)
-	claimAllButton.AutoButtonColor = canClaim
-	claimAllButton.Active = canClaim
-	claimAllButton.ImageColor3 = if canClaim then claimAllButtonColor else CLAIMED_COLOR
-	claimAllLabel.TextColor3 = if canClaim then claimAllLabelColor else claimAllLabelColor:Lerp(CLAIMED_COLOR, 0.5)
+	claimAllLuckLabel.Text = `+{formatWithCommas(luck)}`
 end
 
 -- Fills ProgressFrame's ProgressBar with the share of the current page's entries that aren't Locked any more.
@@ -540,9 +599,7 @@ local function createCard(entry: any, order: number): Card
 	}
 	card.nameLabel.RichText = true -- the mutation prefix is coloured
 
-	if viewport then
-		buildPreview(viewport, entry)
-	end
+	queuePreview(card)
 
 	-- SheepTemplate isn't a button, so an invisible one covering the card takes the clicks.
 	local button: GuiButton
@@ -571,6 +628,7 @@ local function removeCard(card: Card)
 	if card.viewport then
 		clearPreview(card.viewport)
 	end
+	queuedPreviews[card] = nil
 	card.nameRainbow:Destroy()
 	card.previewRainbow:Destroy()
 	card.frame:Destroy()
@@ -856,6 +914,7 @@ local indexWindow = windowsManager.register("Index", {
 	end,
 	onClose = stopSpin,
 })
+isIndexOpen = indexWindow.isOpen
 
 cardTemplate.Visible = false
 alertBadge.Visible = false

@@ -16,7 +16,7 @@ export type ShearInfo = {
 
 local shearData = {}
 
---// Shears (list order = progression order) ----------------------------------------------
+--// Shears (list order = shop card order) -------------------------------------------------
 
 shearData.DefaultShearId = "DefaultShear"
 
@@ -27,9 +27,11 @@ shearData.DefaultShearId = "DefaultShear"
 shearData.Shears = {
 	{ id = "DefaultShear",   sheepRequired = 0,    damage = 20, range = 6 },
 	{ id = "SteelShears",    sheepRequired = 3,    damage = 26, range = 7.5 },
+	{ id = "RoyalShear",     sheepRequired = 750,  damage = 40, range = 10 }, -- shown right after the basic shears, ahead of its cost order
 	{ id = "LargeShears",    sheepRequired = 300,  damage = 34, range = 9 },
 	{ id = "ElectricShears", sheepRequired = 1500, damage = 45, range = 11 },
 	{ id = "MasterShears",   sheepRequired = 4500, damage = 60, range = 13 },
+	{ id = "ShadowShear",    sheepRequired = 9000, damage = 75, range = 14 },
 } :: { ShearInfo }
 
 --// Swinging ------------------------------------------------------------------------------

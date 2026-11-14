@@ -73,6 +73,15 @@ export type EnumType = "ShearSwing"
 	| "SheepPoof"
 	| "RequestGoalState"
 	| "GoalState"
+	-- Offline earnings
+	| "RequestOfflineEarnings"
+	| "OfflineEarningsState"
+	| "ClaimOfflineEarnings"
+	-- Rebirth sheep reveal
+	| "RebirthSheepSpawned"
+	-- Group shear
+	| "ClaimGroupShear"
+	| "GroupShearResult"
 
 local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	ShearSwing = "ShearSwing",
@@ -139,6 +148,15 @@ local RemoteEventName: StrictEnum.FromEnum<EnumType> = {
 	SheepPoof = "SheepPoof",
 	RequestGoalState = "RequestGoalState",
 	GoalState = "GoalState",
+	-- Offline earnings
+	RequestOfflineEarnings = "RequestOfflineEarnings",
+	OfflineEarningsState = "OfflineEarningsState",
+	ClaimOfflineEarnings = "ClaimOfflineEarnings",
+	-- Rebirth sheep reveal
+	RebirthSheepSpawned = "RebirthSheepSpawned",
+	-- Group shear
+	ClaimGroupShear = "ClaimGroupShear",
+	GroupShearResult = "GroupShearResult",
 }
 
 return RemoteEventName

@@ -33,7 +33,6 @@ local amountKnob = amountSwitch:WaitForChild("Button") :: TextButton
 local amountLabel = amountKnob:WaitForChild("Multiplier") :: TextLabel
 local hudButtons = playerGui:WaitForChild("Main"):FindFirstChild("Buttons")
 local hudButton = hudButtons and hudButtons:FindFirstChild("Upgrades") :: GuiButton? -- optional: the shack prompts work without it
-local alertBadge = hudButton and hudButton:FindFirstChild("Alert", true) :: GuiObject? -- optional badge on the HUD button
 local wool = player:WaitForChild("Inventory"):WaitForChild("Wool") :: IntValue
 
 --// Sounds
@@ -52,6 +51,8 @@ local DISABLED_COLOR = Color3.fromRGB(130, 130, 130) -- the Purchase button's Im
 local MIN_SCALE_FACTOR = 0.05 -- below this the window is closing, so card sizes aren't measured
 local LEVEL_BOUGHT_COLOR = Color3.fromRGB(102, 255, 56) -- a ProgressionFrame cell for a level the player owns
 local LEVEL_EMPTY_COLOR = Color3.fromRGB(120, 120, 120)
+local STATE_RETRY_SECONDS = 1 -- while the shop is open with no cards yet, the state is asked for again this often
+local OPEN_SETTLE_SECONDS = 0.25 -- after the open tween, when the cards are measured again at full size
 local LEVELS_PER_PAGE = 16 -- cells in a full ProgressionFrame; buying past them starts the next page
 local CELLS_PER_ROW = 8
 local AMOUNTS = { 1, "max" } -- what the switch flips between; "max" buys as many levels as the wool covers
@@ -136,7 +137,11 @@ end
 
 --// Cards -----------------------------------------------------------------------------
 
+-- A window that hasn't been laid out yet (its gui is off) measures 0; its cards keep their Studio size until it has been.
 local function toWindowPixels(size: UDim, windowHeight: number): UDim
+	if windowHeight < 1 then
+		return size
+	end
 	local canvasHeight = math.max(windowHeight, designCanvasY.Offset + designCanvasY.Scale * windowHeight)
 	return UDim.new(0, math.floor(size.Offset + size.Scale * canvasHeight))
 end
@@ -363,8 +368,26 @@ local function createCard(state: any, order: number): Card
 	return card
 end
 
+-- The HUD button's optional "Alert" badge, looked up in the current Main (a respawn swaps in a fresh copy).
+local pulsedBadges: { [GuiObject]: boolean } = setmetatable({}, { __mode = "k" }) :: any
+local function getAlertBadge(): GuiObject?
+	local main = playerGui:FindFirstChild("Main")
+	local buttons = main and main:FindFirstChild("Buttons")
+	local button = buttons and buttons:FindFirstChild("Upgrades")
+	local badge = button and button:FindFirstChild("Alert", true)
+	if not badge or not badge:IsA("GuiObject") then
+		return nil
+	end
+	if not pulsedBadges[badge] then
+		pulsedBadges[badge] = true
+		alertPulse.attach(badge)
+	end
+	return badge
+end
+
 -- The HUD button's "Alert" badge shows an exclamation mark while any upgrade is affordable.
 local function updateAlert()
+	local alertBadge = getAlertBadge()
 	if not alertBadge then
 		return
 	end
@@ -418,8 +441,24 @@ local window = windowsManager.register("UpgradeShop", {
 	openButton = hudButton,
 	onOpen = function()
 		openToken += 1
+		local token = openToken
 		setAmountIndex(1)
 		network.fireServer(network.RemoteEvents.RequestUpgradeState)
+
+		-- Measured again at full size once the pop-in is done, and the state asked for until the cards exist (a dropped or
+		-- early request must never leave the shop empty, e.g. straight after joining in the tutorial).
+		task.delay(OPEN_SETTLE_SECONDS, function()
+			updateCardSizes()
+			updateCanvasSize()
+		end)
+		task.spawn(function()
+			while next(cards) == nil and token == openToken do
+				task.wait(STATE_RETRY_SECONDS)
+				if next(cards) == nil and token == openToken then
+					network.fireServer(network.RemoteEvents.RequestUpgradeState)
+				end
+			end
+		end)
 	end,
 	onClose = function()
 		openToken += 1
@@ -504,9 +543,11 @@ end
 cardTemplate.Visible = false
 scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.None -- updateCanvasSize sizes it instead
 updateAlert()
-if alertBadge then
-	alertPulse.attach(alertBadge)
-end
+playerGui.ChildAdded:Connect(function(child: Instance)
+	if child.Name == "Main" then
+		task.delay(1, updateAlert) -- the respawned HUD's badge
+	end
+end)
 -- MAX's level count and price follow the wool; 1X only needs its button greyed or not.
 wool.Changed:Connect(function()
 	updateAlert()

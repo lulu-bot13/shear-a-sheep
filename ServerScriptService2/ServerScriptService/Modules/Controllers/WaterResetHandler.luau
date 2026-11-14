@@ -92,7 +92,7 @@ local function resetPlayer(player: Player, character: Model, contact: Vector3)
 	end
 end
 
--- A registered farm sheep (not one being carried or riding a conveyor) goes back to its pen.
+-- A registered farm sheep (not one being carried) goes back to its pen.
 local function resetSheep(sheep: Model, contact: Vector3)
 	local id = sheep:GetAttribute("id")
 	if type(id) ~= "number" or SheepHandler.getSheep(id) ~= sheep then

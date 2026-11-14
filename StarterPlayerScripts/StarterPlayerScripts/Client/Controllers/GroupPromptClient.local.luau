@@ -6,8 +6,10 @@
 --// Services
 local groupService = game:GetService("GroupService")
 local players = game:GetService("Players")
+local replicatedStorage = game:GetService("ReplicatedStorage")
 
 --// Modules
+local GroupData = require(replicatedStorage.Shared.Constants.GroupData)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
 --// Instances
@@ -15,13 +17,12 @@ local player = players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 --// Configs
-local GROUP_ID = 0 -- 0 = the group that owns the game
 local PROMPT_INTERVAL_SECONDS = 15 * 60
 local RETRY_SECONDS = 30 -- wait before trying again while the tutorial or a window is in the way
 
-local groupId = if GROUP_ID ~= 0 then GROUP_ID elseif game.CreatorType == Enum.CreatorType.Group then game.CreatorId else 0
+local groupId = GroupData.getGroupId()
 if groupId == 0 then
-	warn("[GroupPromptClient] set GROUP_ID, the game isn't owned by a group")
+	warn("[GroupPromptClient] set GroupData.GroupId, the game isn't owned by a group")
 	return
 end
 

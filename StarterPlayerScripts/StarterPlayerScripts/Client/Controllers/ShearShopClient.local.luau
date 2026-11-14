@@ -174,15 +174,17 @@ local function checkShearUnlocks()
 		return
 	end
 
-	local highest: string? = nil
+	local highest: UIData.ShearUI? = nil
 	for _, info in UIData.Shears do
 		if info.sheepRequired > previous and info.sheepRequired <= count and not isOwned(info.id) then
 			announcements.show("ShearAlert", `NEW SHEAR UNLOCKED: {info.displayName}`)
-			highest = info.id -- in progression order, so the last one is the highest
+			if not highest or info.sheepRequired > highest.sheepRequired then
+				highest = info -- card order isn't cost order (Royal), so compare costs
+			end
 		end
 	end
 	if highest then
-		shopGui:SetAttribute(UNLOCKED_ATTRIBUTE, highest)
+		shopGui:SetAttribute(UNLOCKED_ATTRIBUTE, highest.id)
 	end
 end
 
@@ -259,6 +261,12 @@ local function createCards()
 		nameLabel.Text = info.displayName
 		buffsLabel.Text = `Damage: {info.damage}\nRange: {info.range} studs`
 		purchase.AutoButtonColor = true
+
+		local tierColor = UIData.TierColors[info.tier]
+		local background = frame:FindFirstChild("Background")
+		if tierColor and background and background:IsA("ImageLabel") then
+			background.ImageColor3 = tierColor
+		end
 
 		local card: Card = {
 			info = info,

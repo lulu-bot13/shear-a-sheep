@@ -18,17 +18,6 @@ farmData.MaxSheepCap = 40 -- hard limit, however many capacity upgrades are boug
 farmData.SpawnInterval = 6 -- seconds between new sheep while the farm is below capacity; slow on purpose so Faster Respawn matters
 farmData.SpawnDropHeight = 3 -- studs above the ground a sheep appears at
 
--- Refills ride the plot's Conveyor.Belt (SheepBeltHandler); its Speed attribute (studs/s) is set in Studio.
-farmData.Belt = {
-	Enabled = true, -- false removes every plot's Conveyor and drops refills at random spots in the pen instead
-	QueueSize = 3, -- sheep shown riding or waiting on the belt
-	QueueGap = 1.5, -- studs between queued sheep
-	FeedSpacing = 6, -- studs a new sheep needs at Feed; the belt speeds up past Speed if refills need it
-	HopDistance = 5.5, -- studs sideways from PenDrop into the pen, clearing the rail
-	HopHeight = 2.5,
-	HopSeconds = 0.45,
-}
-
 --// Wandering -----------------------------------------------------------------------------
 
 farmData.Wander = {
@@ -41,13 +30,6 @@ farmData.Wander = {
 	EdgePadding = 2, -- studs kept clear of the SheepArea's edges
 	TickSeconds = 0.25, -- how often the wander loop checks every sheep
 	ShearHoldSeconds = 3, -- a sheared sheep stands still this long after the last snip before wandering again
-
-	-- A sheep that lands off the conveyor bolts to a random far spot in the pen, so standing at the drop shears nothing.
-	-- It can't be sheared or picked up (its "Bolting" attribute) until it arrives.
-	BoltSpeed = 20, -- studs/s; faster than a player's walk speed of 16
-	BoltMinDistance = 30, -- studs from where it landed (shorter in a pen too small for it)
-	BoltMaxSeconds = 3.5, -- it stops bolting after this even if something blocked it
-	BoltTries = 10, -- random spots tried for one far enough away
 
 	-- Grazing: after some walks the sheep bends down and eats grass (animated by SheepGrazeClient).
 	GrazeChance = 0.6, -- chance a walk ends in grazing

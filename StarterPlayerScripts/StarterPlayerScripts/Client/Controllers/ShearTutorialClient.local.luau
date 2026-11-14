@@ -13,6 +13,7 @@ local tweenService = game:GetService("TweenService")
 local userInputService = game:GetService("UserInputService")
 
 --// Modules
+local screenScale = require(script.Parent.Parent.Modules.ScreenScale)
 local spotlightUI = require(script.Parent.Parent.Modules.SpotlightUI)
 local UIData = require(script.Parent.Parent.Modules.ShearShopUIData)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
@@ -144,8 +145,9 @@ local function spawnRipple(position: Vector2)
 	local ring = Instance.new("Frame")
 	ring.Name = "ShearTutorialRipple"
 	ring.AnchorPoint = Vector2.new(0.5, 0.5)
+	local size = RIPPLE_SIZE * screenScale.get()
 	ring.Position = UDim2.fromOffset(position.X, position.Y)
-	ring.Size = UDim2.fromOffset(RIPPLE_SIZE * 0.15, RIPPLE_SIZE * 0.15)
+	ring.Size = UDim2.fromOffset(size * 0.15, size * 0.15)
 	ring.BackgroundColor3 = RIPPLE_COLOR
 	ring.BackgroundTransparency = 0.6
 	ring.ZIndex = HINT_Z_INDEX + 1
@@ -160,7 +162,7 @@ local function spawnRipple(position: Vector2)
 	stroke.Parent = ring
 
 	ring.Parent = tutorialGui
-	tweenService:Create(ring, RIPPLE_TWEEN, { Size = UDim2.fromOffset(RIPPLE_SIZE, RIPPLE_SIZE), BackgroundTransparency = 1 }):Play()
+	tweenService:Create(ring, RIPPLE_TWEEN, { Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1 }):Play()
 	tweenService:Create(stroke, RIPPLE_TWEEN, { Transparency = 1, Thickness = 1 }):Play()
 	debris:AddItem(ring, RIPPLE_TWEEN.Time + 0.1)
 end
@@ -174,6 +176,7 @@ local function createHint()
 	frame.ZIndex = HINT_Z_INDEX
 	frame.Visible = false
 	frame.Parent = tutorialGui
+	screenScale.attach(frame) -- the hand and word are sized in pixels for a ~1000 px tall screen
 
 	local hand = Instance.new("TextLabel")
 	hand.Name = "Hand"

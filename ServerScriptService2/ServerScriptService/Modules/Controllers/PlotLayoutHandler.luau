@@ -8,7 +8,6 @@
 ]]--
 
 --// Services
-local collectionService = game:GetService("CollectionService")
 local players = game:GetService("Players")
 local serverStorage = game:GetService("ServerStorage")
 
@@ -24,9 +23,8 @@ local TEMPLATE_NAME = "TemplatePlot"
 local ANCHOR_NAME = "SpawnArea"
 local CENTER_NAME = "Center"
 local OWNER_GUI_NAMES = { "PlayerBase", "SheepCapacity" } -- hidden until PlotOwnerClient shows them on a claimed plot
-local CONVEYOR_TAG = "Conveyor"
-local PAUSED_ATTRIBUTE = "Paused"
-local PEN_TIER_ATTRIBUTE = "PenTier" -- on the plot: the style tier its fence shows
+local PEN_TIER_ATTRIBUTE = "PenTier" -- on the plot: the style tier its fence shows (PenUnlockClient plays its cutscene when it goes up)
+local PEN_NAME_ATTRIBUTE = "PenName" -- on the plot: that tier's name, for the cutscene's title card
 local WATCHED_ATTRIBUTES = { "Rebirths", "Prestiges" } -- mirrored onto the player by PlayerDataHandler
 
 --// State
@@ -88,17 +86,12 @@ local function buildPlots()
 	template.Parent = serverStorage
 	templateAnchorCFrame = templateAnchor.CFrame
 
-	-- Every plot starts unclaimed, so its owner signs start hidden and its conveyor stopped (SheepBeltHandler runs it).
+	-- Every plot starts unclaimed, so its owner signs start hidden.
 	local center = template:FindFirstChild(CENTER_NAME)
 	for _, name in OWNER_GUI_NAMES do
 		local gui = center and center:FindFirstChild(name)
 		if gui and gui:IsA("LayerCollector") then
 			gui.Enabled = false
-		end
-	end
-	for _, descendant in template:GetDescendants() do
-		if collectionService:HasTag(descendant, CONVEYOR_TAG) then
-			descendant:SetAttribute(PAUSED_ATTRIBUTE, true)
 		end
 	end
 
@@ -133,6 +126,7 @@ local function applyPenStyle(plot: Instance, tier: number)
 		current:Destroy()
 	end
 	fence.Parent = plot
+	plot:SetAttribute(PEN_NAME_ATTRIBUTE, PenStyleData.Tiers[tier].name)
 	plot:SetAttribute(PEN_TIER_ATTRIBUTE, tier)
 end
 

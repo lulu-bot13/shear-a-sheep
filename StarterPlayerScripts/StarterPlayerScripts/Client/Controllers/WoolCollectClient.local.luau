@@ -6,7 +6,6 @@
 ]]--
 
 --// Services
-local debris = game:GetService("Debris")
 local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
@@ -51,6 +50,7 @@ local TOTAL_HIDE_SECONDS = 1.2 -- a total hides this long after its last drop ar
 local PUFF_POP_GAP_SECONDS = 0.05 -- minimum spacing between pops as drops land on the character
 local POP_PITCH_STEP = 0.04 -- each pop in a run is slightly higher
 local POP_MAX_STEPS = 10
+local POP_VOICES = 6 -- pooled copies of the pop sound
 local HOLD_TIMEOUT_SECONDS = 5 -- the counters are never held back longer than this, whatever happens
 
 local DOUBLE_WOOL_ATTRIBUTE = "PassDoubleWool" -- set by GamePassService for 2x WOOL owners
@@ -185,16 +185,27 @@ local function showsPassTag(kind: Kind): boolean
 	return kind == "Wool" and player:GetAttribute(DOUBLE_WOOL_ATTRIBUTE) == true
 end
 
--- Plays a fresh copy of the pop so overlapping pops don't cut each other off.
+-- A few pooled copies of the pop, played in turn, so overlapping pops don't cut each other off and none are made per drop.
+local popVoices: { Sound } = {}
+local nextVoice = 1
+if popSfx and popSfx:IsA("Sound") then
+	for index = 1, POP_VOICES do
+		local voice = popSfx:Clone()
+		voice.Name = `PopVoice{index}`
+		voice.Parent = uiSounds
+		table.insert(popVoices, voice)
+	end
+end
+
 local function playPop(speed: number)
-	if not popSfx or not popSfx:IsA("Sound") then
+	local voice = popVoices[nextVoice]
+	if not voice or not popSfx or not popSfx:IsA("Sound") then
 		return
 	end
-	local sound = popSfx:Clone()
-	sound.PlaybackSpeed = popSfx.PlaybackSpeed * speed
-	sound.Parent = uiSounds
-	sound:Play()
-	debris:AddItem(sound, math.max(sound.TimeLength, 1) + 0.5)
+	nextVoice = nextVoice % #popVoices + 1
+	voice.PlaybackSpeed = popSfx.PlaybackSpeed * speed
+	voice.TimePosition = 0
+	voice:Play()
 end
 
 -- Returns a function that plays one pop per call, spaced at least `gap` apart and rising in pitch.

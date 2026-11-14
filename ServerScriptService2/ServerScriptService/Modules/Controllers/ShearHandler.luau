@@ -45,6 +45,7 @@ type Hit = {
 	color: Color3,
 	flashColor: Color3?, -- set on the blow that shears a rare, mutated or Luck sheep bare
 	flashPulses: number?,
+	ratio: number?, -- of the sheep's full health this hit took off, so the client plays big hits bigger
 }
 
 -- What the client is told about the wool and Luck one hit knocked off, for the drops on the ground.
@@ -223,8 +224,9 @@ function ShearHandler.shearSheep(
 		local health = sheep:GetAttribute("ShearHealth")
 		local maxHealth = sheep:GetAttribute("MaxShearHealth")
 		local root = getRootPart(sheep)
+		-- A sheep rising from a Halloween pit can't be sheared yet.
 		if type(sheepId) ~= "number" or type(health) ~= "number" or health <= 0 or not root or not SheepHandler.getSheep(sheepId)
-			or sheep:GetAttribute("Rising") or sheep:GetAttribute("Bolting")
+			or sheep:GetAttribute("Rising")
 		then
 			continue
 		end
@@ -246,6 +248,7 @@ function ShearHandler.shearSheep(
 			color = SheepHandler.getWoolColor(sheep),
 			flashColor = flashColor,
 			flashPulses = flashPulses,
+			ratio = damage / (if type(maxHealth) == "number" and maxHealth > 0 then maxHealth else health),
 		})
 
 		local drop = getHitDrop(player, sheep, health, newHealth, position)

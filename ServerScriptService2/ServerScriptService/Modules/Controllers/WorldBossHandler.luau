@@ -1,8 +1,8 @@
 --!strict
 
 --[[
-	King Sheep world boss: rolled at Clear spells and Nights (likelier with Server Luck), warned 30 s ahead, then wanders the
-	plaza arena for everyone to shear. Pays out by damage share and progression; /kingboss [now|end] for admins. Tuning in WorldBossData.
+	King Sheep world boss: arrives on a fixed timer (sooner with Server Luck), warned 30 s ahead, then wanders the plaza arena
+	for everyone to shear. Pays out by damage share and progression; /kingboss [now|end] for admins. Tuning in WorldBossData.
 
 	Location: ServerScriptService.Modules.Controllers.WorldBossHandler
 ]]--
@@ -49,6 +49,7 @@ local sheepModels = if modelsFolder then modelsFolder:FindFirstChild("Sheeps") e
 --// Configs
 local STATE_ATTRIBUTE = "WorldBossState"
 local AT_ATTRIBUTE = "WorldBossAt"
+local NEXT_AT_ATTRIBUTE = "WorldBossNextAt" -- server time the next King is due; KingSignClient counts down to it
 local SERVER_LUCK_ATTRIBUTE = "ServerLuckEndsAt"
 local FRIEND_BOOST_ATTRIBUTE = "FriendBoost" -- FriendBoostHandler's wool multiplier, as ShearHandler reads it
 local SCHEDULE_SOURCE = "KingSheep"
@@ -112,8 +113,8 @@ type Ranked = { player: Player, damage: number, share: number }
 local state: State = "None"
 local fight: Fight? = nil
 local pendingThread: thread? = nil
-local lastEndedAt = -math.huge
-local rollRound = 0 -- bumped on every weather change, so a Night's delayed roll doesn't outlive it
+local scheduleThread: thread? = nil -- starts the warning PendingSeconds before the next arrival
+local nextArrivalAt = 0
 local random = Random.new()
 
 local WorldBossHandler = {}
@@ -147,6 +148,33 @@ end
 local function isServerLucky(): boolean
 	local endsAt = workspace:GetAttribute(SERVER_LUCK_ATTRIBUTE)
 	return type(endsAt) == "number" and endsAt > now()
+end
+
+local onScheduleDue: () -> () -- defined with startPending below
+
+local function cancelSchedule()
+	if scheduleThread then
+		task.cancel(scheduleThread)
+		scheduleThread = nil
+	end
+end
+
+-- Sets the next King to arrive `seconds` from now; its warning starts PendingSeconds before that.
+local function scheduleNext(seconds: number)
+	cancelSchedule()
+	nextArrivalAt = now() + seconds
+	workspace:SetAttribute(NEXT_AT_ATTRIBUTE, nextArrivalAt)
+	WeatherHandler.setScheduled(SCHEDULE_SOURCE, EVENT_NAME, nextArrivalAt)
+	scheduleThread = task.delay(math.max(seconds - WorldBossData.PendingSeconds, 0), function()
+		scheduleThread = nil
+		onScheduleDue()
+	end)
+end
+
+local function getInterval(): number
+	return if isServerLucky()
+		then math.min(WorldBossData.IntervalSeconds, WorldBossData.ServerLuckIntervalSeconds)
+		else WorldBossData.IntervalSeconds
 end
 
 local function getSpawnPart(): BasePart?
@@ -610,8 +638,8 @@ local function finish(current: Fight, defeated: boolean)
 	if current.timeout and coroutine.status(current.timeout) == "suspended" then
 		task.cancel(current.timeout)
 	end
-	lastEndedAt = now()
 	setState("None", nil)
+	scheduleNext(getInterval())
 
 	local boss = current.boss
 	local boxCFrame, boxSize = boss:GetBoundingBox()
@@ -656,11 +684,12 @@ end
 
 local function spawnBoss(source: string)
 	pendingThread = nil
+	cancelSchedule()
 	WeatherHandler.setScheduled(SCHEDULE_SOURCE, nil, nil)
 	local current = buildFight()
 	if not current then
-		lastEndedAt = now()
 		setState("None", nil)
+		scheduleNext(getInterval())
 		return
 	end
 
@@ -687,7 +716,10 @@ end
 
 -- Warns everyone, then the King arrives PendingSeconds later; the next weather waits a while after it.
 local function startPending(source: string)
+	cancelSchedule()
 	local arrivesAt = now() + WorldBossData.PendingSeconds
+	nextArrivalAt = arrivesAt
+	workspace:SetAttribute(NEXT_AT_ATTRIBUTE, arrivesAt)
 	setState("Pending", arrivesAt)
 	AnnouncementHandler.worldBossPending(WorldBossData.PendingSeconds)
 	WeatherHandler.setScheduled(SCHEDULE_SOURCE, EVENT_NAME, arrivesAt)
@@ -695,31 +727,25 @@ local function startPending(source: string)
 	pendingThread = task.delay(WorldBossData.PendingSeconds, spawnBoss, source)
 end
 
-local function tryRoll(chance: number)
-	if state ~= "None" or now() - lastEndedAt < WorldBossData.CooldownSeconds or #players:GetPlayers() == 0 then
-		return
+onScheduleDue = function()
+	if state ~= "None" then
+		return -- an admin brought one early; the next is scheduled when it leaves
 	end
-	local boosted = if isServerLucky() then chance * WorldBossData.ServerLuckChanceMultiplier else chance
-	if random:NextNumber() < math.min(boosted, WorldBossData.MaxChance) then
-		startPending("Roll")
-	end
-end
-
-local function onWeatherChanged(weather: string)
-	rollRound += 1
-	if weather == WeatherData.Clear then
-		tryRoll(WorldBossData.ClearChance)
-	elseif weather == WeatherData.Halloween then
-		local round = rollRound
-		task.delay(WorldBossData.NightRollDelay, function()
-			if round == rollRound then
-				tryRoll(WorldBossData.NightChance)
-			end
-		end)
+	if #players:GetPlayers() == 0 then
+		scheduleNext(WorldBossData.EmptyRetrySeconds)
+	else
+		startPending("Schedule")
 	end
 end
 
--- "/kingboss" warns and spawns it, "/kingboss now" skips the warning, "/kingboss end" sends it away. Ignores the cooldown.
+-- Server Luck pulls a far-off King closer.
+local function onServerLuckChanged()
+	if state == "None" and isServerLucky() and nextArrivalAt - now() > WorldBossData.ServerLuckIntervalSeconds then
+		scheduleNext(WorldBossData.ServerLuckIntervalSeconds)
+	end
+end
+
+-- "/kingboss" warns and spawns it, "/kingboss now" skips the warning, "/kingboss end" sends it away. Ignores the schedule.
 local function onCommand(_speaker: Player, message: string)
 	local option = string.lower(string.match(message, "^%S+%s+(%S+)") or "")
 	if option == "end" or option == "stop" then
@@ -728,8 +754,8 @@ local function onCommand(_speaker: Player, message: string)
 		elseif pendingThread then
 			task.cancel(pendingThread)
 			pendingThread = nil
-			WeatherHandler.setScheduled(SCHEDULE_SOURCE, nil, nil)
 			setState("None", nil)
+			scheduleNext(getInterval())
 		end
 	elseif state == "None" then
 		if option == "now" then
@@ -802,7 +828,8 @@ end
 
 function WorldBossHandler.Start()
 	setState("None", nil)
-	WeatherHandler.WeatherChanged:Connect(onWeatherChanged)
+	scheduleNext(WorldBossData.FirstArrivalSeconds)
+	workspace:GetAttributeChangedSignal(SERVER_LUCK_ATTRIBUTE):Connect(onServerLuckChanged)
 	AdminCommands.register("KingBossCommand", "/kingboss", "/kingsheep", onCommand)
 end
 

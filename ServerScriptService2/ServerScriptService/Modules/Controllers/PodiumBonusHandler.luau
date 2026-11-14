@@ -167,17 +167,21 @@ local function refresh(player: Player)
 	player:SetAttribute("PodiumRespawn", bonus.Respawn)
 end
 
--- Pays every online player TrickleFactor of each podium sheep's wool per second (every TRICKLE_SECONDS), carrying the fractions over.
+-- Wool per second the player's podium sheep pay: TrickleFactor of each one's wool (OfflineIncomeHandler pays it while they're away too).
+function PodiumBonusHandler.getTrickleRate(player: Player): number
+	local wool = 0
+	for _, saved in getSaved(player) do
+		if type(saved) == "table" and type(saved.wool) == "number" then
+			wool += saved.wool
+		end
+	end
+	return wool * PodiumData.TrickleFactor
+end
+
+-- Pays every online player their trickle rate (every TRICKLE_SECONDS), carrying the fractions over.
 local function payTrickle()
 	for player in totals do
-		local wool = 0
-		for _, saved in getSaved(player) do
-			if type(saved) == "table" and type(saved.wool) == "number" then
-				wool += saved.wool
-			end
-		end
-
-		local earned = (trickleCarry[player] or 0) + wool * PodiumData.TrickleFactor * TRICKLE_SECONDS
+		local earned = (trickleCarry[player] or 0) + PodiumBonusHandler.getTrickleRate(player) * TRICKLE_SECONDS
 		local whole = math.floor(earned)
 		trickleCarry[player] = earned - whole
 		if whole > 0 then

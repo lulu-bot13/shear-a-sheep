@@ -275,7 +275,7 @@ function Analytics.podiumPlaced(player: Player, sheepType: any)
 	logCustom(player, "Placed Podium Sheep", 1, fields(sheepType))
 end
 
--- The King Sheep arrived while this player was in the server; `source` is "Roll" or "Admin".
+-- The King Sheep arrived while this player was in the server; `source` is "Schedule" or "Admin".
 function Analytics.worldBossSpawned(player: Player, source: string, weather: string)
 	logCustom(player, "World Boss Spawned", 1, fields(source, weather))
 end

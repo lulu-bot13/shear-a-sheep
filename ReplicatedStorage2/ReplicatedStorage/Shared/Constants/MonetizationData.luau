@@ -52,10 +52,10 @@ return MonetizationConfig.create({
 		id = 2079194287,
 		giftable = false,
 		giftProductId = 0,
-		displayName = "2ND CONVEYOR",
-		rewardText = "A 2nd conveyor that brings 3x the sheep!",
-		multiplier = 2, -- its refills per main-belt refill (SheepSpawnHandler), so 3x sheep in all
-		inShop = false, -- bought from the plot's RobuxConveyor prompt; no Robux shop card yet
+		displayName = "3x SHEEP SPAWN",
+		rewardText = "Sheep refill your pen 3x faster!",
+		multiplier = 3, -- refill speed (SheepSpawnHandler); was the 2nd conveyor, kept for the players who bought it
+		inShop = false, -- no longer sold: the conveyors are gone and there's no shop card for it
 	},
 
 	--// Bundles

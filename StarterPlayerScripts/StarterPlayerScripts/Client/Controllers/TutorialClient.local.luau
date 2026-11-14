@@ -1,5 +1,6 @@
 --[[
-	First-play tutorial: shear the Huge Fluffy and 2 more, buy the Steel Shears, buy upgrades, shear for the rebirth, rebirth, then claim in the Index.
+	First-play tutorial: shear the first sheep and 2 more, buy the Steel Shears, buy upgrades, shear for the rebirth, rebirth, claim in the Index,
+	then expand the pen for more chances at the next rebirth's sheep.
 	Steps are worked out from progress so they resume after a rejoin; a tapping hand, beams and highlights point the way.
 ]]--
 
@@ -11,12 +12,14 @@ local players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
 local soundService = game:GetService("SoundService")
+local starterGui = game:GetService("StarterGui")
 local tweenService = game:GetService("TweenService")
 local userInputService = game:GetService("UserInputService")
 
 --// Modules
 local network = require(replicatedStorage.Shared.Utils.Network)
 local numberFormatter = require(replicatedStorage.Shared.Utils.NumberFormatter)
+local screenScale = require(script.Parent.Parent.Modules.ScreenScale)
 local spotlightUI = require(script.Parent.Parent.Modules.SpotlightUI)
 local windowsManager = require(script.Parent.Parent.Modules.WindowsManager)
 
@@ -36,7 +39,7 @@ local indexFrame = playerGui:WaitForChild("Index"):WaitForChild("IndexFrame")
 local indexMain = indexFrame:WaitForChild("Main")
 local indexRewardFrame = indexMain:WaitForChild("RewardFrame")
 local indexClaimButton = indexRewardFrame:WaitForChild("BuyButton") :: GuiButton
-local indexClaimAllButton = indexRewardFrame:WaitForChild("ClaimAll"):WaitForChild("ClaimAllButton") :: GuiButton
+local indexClaimAllButton = indexMain:WaitForChild("ClaimAll"):WaitForChild("ClaimAllButton") :: GuiButton
 local indexExit = indexFrame:WaitForChild("ExitButton") :: GuiObject
 local upgradeShopMain = playerGui:WaitForChild("UpgradeShop"):WaitForChild("Main")
 local upgradeCards = upgradeShopMain:WaitForChild("ScrollingFrame")
@@ -57,14 +60,15 @@ local OWNER_ATTRIBUTE = "OwnerId"
 local SHEAR_RANGE_ATTRIBUTE = "ShearRange" -- only shear Tools have it
 local NEAR_DISTANCE = 8 -- studs (flat) from a sheep that count as "at" it
 local LEAVE_DISTANCE = 12 -- studs (flat) the first sheep is walked away from before the beam leads back to a sheep
-local ALWAYS_IN_STUDIO = true -- runs the tutorial in Studio even on a save that has rebirthed
+local ALWAYS_IN_STUDIO = false -- runs the tutorial in Studio even on a save that has rebirthed
 local TICK_SECONDS = 0.1
 local DISPLAY_ORDER = 90 -- the text and spotlight draw over every window (Alerts are 100)
 local STATE_REQUEST_SECONDS = 2 -- re-asks the server for upgrade / rebirth state until it arrives
 local COMPLETED_SECONDS = 3 -- how long the completed label stays up
 local SHEEP_TO_SHEAR = 3 -- counting the first sheep
 local IDLE_HINT_SECONDS = 2.5 -- after the first sheep, the tapping hand comes back once the player stops clicking this long
-local TUTORIAL_SHEEP_WAIT_SECONDS = 10 -- if the Fluffy hasn't landed by then (e.g. the server skipped it), any sheep will do
+local TUTORIAL_SHEEP_WAIT_SECONDS = 10 -- if the first sheep hasn't landed by then (e.g. the server skipped it), the closest sheep will do
+local TUTORIAL_SHEEP_REQUEST_SECONDS = 3 -- re-asks TutorialHandler for the first sheep while there isn't one (it may have been lost)
 local SHEARS_ID = "SteelShears" -- the shear bought in the tutorial (unlocks at 3 sheep, ShearData)
 local SHEARS_NAME = "Steel Shears"
 local SHOP_WINDOW = "ShearShop"
@@ -76,29 +80,43 @@ local SHOP_SCROLL_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.Easing
 local TUTORIAL_UPGRADES = {
 	{ id = "MoreWool", text = "Upgrade your wool multiplier. Every Sheep gives you more Wool!" },
 	{ id = "MoreWool", text = "Upgrade your wool multiplier. Every Sheep gives you more Wool!" },
-	{ id = "Capacity", text = "Now upgrade Sheep Capacity. More Sheep enter your pen!" },
+	{ id = "Capacity", text = "Now expand your Sheep Pen with Sheep Capacity. More Sheep fit in your pen!" },
 }
+local PEN_UPGRADE_ID = "Capacity" -- the ExpandPen stage buys one more level of it
+-- Set locally on the player by PenUnlockClient / RebirthSheepClient while their cutscene plays; the tutorial waits them out.
+local CUTSCENE_ATTRIBUTES = { "PenCutscenePlaying", "RebirthSheepCutscenePlaying" }
+local REBIRTH_SHEEP_FOUND_ATTRIBUTE = "RebirthSheepFound" -- set by RebirthHandler
+local REBIRTH_SHEEP_ID_ATTRIBUTE = "RebirthSheepId" -- set by RebirthHandler: the adult type the next rebirth needs (matches a sheep's AdultType)
 local KEEP_HUD_BUTTONS = { Upgrades = true, Rebirth = true } -- the only HUD buttons shown until the Index stage
 local HIDE_UI_STAGES = { GoToSheep = true, FirstShear = true, Shear = true } -- every ScreenGui but the tutorial's is off during these
-local KEEP_GUIS = { TouchGui = true } -- the PlayerModule's thumbstick and jump button, so mobile players can still move
+-- Except these, so the Upgrades and Rebirth buttons (Main.Buttons, the only part of Main left showing) and their windows still work.
+local HIDE_UI_KEEP_GUIS = { Main = true, UpgradeShop = true, RebirthScreen = true }
+local HIDE_UI_KEEP_MAIN = { Buttons = true }
+-- Studio guis left on while the rest of the UI is hidden: the touch thumbstick and jump button, and the effect guis
+-- (new-sheep popup, click ripples, Announcements' alerts).
+local KEEP_GUIS = { TouchGui = true, SheepUnlocked = true, ClickEffects = true, Alerts = true, LeaveWarning = true }
+local EFFECT_LAYER_ATTRIBUTE = "EffectLayer" -- set on effect guis (DamageNumbers, the shear outline flash...) that must keep playing
 local POP_IN = TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local POP_OUT = TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In)
 
 -- Every stage in order; TutorialProgression shows the current one as "3/10". The cheer plays on reaching a stage.
-local STAGES = { "GoToSheep", "FirstShear", "Shear", "GoToShop", "BuyShears", "Upgrades", "CloseUpgrades", "Rebirth", "Index", "CloseIndex" }
+local STAGES = {
+	"GoToSheep", "FirstShear", "Shear", "GoToShop", "BuyShears", "Upgrades", "CloseUpgrades", "Rebirth", "Index", "CloseIndex", "ExpandPen", "ClosePen",
+}
 local STAGE_ORDER: { [string]: number } = {}
 for index, name in STAGES do
 	STAGE_ORDER[name] = index
 end
 local STAGE_CHEERS = {
-	Shear = "Fluffy Sheep sheared!",
+	Shear = "Sheep sheared!",
 	GoToShop = "Wool collected!",
 	Upgrades = `{SHEARS_NAME} bought!`,
 	CloseUpgrades = "Upgrades bought!",
 	Index = "Rebirthed!",
 	CloseIndex = "Luck claimed!",
+	ClosePen = "Pen expanded!",
 }
-local TUTORIAL_SHEEP_ATTRIBUTE = "TutorialSheep" -- set by TutorialHandler on the Huge sheep it drops for the first shear
+local TUTORIAL_SHEEP_ATTRIBUTE = "TutorialSheep" -- set by TutorialHandler on the sheep it drops for the first shear
 
 --// Rebirth progress bar, under the instruction box while the player shears for the rebirth
 local BAR_HEIGHT = 26
@@ -165,17 +183,25 @@ local CHEER_POP_OVERSHOOT = 1.12 -- the Back-eased pop in grows it to about 1.1x
 local CHEER_TWEEN = TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local CHEER_COLOR = Color3.fromRGB(120, 255, 120)
 
-type Stage = "GoToSheep" | "FirstShear" | "Shear" | "GoToShop" | "BuyShears" | "Upgrades" | "CloseUpgrades" | "Rebirth" | "Index" | "CloseIndex" | "Done"
+type Stage = "GoToSheep" | "FirstShear" | "Shear" | "GoToShop" | "BuyShears" | "Upgrades" | "CloseUpgrades" | "Rebirth" | "Index" | "CloseIndex"
+	| "ExpandPen" | "ClosePen" | "Done"
 type InputMode = "Mouse" | "Touch" | "Gamepad"
 
 --// State
 local stage: Stage = "GoToSheep"
 local shearedBaseline = 0 -- SheepShearedCount the "Shear 3 Sheep" progress counts up from
-local hiddenHudButtons: { GuiObject } = {}
-local hiddenGuis: { ScreenGui } = {}
+-- What the tutorial hid, each with a watcher that hides it again the moment another script shows it. HUD scripts set Visible / Enabled
+-- on their own events (ShearClient's Auto Shear toggle on every mouse / keyboard switch), and re-hiding a tick later flickered.
+local heldHudButtons: { [Instance]: RBXScriptConnection } = {}
+local heldGuis: { [Instance]: RBXScriptConnection } = {}
+local heldMainChildren: { [Instance]: RBXScriptConnection } = {}
+local nextSheepRequest = 0
 local popFullScales: { [UIScale]: number } = setmetatable({}, { __mode = "k" }) :: any -- each popped object's full size, read before its first pop (cheer labels come and go)
 local upgradeStates: { [string]: any }? = nil -- UpgradeState cards by id
 local rebirthCost: number? = nil
+local rebirthSheepName: string? = nil -- the sheep the next rebirth needs, from RebirthState
+local rebirthStateRebirths: number? = nil -- the rebirths that state was for, so it's asked for again after rebirthing
+local penStartLevel: number? = nil -- Sheep Capacity's level when the ExpandPen stage began
 local nextStateRequest = 0
 local highlights: { [Model]: Highlight } = {}
 local beamSheep: Model? = nil -- the sheep the beam leads to
@@ -183,6 +209,9 @@ local beamPart: BasePart? = nil -- or the part it leads to (the shear shop's hit
 local stageStartedAt = 0
 local shopOpenedAt: number? = nil
 local shopScrollTween: Tween? = nil
+local upgradeOpenedAt = 0 -- when Upgrades last opened; its list is scrolled once its pop-in has finished
+local upgradeScrollCardId: string? = nil -- the Upgrades card the list was scrolled to this visit
+local upgradeScrollTween: Tween? = nil
 local firstSheep: Model? = nil -- the sheep "Click To Shear" shows the health of
 local beamConnection: RBXScriptConnection? = nil
 local inputConnection: RBXScriptConnection? = nil
@@ -201,6 +230,7 @@ local barFloorUntil = 0
 local barLayoutConnections: { RBXScriptConnection } = {}
 local viewportConnection: RBXScriptConnection? = nil
 local indexUnclaimed: number? = nil -- Index entries waiting to be claimed, from IndexState; nil until it arrives
+local indexHadUnclaimed = false -- something was waiting this Index stage, so emptying it earns the "Luck claimed!" cheer
 
 -- One beam cloned once and reused. Its ends stay in Terrain and are moved each frame,
 -- so a respawned character or a replaced sheep can't destroy them.
@@ -227,6 +257,7 @@ hint.Size = UDim2.fromOffset(0, 0)
 hint.ZIndex = HINT_Z_INDEX
 hint.Visible = false
 hint.Parent = tutorialGui
+screenScale.attach(hint) -- the hand and word are sized in pixels for a ~1000 px tall screen
 
 local hand = Instance.new("TextLabel")
 hand.Name = "Hand"
@@ -265,11 +296,18 @@ local sideClick = Instance.new("Frame")
 sideClick.Name = "TutorialSideClick"
 sideClick.BackgroundTransparency = 1
 sideClick.AnchorPoint = Vector2.new(1, 0.5)
-sideClick.Position = UDim2.new(1, -SIDE_CLICK_EDGE_GAP, 0.5, 0)
-sideClick.Size = UDim2.fromOffset(SIDE_CLICK_SIZE.X, SIDE_CLICK_SIZE.Y)
 sideClick.ZIndex = HINT_Z_INDEX
 sideClick.Visible = false
 sideClick.Parent = tutorialGui
+
+-- Sized for the screen (its own UIScale is the pulse), and again whenever the screen changes size.
+local function sizeSideClick()
+	local factor = screenScale.get()
+	sideClick.Position = UDim2.new(1, -SIDE_CLICK_EDGE_GAP * factor, 0.5, 0)
+	sideClick.Size = UDim2.fromOffset(SIDE_CLICK_SIZE.X * factor, SIDE_CLICK_SIZE.Y * factor)
+end
+sizeSideClick()
+screenScale.changed:Connect(sizeSideClick)
 
 local sideHand = Instance.new("TextLabel")
 sideHand.Name = "Hand"
@@ -373,7 +411,7 @@ local function getFlatDistance(a: Vector3, b: Vector3): number
 	return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
 end
 
--- The Huge sheep TutorialHandler dropped for the first shear, while it's on the farm.
+-- The sheep TutorialHandler dropped for the first shear, while it's on the farm.
 local function getTutorialSheep(): Model?
 	for _, sheep in getOwnSheep() do
 		if sheep:GetAttribute(TUTORIAL_SHEEP_ATTRIBUTE) then
@@ -381,6 +419,29 @@ local function getTutorialSheep(): Model?
 		end
 	end
 	return nil
+end
+
+-- The sheep the next rebirth needs, while one is on the player's farm (SheepSpawnHandler's tutorial pity drops it in).
+local function getRebirthSheep(): Model?
+	local adultType = player:GetAttribute(REBIRTH_SHEEP_ID_ATTRIBUTE)
+	if type(adultType) ~= "string" or adultType == "" then
+		return nil
+	end
+	for _, sheep in getOwnSheep() do
+		if sheep:GetAttribute("AdultType") == adultType then
+			return sheep
+		end
+	end
+	return nil
+end
+
+local function isCutscenePlaying(): boolean
+	for _, name in CUTSCENE_ATTRIBUTES do
+		if player:GetAttribute(name) then
+			return true
+		end
+	end
+	return false
 end
 
 local function isHoldingShear(): boolean
@@ -543,16 +604,17 @@ end
 
 --// Ripples and the click hint -------------------------------------------------------
 
--- An expanding, fading ring at `position` (tutorialGui pixels).
-local function spawnRipple(position: Vector2, size: number)
+-- Pooled ripple rings: every click while shearing makes one, so they're reused instead of rebuilt.
+type Ripple = { ring: Frame, stroke: UIStroke }
+local idleRipples: { Ripple } = {}
+
+local function createRipple(): Ripple
 	local ring = Instance.new("Frame")
 	ring.Name = "TutorialRipple"
 	ring.AnchorPoint = Vector2.new(0.5, 0.5)
-	ring.Position = UDim2.fromOffset(position.X, position.Y)
-	ring.Size = UDim2.fromOffset(size * 0.15, size * 0.15)
 	ring.BackgroundColor3 = RIPPLE_COLOR
-	ring.BackgroundTransparency = 0.6
 	ring.ZIndex = HINT_Z_INDEX + 1
+	ring.Visible = false
 
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(0.5, 0)
@@ -560,13 +622,31 @@ local function spawnRipple(position: Vector2, size: number)
 
 	local stroke = Instance.new("UIStroke")
 	stroke.Color = RIPPLE_COLOR
-	stroke.Thickness = 4
 	stroke.Parent = ring
 
 	ring.Parent = tutorialGui
-	tweenService:Create(ring, RIPPLE_TWEEN, { Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1 }):Play()
+	return { ring = ring, stroke = stroke }
+end
+
+-- An expanding, fading ring at `position` (tutorialGui pixels); `size` is in pixels for a ~1000 px tall screen.
+local function spawnRipple(position: Vector2, size: number)
+	local ripple = table.remove(idleRipples) or createRipple()
+	local pixels = size * screenScale.get()
+	local ring, stroke = ripple.ring, ripple.stroke
+	ring.Position = UDim2.fromOffset(position.X, position.Y)
+	ring.Size = UDim2.fromOffset(pixels * 0.15, pixels * 0.15)
+	ring.BackgroundTransparency = 0.6
+	stroke.Transparency = 0
+	stroke.Thickness = 4
+	ring.Visible = true
+
+	local tween = tweenService:Create(ring, RIPPLE_TWEEN, { Size = UDim2.fromOffset(pixels, pixels), BackgroundTransparency = 1 })
+	tween.Completed:Once(function()
+		ring.Visible = false
+		table.insert(idleRipples, ripple)
+	end)
+	tween:Play()
 	tweenService:Create(stroke, RIPPLE_TWEEN, { Transparency = 1, Thickness = 1 }):Play()
-	debris:AddItem(ring, RIPPLE_TWEEN.Time + 0.1)
 end
 
 -- Points the tapping hand down at a GuiObject; nil hides it.
@@ -715,13 +795,14 @@ local function cheer(text: string)
 	end
 
 	local scale = getGuiScale()
+	local screenFactor = screenScale.get() -- the cheer's design size is for a ~1000 px tall screen
 	local guiPosition = tutorialGui.AbsolutePosition
 	local framePosition, frameSize = tutorialFrame.AbsolutePosition, tutorialFrame.AbsoluteSize
 	local blockedPosition, blockedSize = getBlockedRect()
 	local outline = getOutline(CHEER_STROKE_THICKNESS, scale)
 	local top = blockedPosition.Y + blockedSize.Y + BAR_MIN_GAP + outline -- the label's top edge; its outline stays BAR_MIN_GAP below the text
-	local height = CHEER_SIZE.Y * scale
-	local drift = CHEER_DRIFT * scale
+	local height = CHEER_SIZE.Y * scale * screenFactor
+	local drift = CHEER_DRIFT * scale * screenFactor
 	if progressBar.Visible and progressBar.Parent then
 		-- The bar's top as layoutRebirthBar set it (AbsolutePosition can lag a frame); both are placed the same way, so they compare exactly.
 		local barTop = guiPosition.Y + progressBar.Position.Y.Offset * scale - getBarOutline(scale)
@@ -740,7 +821,7 @@ local function cheer(text: string)
 	label.Name = "TutorialCheer"
 	label.BackgroundTransparency = 1
 	label.AnchorPoint = Vector2.new(0.5, 0)
-	label.Size = UDim2.fromOffset(CHEER_SIZE.X, height / scale)
+	label.Size = UDim2.fromOffset(CHEER_SIZE.X * screenFactor, height / scale)
 	label.Position = UDim2.fromOffset((framePosition.X + frameSize.X / 2 - guiPosition.X) / scale, (top - guiPosition.Y) / scale)
 	label.Font = Enum.Font.FredokaOne
 	label.TextScaled = true
@@ -810,9 +891,9 @@ local function updateBeam()
 	beam.Enabled = true
 end
 
--- Outlines every sheep and returns the closest one and whether the player is at it; when they aren't, the beam leads to it.
-local function guideToSheep(): (Model?, boolean)
-	local sheepList = getOwnSheep()
+-- Outlines every sheep (or only `only`) and returns the closest one and whether the player is at it; when they aren't, the beam leads to it.
+local function guideToSheep(only: Model?): (Model?, boolean)
+	local sheepList = if only then { only } else getOwnSheep()
 	setHighlights(sheepList)
 
 	local playerRoot = getRoot(player.Character)
@@ -879,21 +960,61 @@ end
 
 --// Stages ------------------------------------------------------------------------------
 
--- Turns off every ScreenGui but the tutorial's; run each tick, since respawned or newly opened guis come back on.
+-- The other UI: guis built in StarterGui (the HUD and windows). Guis scripts make at runtime are effect layers (damage numbers,
+-- alerts, luck rain, purchase bursts...), as is anything marked EffectLayer, so those keep playing during the tutorial.
+local function isOtherUi(gui: ScreenGui): boolean
+	return gui ~= tutorialGui and not KEEP_GUIS[gui.Name] and gui:GetAttribute(EFFECT_LAYER_ATTRIBUTE) ~= true
+		and starterGui:FindFirstChild(gui.Name) ~= nil
+end
+
+-- Sets the instance's Visible or Enabled false and keeps it false until it's released.
+local function hold(held: { [Instance]: RBXScriptConnection }, instance: Instance, property: string)
+	if held[instance] then
+		return
+	end
+	local object = instance :: any
+	object[property] = false
+	held[instance] = instance:GetPropertyChangedSignal(property):Connect(function()
+		if object[property] then
+			object[property] = false
+		end
+	end)
+end
+
+local function release(held: { [Instance]: RBXScriptConnection }, instance: Instance, property: string)
+	local connection = held[instance]
+	if connection then
+		connection:Disconnect()
+		held[instance] = nil;
+		(instance :: any)[property] = true
+	end
+end
+
+local function releaseAll(held: { [Instance]: RBXScriptConnection }, property: string)
+	for instance in held do
+		release(held, instance, property)
+	end
+end
+
+-- Turns off the other UI (all of Main but its Buttons); run each tick, since newly opened guis come back on.
 local function hideOtherGuis()
 	for _, gui in playerGui:GetChildren() do
-		if gui:IsA("ScreenGui") and gui ~= tutorialGui and gui.Enabled and not KEEP_GUIS[gui.Name] then
-			gui.Enabled = false
-			table.insert(hiddenGuis, gui)
+		if gui:IsA("ScreenGui") and gui.Enabled and isOtherUi(gui) and not HIDE_UI_KEEP_GUIS[gui.Name] then
+			hold(heldGuis, gui, "Enabled")
+		end
+	end
+
+	local main = playerGui:FindFirstChild("Main")
+	for _, child in (if main then main:GetChildren() else {}) do
+		if child:IsA("GuiObject") and child.Visible and not HIDE_UI_KEEP_MAIN[child.Name] then
+			hold(heldMainChildren, child, "Visible")
 		end
 	end
 end
 
 local function showOtherGuis()
-	for _, gui in hiddenGuis do
-		gui.Enabled = true
-	end
-	table.clear(hiddenGuis)
+	releaseAll(heldGuis, "Enabled")
+	releaseAll(heldMainChildren, "Visible")
 end
 
 -- `quiet` skips the cheer (the first stage, picked on join).
@@ -904,6 +1025,7 @@ local function setStage(newStage: Stage, quiet: boolean?)
 	barMilestone = 0
 	if newStage == "Index" then
 		indexUnclaimed = nil -- asked again, since sheep found since the last IndexState make it stale
+		indexHadUnclaimed = false
 	end
 	setHighlights({})
 	beamSheep = nil
@@ -942,7 +1064,7 @@ end
 	Shearing for wool after the first sheep: the beam leads to the closest sheep, and once there the side "CLICK!" comes back if the player stops clicking.
 	Away from the farm (after the shear shop) the ToPlot button is pointed at; with the pen empty, the player is told why and what fixes it.
 ]]
-local function guideShearing(nearText: string, farText: string)
+local function guideShearing(nearText: string, farText: string, only: Model?)
 	equipShears()
 	point(nil)
 	setHint(nil)
@@ -959,9 +1081,9 @@ local function guideShearing(nearText: string, farText: string)
 		return
 	end
 
-	local nearest, near = guideToSheep()
+	local nearest, near = guideToSheep(only)
 	if not nearest then
-		setText("Out of Sheep! New ones ride in on the conveyor. Buy Faster Respawn in Upgrades to get them quicker!")
+		setText("Out of Sheep! New ones pop into your pen soon. Expand your pen and buy Faster Respawn in Upgrades for more!")
 	elseif near then
 		setText(nearText)
 		setSideClick(os.clock() - lastClickAt >= IDLE_HINT_SECONDS)
@@ -970,33 +1092,55 @@ local function guideShearing(nearText: string, farText: string)
 	end
 end
 
--- "Go to the Fluffy Sheep": the beam leads to the Huge Fluffy the server drops (the only sheep that can be sheared until it's bare).
--- If it never lands, the closest sheep is used instead.
+-- The closest of the player's sheep, for when the server's tutorial sheep never lands.
+local function getNearestSheep(): Model?
+	local playerRoot = getRoot(player.Character)
+	if not playerRoot then
+		return nil
+	end
+	local nearest, nearestDistance = nil, math.huge
+	for _, sheep in getOwnSheep() do
+		local distance = getFlatDistance(playerRoot.Position, (getRoot(sheep) :: BasePart).Position)
+		if distance < nearestDistance then
+			nearest, nearestDistance = sheep, distance
+		end
+	end
+	return nearest
+end
+
+--[[
+	"Walk up to the Sheep": the beam leads to the one wandering sheep the server drops (the only sheep that can be sheared until it's bare).
+	Without one it's asked for again; if it still hasn't landed after a while, the closest sheep is used instead.
+]]
 local function updateGoToSheep()
+	if getNumberAttribute("SheepShearedCount") > shearedBaseline then
+		setStage("Shear") -- the first sheep was sheared (and left) before the count arrived
+		return
+	end
 	equipShears()
 
-	local bigSheep = getTutorialSheep()
-	local playerRoot = getRoot(player.Character)
-	if bigSheep then
-		setText("A HUGE Fluffy Sheep appeared! Follow the arrow to it")
-		setHighlights({ bigSheep })
-		beamSheep = bigSheep
-		if playerRoot and getFlatDistance(playerRoot.Position, (getRoot(bigSheep) :: BasePart).Position) <= NEAR_DISTANCE then
-			setStage("FirstShear")
-			firstSheep = bigSheep
+	local sheep = getTutorialSheep()
+	if not sheep then
+		local now = os.clock()
+		if now >= nextSheepRequest then
+			nextSheepRequest = now + TUTORIAL_SHEEP_REQUEST_SECONDS
+			network.fireServer(network.RemoteEvents.RequestTutorialSheep)
 		end
-		return
-	end
-	if os.clock() - stageStartedAt < TUTORIAL_SHEEP_WAIT_SECONDS then
-		setText("A Fluffy Sheep is on its way...")
-		return
+		if now - stageStartedAt >= TUTORIAL_SHEEP_WAIT_SECONDS then
+			sheep = getNearestSheep()
+		end
 	end
 
-	setText("Walk to a glowing Sheep. Follow the arrow!")
-	local nearest, near = guideToSheep()
-	if near then
+	setText("Walk up to the Sheep to shear it! Follow the arrow")
+	if not sheep then
+		return
+	end
+	setHighlights({ sheep })
+	beamSheep = sheep
+	local playerRoot = getRoot(player.Character)
+	if playerRoot and getFlatDistance(playerRoot.Position, (getRoot(sheep) :: BasePart).Position) <= NEAR_DISTANCE then
 		setStage("FirstShear")
-		firstSheep = nearest
+		firstSheep = sheep
 	end
 end
 
@@ -1008,10 +1152,12 @@ local function updateFirstShear()
 	end
 	equipShears()
 
+	-- The server only lets its tutorial sheep be sheared, so if that lands after a stand-in was picked, the player is sent to it.
+	local tutorialSheep = getTutorialSheep()
 	local sheep = firstSheep
 	local playerRoot = getRoot(player.Character)
 	local sheepRoot = getRoot(sheep)
-	if not sheep or not sheepRoot or not sheep:IsDescendantOf(workspace)
+	if not sheep or not sheepRoot or not sheep:IsDescendantOf(workspace) or (tutorialSheep and sheep ~= tutorialSheep)
 		or (playerRoot and getFlatDistance(playerRoot.Position, sheepRoot.Position) > LEAVE_DISTANCE)
 	then
 		setStage("GoToSheep")
@@ -1079,17 +1225,38 @@ local function updateGoToShop()
 	end
 end
 
--- Tweens the shop's list so the card's centre lines up with the visible area's centre (the same way ShearTutorialClient does).
-local function scrollShopToCard(card: GuiObject): Tween
-	local factor = math.max(windowsManager.getScaleFactor(shopScroll), 0.01)
-	local windowSize = shopScroll.AbsoluteWindowSize
-	local offset = (card.AbsolutePosition + card.AbsoluteSize / 2 - (shopScroll.AbsolutePosition + windowSize / 2)) / factor
-	local target = shopScroll.CanvasPosition + offset
-	local maxPosition = (shopScroll.AbsoluteCanvasSize - windowSize) / factor
+-- Tweens a list so the card's centre lines up with the visible area's centre (the same way ShearTutorialClient does).
+local function scrollToCard(scroll: ScrollingFrame, card: GuiObject): Tween
+	local factor = math.max(windowsManager.getScaleFactor(scroll), 0.01)
+	local windowSize = scroll.AbsoluteWindowSize
+	local offset = (card.AbsolutePosition + card.AbsoluteSize / 2 - (scroll.AbsolutePosition + windowSize / 2)) / factor
+	local target = scroll.CanvasPosition + offset
+	local maxPosition = (scroll.AbsoluteCanvasSize - windowSize) / factor
 	local goal = Vector2.new(math.clamp(target.X, 0, math.max(maxPosition.X, 0)), math.clamp(target.Y, 0, math.max(maxPosition.Y, 0)))
-	local tween = tweenService:Create(shopScroll, SHOP_SCROLL_TWEEN, { CanvasPosition = goal })
+	local tween = tweenService:Create(scroll, SHOP_SCROLL_TWEEN, { CanvasPosition = goal })
 	tween:Play()
 	return tween
+end
+
+-- With Upgrades open, scrolls its list to the card (once per card each visit) and returns the card's Purchase button once the
+-- scroll has landed, so the spotlight goes straight to it and all the player does is click.
+local function focusUpgradeCard(cardId: string): GuiObject?
+	local cardFrame = upgradeCards:FindFirstChild(cardId)
+	local purchase = cardFrame and cardFrame:FindFirstChild("Purchase")
+	if not cardFrame or not cardFrame:IsA("GuiObject") or not purchase or not purchase:IsA("GuiObject") then
+		return nil
+	end
+	if upgradeScrollCardId ~= cardId then
+		if os.clock() - upgradeOpenedAt < SHOP_SCROLL_DELAY then
+			return nil
+		end
+		upgradeScrollCardId = cardId
+		upgradeScrollTween = scrollToCard(upgradeCards :: ScrollingFrame, cardFrame)
+	end
+	if upgradeScrollTween and upgradeScrollTween.PlaybackState == Enum.PlaybackState.Playing then
+		return nil
+	end
+	return purchase
 end
 
 -- "Press UNLOCK": the shop scrolls to the Steel Shears' card and its button is spotlit; walking out goes back a step.
@@ -1113,7 +1280,7 @@ local function updateBuyShears()
 	shopOpenedAt = shopOpenedAt or now
 	if not shopScrollTween then
 		if now - (shopOpenedAt :: number) >= SHOP_SCROLL_DELAY then
-			shopScrollTween = scrollShopToCard(card)
+			shopScrollTween = scrollToCard(shopScroll, card)
 		end
 		setText(`Here are the {SHEARS_NAME}!`)
 		return
@@ -1179,9 +1346,7 @@ local function updateUpgrades()
 		point(getHudButton("Upgrades"))
 		setHint(getHudButton("Upgrades"))
 	else
-		local cardFrame = upgradeCards:FindFirstChild(card.id)
-		local purchase = cardFrame and cardFrame:FindFirstChild("Purchase")
-		local target = if purchase and purchase:IsA("GuiObject") then purchase else nil
+		local target = focusUpgradeCard(card.id)
 		setText(`{progress} {TUTORIAL_UPGRADES[index].text}`)
 		point(target)
 		setHint(target)
@@ -1302,51 +1467,58 @@ local function updateRebirth()
 		return
 	end
 
+	-- Every rebirth needs wool and one special sheep; the pity guarantees it turns up while the player shears.
+	-- Once it's in the pen, the beam leads straight to it.
+	local sheepName = rebirthSheepName or "special Sheep"
+	local sheepFound = player:GetAttribute(REBIRTH_SHEEP_FOUND_ATTRIBUTE) ~= false
+	local rebirthSheep = if sheepFound then nil else getRebirthSheep()
 	if wool.Value < cost then
 		showRebirthProgress(cost)
-		guideShearing(`{getShearAction()} to shear! Fill the bar to Rebirth`, "Follow the arrow to a Sheep. Fill the bar to Rebirth")
+		if rebirthSheep then
+			guideShearing(`A {sheepName} is in your pen! {getShearAction()} to shear it`, `A {sheepName} is in your pen! Follow the arrow to it`, rebirthSheep)
+			return
+		end
+		local needs = if sheepFound then `You found the {sheepName}! Now fill the bar to Rebirth` else `Rebirth needs Wool and a {sheepName}`
+		guideShearing(`{needs}. {getShearAction()} to shear!`, `{needs}. Follow the arrow to a Sheep`)
 		return
 	end
 
 	progressBar.Visible = false
+	if rebirthSheep then
+		guideShearing(`Shear the {sheepName} to Rebirth! {getShearAction()} to shear it`, `Shear the {sheepName} to Rebirth! Follow the arrow to it`, rebirthSheep)
+		return
+	elseif not sheepFound then
+		guideShearing(`Rebirth also needs a {sheepName}! Shear Sheep until one appears`, `Rebirth also needs a {sheepName}! Follow the arrow to a Sheep`)
+		return
+	end
 	setHighlights({})
 	beamSheep = nil
 	if not isWindowOpen("Rebirth") then
-		setText("You have enough Wool! Open Rebirth")
+		setText(`Enough Wool, and you found the {sheepName}! Open Rebirth`)
 		point(getHudButton("Rebirth"))
 		setHint(getHudButton("Rebirth"))
 	else
-		setText("Press Rebirth! Luck brings rarer Sheep")
+		setText("Every Rebirth needs Wool and one special Sheep. Press Rebirth! Luck brings rarer Sheep")
 		point(rebirthButton)
 		setHint(rebirthButton)
 	end
 end
 
--- Shows one of the HUD buttons the tutorial hid (the Index's, once it's taught).
-local function showHudButton(button: GuiObject)
-	local index = table.find(hiddenHudButtons, button)
-	if index then
-		table.remove(hiddenHudButtons, index)
-	end
-	button.Visible = true
-end
-
 -- After the rebirth: open the Index (the Rebirth window is closed so its button shows) and claim the Luck waiting there.
+-- It's always opened once, even with nothing to claim, so the player learns where it is.
 local function updateIndex()
 	local indexHudButton = getHudButton("Index")
 	if indexHudButton then
-		showHudButton(indexHudButton)
+		release(heldHudButtons, indexHudButton, "Visible")
 	end
 	local unclaimed = indexUnclaimed
 	if unclaimed == nil then
 		requestState(network.RemoteEvents.RequestIndexState)
+	elseif unclaimed > 0 then
+		indexHadUnclaimed = true
 	end
 
 	if not isWindowOpen("Index") then
-		if unclaimed == 0 then
-			stage = "Done" -- nothing to claim (e.g. resumed after claiming)
-			return
-		end
 		if windowsManager.anyOpen() then
 			windowsManager.closeAll()
 		end
@@ -1354,7 +1526,7 @@ local function updateIndex()
 		point(indexHudButton)
 		setHint(indexHudButton)
 	elseif unclaimed == 0 then
-		setStage("CloseIndex")
+		setStage("CloseIndex", not indexHadUnclaimed) -- no "Luck claimed!" when there was nothing to claim
 	elseif unclaimed and unclaimed > 1 and isShown(indexClaimAllButton) then
 		-- Claim only takes the selected Sheep, so with several waiting the player is sent to Claim All.
 		setText(`Press CLAIM ALL! You found {unclaimed} new Sheep, and each one gives you Luck`)
@@ -1372,15 +1544,79 @@ local function updateIndex()
 	end
 end
 
--- The last step: close the Index so the completed label and confetti show over the farm.
 local function updateCloseIndex()
 	if not isWindowOpen("Index") then
-		stage = "Done"
+		setStage("ExpandPen")
 		return
 	end
 	setText("Close the Index")
 	point(indexExit)
 	setHint(indexExit)
+end
+
+--[[
+	The next rebirth needs a rarer sheep, and every sheep comes from the pen, so the player buys one more Sheep Capacity level:
+	shearing for the wool first if short, then Upgrades and the Capacity card.
+]]
+local function updateExpandPen()
+	local rebirths = getNumberAttribute("Rebirths")
+	if rebirthStateRebirths ~= rebirths then
+		requestState(network.RemoteEvents.RequestRebirthState)
+	end
+	local card = upgradeStates and upgradeStates[PEN_UPGRADE_ID]
+	if not card then
+		requestState(network.RemoteEvents.RequestUpgradeState)
+		setText("Expand your Sheep Pen in Upgrades!")
+		point(getHudButton("Upgrades"))
+		setHint(getHudButton("Upgrades"))
+		return
+	end
+	penStartLevel = penStartLevel or card.level or 0
+	if not card.cost or (card.level or 0) > (penStartLevel :: number) then
+		setStage("ClosePen")
+		return
+	end
+
+	local nextSheep = if rebirthStateRebirths == rebirths and rebirthSheepName then rebirthSheepName else "rarer Sheep"
+	local why = `Your next Rebirth needs a {nextSheep}!`
+	local shopOpen = isWindowOpen("UpgradeShop")
+	if wool.Value < card.cost then
+		if shopOpen then
+			setHighlights({})
+			beamSheep = nil
+			setText("Need more Wool! Close Upgrades to shear more")
+			point(upgradeShopExit)
+			setHint(upgradeShopExit)
+		else
+			local counter = `({formatWool(wool.Value)}/{formatWool(card.cost)} Wool)`
+			guideShearing(`{why} Shear for Wool to expand your pen {counter}`, `{why} Follow the arrow to a Sheep for Wool {counter}`)
+		end
+		return
+	end
+
+	setHighlights({})
+	beamSheep = nil
+	if not shopOpen then
+		setText(`{why} Expand your Sheep Pen so more Sheep spawn. Open Upgrades`)
+		point(getHudButton("Upgrades"))
+		setHint(getHudButton("Upgrades"))
+	else
+		local target = focusUpgradeCard(PEN_UPGRADE_ID)
+		setText("Buy Sheep Capacity! A bigger pen means more Sheep, and more chances at rare ones")
+		point(target)
+		setHint(target)
+	end
+end
+
+-- The last step: close Upgrades so the completed label and confetti show over the farm.
+local function updateClosePen()
+	if not isWindowOpen("UpgradeShop") then
+		stage = "Done"
+		return
+	end
+	setText("Keep expanding your pen to find rare Sheep faster! Close Upgrades")
+	point(upgradeShopExit)
+	setHint(upgradeShopExit)
 end
 
 local UPDATERS: { [Stage]: () -> () } = {
@@ -1394,29 +1630,30 @@ local UPDATERS: { [Stage]: () -> () } = {
 	Rebirth = updateRebirth,
 	Index = updateIndex,
 	CloseIndex = updateCloseIndex,
+	ExpandPen = updateExpandPen,
+	ClosePen = updateClosePen,
 }
 
 --// Lifecycle ---------------------------------------------------------------------------
 
--- Hides every HUD button the tutorial doesn't use; showHudButtons puts them back.
+-- Hides every HUD button the tutorial doesn't use yet (the Index's stays once it's taught); showHudButtons puts them back.
 local function hideHudButtons()
 	local buttons = getHudButtons()
 	if not buttons then
 		return
 	end
+	local indexTaught = (STAGE_ORDER[stage] or math.huge) >= STAGE_ORDER.Index
 	for _, button in buttons:GetChildren() do
-		if button:IsA("GuiObject") and button.Visible and not KEEP_HUD_BUTTONS[button.Name] then
-			button.Visible = false
-			table.insert(hiddenHudButtons, button)
+		if button:IsA("GuiObject") and button.Visible and not KEEP_HUD_BUTTONS[button.Name]
+			and not (indexTaught and button.Name == "Index")
+		then
+			hold(heldHudButtons, button, "Visible")
 		end
 	end
 end
 
 local function showHudButtons()
-	for _, button in hiddenHudButtons do
-		button.Visible = true
-	end
-	table.clear(hiddenHudButtons)
+	releaseAll(heldHudButtons, "Visible")
 end
 
 local function stop()
@@ -1462,8 +1699,9 @@ local function playConfetti()
 	confettiGui.DisplayOrder = DISPLAY_ORDER + 1
 	confettiGui.Parent = playerGui
 
+	local screenFactor = screenScale.get()
 	for _ = 1, CONFETTI_COUNT do
-		local length = random:NextNumber(CONFETTI_SIZE.Min, CONFETTI_SIZE.Max)
+		local length = random:NextNumber(CONFETTI_SIZE.Min, CONFETTI_SIZE.Max) * screenFactor
 		local startX = random:NextNumber()
 		local piece = Instance.new("Frame")
 		piece.Name = "Confetti"
@@ -1513,9 +1751,6 @@ local function start(firstStage: Stage)
 	setStage(firstStage, true)
 	beamConnection = runService.RenderStepped:Connect(updateBeam)
 	inputConnection = userInputService.InputBegan:Connect(onInputBegan)
-	if (STAGE_ORDER[firstStage] or 0) <= STAGE_ORDER.FirstShear then
-		network.fireServer(network.RemoteEvents.RequestTutorialSheep)
-	end
 
 	while stage ~= "Done" do
 		local rebirths = getNumberAttribute("Rebirths")
@@ -1527,8 +1762,19 @@ local function start(firstStage: Stage)
 				setStage("Index")
 			end
 		end
+		-- A cutscene (pen unlock, rebirth sheep) owns the screen while it plays; the tutorial picks up where it was afterwards.
+		if isCutscenePlaying() then
+			tutorialGui.Enabled = false
+			setHighlights({})
+			beamSheep = nil
+			beamPart = nil
+			task.wait(TICK_SECONDS)
+			continue
+		end
+		tutorialGui.Enabled = true
 		setSideClick(false) -- the updater turns it back on (in the same frame) while the player should be shearing
 		UPDATERS[stage]()
+		hideHudButtons()
 		if HIDE_UI_STAGES[stage] then
 			hideOtherGuis()
 		end
@@ -1547,6 +1793,12 @@ darkOverlay.Visible = false
 completedLabel.Visible = false
 tip.Visible = false
 
+windowsManager.opened:Connect(function(name: string)
+	if name == "UpgradeShop" then
+		upgradeOpenedAt, upgradeScrollCardId, upgradeScrollTween = os.clock(), nil, nil
+	end
+end)
+
 network.waitUntilReadyAsync()
 
 network.connectEvent(network.RemoteEvents.UpgradeState, function(states: { any })
@@ -1559,6 +1811,8 @@ end)
 
 network.connectEvent(network.RemoteEvents.RebirthState, function(state: any)
 	rebirthCost = state.woolCost
+	rebirthSheepName = state.requiredName
+	rebirthStateRebirths = state.rebirths
 end)
 
 network.connectEvent(network.RemoteEvents.IndexState, function(entries: { any })
@@ -1572,8 +1826,10 @@ network.connectEvent(network.RemoteEvents.IndexState, function(entries: { any })
 end)
 
 -- The save has loaded once its numbers are mirrored onto the player.
-while player:GetAttribute("Rebirths") == nil do
-	player:GetAttributeChangedSignal("Rebirths"):Wait()
+for _, name in { "Rebirths", "SheepShearedCount" } do
+	while player:GetAttribute(name) == nil do
+		player:GetAttributeChangedSignal(name):Wait()
+	end
 end
 
 local forced = ALWAYS_IN_STUDIO and runService:IsStudio()
